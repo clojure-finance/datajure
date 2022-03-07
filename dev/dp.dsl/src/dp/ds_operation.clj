@@ -1,4 +1,4 @@
-(ns dp.ds_opertation
+(ns dp.ds_operation
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[tech.v3.dataset :as ds]
@@ -114,8 +114,7 @@
             (let [new-col (get-combined-group-by-col group-by-col)
                   new-dataset (assoc dataset new-col (get-combined-group-by-val dataset group-by-col))]
               ;(println new-dataset)
-              (group-by-single new-dataset new-col)
-              )))
+              (group-by-single new-dataset new-col))))
         (group-by-single dataset group-by-col)))))
     
 
@@ -126,26 +125,43 @@
       dataset
       (filter-column-r dataset (mapv #(list (get-agg-key2 (first %) (second %)) (last %)) unpharsed-filter-operations)))))
 
+(defn sort-by
+  [dataset query-map]
+  (let [sort-by-expressions (get query-map :sort-by)]
+    (if (nil? sort-by-expressions)
+      dataset
+      (if (empty? sort-by-expressions)
+        dataset
+        (let [first-exp (first sort-by-expressions)
+              second-exp (second sort-by-expressions)
+              third-exp (second (rest sort-by-expressions))
+              colname (if (contains? aggregate-function-keywords first-exp) (get-agg-key2 first-exp second-exp) first-exp)
+              compare-fn (if (contains? aggregate-function-keywords first-exp) third-exp second-exp)]
+          (if (nil? compare-fn)
+            (ds/sort-by-column dataset colname)
+            (ds/sort-by-column dataset colname compare-fn)))))))
+
+
 
 (defn- split-col-agg-keys-r
-  [keys mixed-list]
+  [keys mixed-list original-col]
   (let [first-word (first mixed-list)
         second-word (second mixed-list)]
     (if (nil? first-word)
       keys
       (if (contains? aggregate-function-keywords first-word)
-        (split-col-agg-keys-r (conj keys (get-agg-key2 first-word second-word)) (rest (rest mixed-list)))
-        (split-col-agg-keys-r (conj keys first-word) (rest mixed-list))
-      ))))
+        (split-col-agg-keys-r (conj keys (get-agg-key2 first-word second-word)) (rest (rest mixed-list)) original-col)
+        (if (= first-word :*)
+         (split-col-agg-keys-r (into [] (concat keys original-col)) (rest mixed-list) original-col)
+         (split-col-agg-keys-r (conj keys first-word) (rest mixed-list) original-col))))))
+
+        
 
 (defn select
   [dataset query-map]
   (let
-   [;select-list (get query-map :select)
-    ;select-col-keys (filterv #(not (sequential? %)) select-list)
-    ;select-agg-col-keys (mapv #(get-agg-key2 (first %) (second %)) (filterv #(sequential? %) select-list))
-    ;select-all-keys (flatten [select-col-keys select-agg-col-keys])
-    select-all-keys (split-col-agg-keys-r [] (get query-map :select))
-    ]
+   [original-col (get query-map :original-col)
+    select-all-keys (split-col-agg-keys-r [] (get query-map :select) original-col)
+    select-all-keys (into [] (distinct select-all-keys))]
     (ds/select-columns dataset select-all-keys)))
 
