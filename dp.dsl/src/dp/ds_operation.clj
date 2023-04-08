@@ -24,7 +24,9 @@
   (let [filter-operations (get query-map :where)]
     (if (nil? filter-operations)
       dataset
-      (filter-column-r dataset filter-operations))))
+      (if (= filter-operations [:*])
+        dataset
+        (filter-column-r dataset filter-operations)))))
 
 (defn row
   [dataset query-map]
