@@ -48,32 +48,25 @@
       (into (sorted-map) partition-exp-listed))))
 
 (defmacro dt-get
-  [& get-expression]
-  (let [dataset (first get-expression)
-        expression (second (first (rest get-expression)))
-        partition-exp (remove #(= '(&) %) (partition-by #(= '& %) expression))
-        row-filter-list (first partition-exp)
-        row-list (filterv #(number? %) row-filter-list)
-        filter-list (filterv #(not (number? %)) row-filter-list)
-        where-list (if (.contains filter-list :*) [:*] (filterv #(= 2 (count %)) filter-list))
-        filter-list (filterv #(vector? %) filter-list)
-        having-list (filterv #(= 3 (count %)) filter-list)
-        select-list (into [] (second partition-exp))
-        options-map (get-optional-exp-partition-map (second (rest partition-exp)))
-        ;group-by-list (into [] (second (rest partition-exp)))
-        group-by-list (get options-map :group-by)
-        sort-by-list (get options-map :sort-by)
+  ([dataset row-filter-list select-list options-map]
+   (let [options-map (get-optional-exp-partition-map options-map)
+         {row-list true filter-list false} (group-by number? row-filter-list)
+         where-list (if (.contains filter-list :*) [:*] (filterv #(= 2 (count %)) filter-list))
+         having-list (->> filter-list
+                          (filterv vector?)
+                          (filterv #(= 3 (count %))))
+         group-by-list (:group-by options-map)
+         sort-by-list (:sort-by options-map)
 
-        query-map {:row row-list
-                   :select select-list
-                   :where where-list
-                   :group-by group-by-list
-                   :having having-list
-                   :sort-by sort-by-list}]
+         query-map {:row row-list
+                    :select select-list
+                    :where where-list
+                    :group-by group-by-list
+                    :having having-list
+                    :sort-by sort-by-list}]
     `(query-using-map ~dataset ~query-map)))
-
-
-
+  ([dataset row-filter-list select-list]
+   `(dt-get ~dataset ~row-filter-list ~select-list [])))
 
 
 
@@ -85,12 +78,9 @@
 (defn -main
   "Testing Funciton for DSL"
   [& args]
-
-  (println (dt-get data '[[:salary #(< 300 %)] [:age #(> 20 %)] & :*]))
-  (println (dt-get data '[[:sum :salary #(< 1000 %)] & :age :sum :salary & :group-by :age]))
-  (println (dt-get data '[:* & :age :sum :salary :sd :salary & :group-by :age :sort-by :sd :salary >]))
-  (println (dt-get data '[:* & :age :name :sum :salary & :group-by :age :name]))
-  ;(println (dt-get data '[[:salary #(< 0 %)] [:age #(< 24 %)] & :name :*]))
-  ;(println (dt-get data '[[:sum :salary #(< 0 %)] [:age #(< 0 %)] & :name :age :salary :sum :salary :sd :salary & :group-by :name :age :sort-by :salary]))
-  
-  )
+  (println (dt-get data [[:salary #(< 300 %)] [:age #(> 20 %)]] [:*]))
+  (println (dt-get data [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age]))
+  (println (dt-get data [:*] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >]))
+  (println (dt-get data [:*] [:age :name :sum :salary] [:group-by :age :name]))
+  (println (dt-get data [[:salary #(< 0 %)] [:age #(< 24 %)]] [:name :*]))
+  (println (dt-get data [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])))
