@@ -42,10 +42,6 @@
   [col-name agg-fun-keyword]
   (keyword (str (name col-name) "-" (name agg-fun-keyword))))
 
-(defn- get-agg-key2
-  [agg-fun-keyword col-name]
-  (get-agg-key col-name agg-fun-keyword))
-
 (defn- get-key-val
   [col-name val attr-keyword]
   [(get-agg-key col-name attr-keyword) val])
@@ -125,7 +121,7 @@
   (let [unpharsed-filter-operations (get query-map :having)]
     (if (nil? unpharsed-filter-operations)
       dataset
-      (filter-column-r dataset (mapv #(list (get-agg-key2 (first %) (second %)) (last %)) unpharsed-filter-operations)))))
+      (filter-column-r dataset (mapv #(list (get-agg-key (second %) (first %)) (last %)) unpharsed-filter-operations)))))
 
 (defn sort-by
   [dataset query-map]
@@ -137,7 +133,7 @@
         (let [first-exp (first sort-by-expressions)
               second-exp (second sort-by-expressions)
               third-exp (second (rest sort-by-expressions))
-              colname (if (contains? aggregate-function-keywords first-exp) (get-agg-key2 first-exp second-exp) first-exp)
+              colname (if (contains? aggregate-function-keywords first-exp) (get-agg-key second-exp first-exp) first-exp)
               compare-fn (if (contains? aggregate-function-keywords first-exp) third-exp second-exp)]
           (if (nil? compare-fn)
             (ds/sort-by-column dataset colname)
@@ -152,7 +148,7 @@
     (if (nil? first-word)
       keys
       (if (contains? aggregate-function-keywords first-word)
-        (split-col-agg-keys-r (conj keys (get-agg-key2 first-word second-word)) (rest (rest mixed-list)) original-col)
+        (split-col-agg-keys-r (conj keys (get-agg-key second-word first-word)) (rest (rest mixed-list)) original-col)
         (if (= first-word :*)
          (split-col-agg-keys-r (into [] (concat keys original-col)) (rest mixed-list) original-col)
          (split-col-agg-keys-r (conj keys first-word) (rest mixed-list) original-col))))))
