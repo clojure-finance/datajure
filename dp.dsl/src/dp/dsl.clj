@@ -21,11 +21,7 @@
 
 (defn- generic-operation-r
   [dataset query-map operations]
-  (if (empty? operations)
-    dataset
-    (-> dataset
-        (apply-generic-operation query-map (first operations))
-        (generic-operation-r query-map (rest operations)))))
+  (reduce #(apply-generic-operation %1 query-map %2) dataset operations))
 
 (defn query-using-map
   [dataset query-map]
@@ -51,7 +47,7 @@
   ([dataset row-filter-list select-list options-map]
    (let [options-map (get-optional-exp-partition-map options-map)
          {row-list true filter-list false} (group-by number? row-filter-list)
-         where-list (if (.contains filter-list :*) [:*] (filterv #(= 2 (count %)) filter-list))
+         where-list (filterv #(= 2 (count %)) filter-list)
          having-list (->> filter-list
                           (filterv vector?)
                           (filterv #(= 3 (count %))))
@@ -78,9 +74,9 @@
 (defn -main
   "Testing Funciton for DSL"
   [& args]
-  (println (dt-get data [[:salary #(< 300 %)] [:age #(> 20 %)]] [:*]))
+  (println (dt-get data [[:salary #(< 300 %)] [:age #(> 20 %)]] []))
   (println (dt-get data [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age]))
-  (println (dt-get data [:*] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >]))
-  (println (dt-get data [:*] [:age :name :sum :salary] [:group-by :age :name]))
-  (println (dt-get data [[:salary #(< 0 %)] [:age #(< 24 %)]] [:name :*]))
+  (println (dt-get data [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >]))
+  (println (dt-get data [] [:age :name :sum :salary] [:group-by :age :name]))
+  (println (dt-get data [[:salary #(< 0 %)] [:age #(< 24 %)]] []))
   (println (dt-get data [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])))

@@ -9,24 +9,13 @@
 
 (def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
-
 (defn- filter-column-r
   [dataset filter-operations]
-  (if (empty? filter-operations)
-    dataset
-    (let [cur-filter (first filter-operations)]
-      (filter-column-r (ds/filter-column dataset (first cur-filter) (second cur-filter)) (rest filter-operations))
-      )
-    ))
+  (reduce #(ds/filter-column %1 (first %2) (second %2)) dataset filter-operations))
 
 (defn where
   [dataset query-map]
-  (let [filter-operations (get query-map :where)]
-    (if (nil? filter-operations)
-      dataset
-      (if (= filter-operations [:*])
-        dataset
-        (filter-column-r dataset filter-operations)))))
+  (filter-column-r dataset (:where query-map)))
 
 (defn row
   [dataset query-map]
@@ -140,26 +129,13 @@
             (ds/sort-by-column dataset colname compare-fn)))))))
 
 
-
 (defn- split-col-agg-keys-r
-  [keys mixed-list original-col]
-  (let [first-word (first mixed-list)
-        second-word (second mixed-list)]
-    (if (nil? first-word)
-      keys
-      (if (contains? aggregate-function-keywords first-word)
-        (split-col-agg-keys-r (conj keys (get-agg-key second-word first-word)) (rest (rest mixed-list)) original-col)
-        (if (= first-word :*)
-         (split-col-agg-keys-r (into [] (concat keys original-col)) (rest mixed-list) original-col)
-         (split-col-agg-keys-r (conj keys first-word) (rest mixed-list) original-col))))))
-
-        
+  [mixed-words]
+  (reduce #(if (contains? aggregate-function-keywords (last %1))
+             (conj (into [] (butlast %1)) (get-agg-key %2 (last %1)))
+             (conj %1 %2)) [] mixed-words))
 
 (defn select
   [dataset query-map]
-  (let
-   [original-col (get query-map :original-col)
-    select-all-keys (split-col-agg-keys-r [] (get query-map :select) original-col)
-    select-all-keys (into [] (distinct select-all-keys))]
-    (ds/select-columns dataset select-all-keys)))
-
+  (let [select-all-keys (split-col-agg-keys-r (:select query-map))]
+    (ds/select-columns dataset (if (empty? select-all-keys) :all select-all-keys))))
