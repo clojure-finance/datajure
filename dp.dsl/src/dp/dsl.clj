@@ -1,19 +1,27 @@
 (ns dp.dsl)
 
 (require '[tech.v3.dataset :as ds]
-         '[dp.ds_operation :as op])
-
+         '[tablecloth.api :as tc]
+         '[dp.ds_operation :as op]
+         '[dp.ds_operation_tc :as op_tc])
 
 (def operation-list [:where :row :group-by :having :select :sort-by])
 (def optional-keywords #{:group-by :sort-by})
 
 (def operation-function-map
-  {:select op/select
-   :where op/where
-   :row op/row
-   :group-by op/group-by
-   :having op/having
-   :sort-by op/sort-by})
+  (case "tablecloth"
+    "tech.v3.dataset" {:select op/select
+                       :where op/where
+                       :row op/row
+                       :group-by op/group-by
+                       :having op/having
+                       :sort-by op/sort-by}
+    "tablecloth" {:select op_tc/select
+                  :where op_tc/where
+                  :row op_tc/row
+                  :group-by op_tc/group-by
+                  :having op_tc/having
+                  :sort-by op_tc/sort-by}))
 
 (defn- apply-generic-operation
   [dataset query-map operation]
@@ -65,15 +73,22 @@
    `(dt-get ~dataset ~row-filter-list ~select-list [])))
 
 
-
-
-(def data (ds/->dataset {:age [31 25 18 18 25]
-                         :name ["a" "b" "c" "c" "d"]
-                         :salary [200 500 200 370 3500]}))
+(defn dataset
+  ([data backend]
+   ((case backend
+      "tech.v3.dataset" ds/->dataset
+      "tablecloth" tc/dataset)
+    data))
+  ([data]
+   (dataset data "tablecloth")))
 
 (defn -main
   "Testing Funciton for DSL"
   [& args]
+  (def data (dataset {:age [31 25 18 18 25]
+                      :name ["a" "b" "c" "c" "d"]
+                      :salary [200 500 200 370 3500]}
+                     "tablecloth"))
   (println (dt-get data [[:salary #(< 300 %)] [:age #(> 20 %)]] []))
   (println (dt-get data [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age]))
   (println (dt-get data [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >]))

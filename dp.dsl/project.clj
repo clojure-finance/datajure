@@ -7,8 +7,10 @@
                  [org.apache.arrow/arrow-memory-unsafe "2.0.0"]
                  [org.apache.arrow/arrow-memory-core "2.0.0"]
                  [org.apache.arrow/arrow-vector "2.0.0" :exclusions [commons-codec]]
-                 [techascent/tech.ml.dataset "6.042"]
-                 [org.clojure/algo.generic "0.1.3"]]
+                 [techascent/tech.ml.dataset "6.104"]
+                 [scicloj/tablecloth "6.103.1"]
+                 [org.clojure/algo.generic "0.1.3"]
+                 [org.slf4j/slf4j-simple "1.7.25"]]
   :main ^:skip-aot dp.dsl
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all
