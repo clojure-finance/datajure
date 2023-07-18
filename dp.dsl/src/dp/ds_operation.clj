@@ -50,7 +50,7 @@
         list-num-total (mapv #(+ %1 %2) list-num-missing list-num-valid)
         list-sum (mapv #(if (and (number? %1) (number? %2)) (* %1 %2) nil) list-mean list-num-valid)
 
-
+        
         min-keys (mapv #(get-key-val %1 %2 :min) list-col list-min)
         mean-keys (mapv #(get-key-val %1 %2 :mean) list-col list-mean)
         mode-keys (mapv #(get-key-val %1 %2 :mode) list-col list-mode)
@@ -74,6 +74,7 @@
           first-ds (apply ds/concat fisrt-rows)
           agg-ds (apply ds/concat (vals descriptive-grouped-map))]
       (ds-join/left-join group-by-col first-ds agg-ds))))
+
 
 
 (defn- get-combined-group-by-col

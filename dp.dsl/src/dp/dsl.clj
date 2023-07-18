@@ -82,6 +82,7 @@
   ([data]
    (dataset data "tablecloth")))
 
+
 (defn -main
   "Testing Funciton for DSL"
   [& args]
@@ -95,3 +96,4 @@
   (println (dt-get data [] [:age :name :sum :salary] [:group-by :age :name]))
   (println (dt-get data [[:salary #(< 0 %)] [:age #(< 24 %)]] []))
   (println (dt-get data [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])))
+
