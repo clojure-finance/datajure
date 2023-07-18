@@ -1,4 +1,4 @@
-(ns dp.ds_operation
+(ns dp.ds-operation
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[tech.v3.dataset :as ds]

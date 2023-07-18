@@ -1,4 +1,4 @@
-(ns dp.ds_operation_tc
+(ns dp.ds-operation-tc
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[tablecloth.api :as tc]
