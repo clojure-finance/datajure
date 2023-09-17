@@ -42,14 +42,17 @@
             :sort-by op-g/sort-by}))
 
 (defn- apply-generic-operation
+  "Perform the query actions on `dataset` according to `query-map` and `operations`."
   [dataset query-map operation]
   ((get operation-function-map operation) dataset query-map))
 
 (defn- generic-operation-r
+  "Perform the query actions on `dataset` according to `query-map` and `operations`."
   [dataset query-map operations]
   (reduce #(apply-generic-operation %1 query-map %2) dataset operations))
 
 (defn- get-col-names
+  "Get the column names of `dataset`."
   [dataset]
   (case @backend
     "tech.v3.dataset" (ds/column-names dataset)
@@ -58,10 +61,12 @@
     "geni" (g/columns dataset)))
 
 (defn query-using-map
+  "Perform the query actions on `dataset` according to `query-map`."
   [dataset query-map]
   (generic-operation-r dataset (assoc query-map :original-col (into [] (get-col-names dataset))) operation-list))
 
 (defn- partition-with
+  "Partite the collection `coll` according to the given function `f`."
   [f coll]
   (lazy-seq
    (when-let [s (seq coll)]
@@ -69,6 +74,7 @@
        (cons run (partition-with f (seq (drop (count run) s))))))))
 
 (defn- get-optional-exp-partition-map
+  "Re-organize the structure of `optional-exp` and return a map containing a `:group-by` field and a `:sort-by` field."
   [optional-exp]
   (if (nil? optional-exp)
     {:group-by []
@@ -78,6 +84,7 @@
       (into (sorted-map) partition-exp-listed))))
 
 (defmacro dt-get
+  "Generate `query-map` from Datajure DSL (`row-filter-list`, `select-list`, and `options-map`). Then perform the data operations to `dataset`."
   ([dataset row-filter-list select-list options-map]
    (let [options-map (get-optional-exp-partition-map options-map)
          {row-list true filter-list false} (group-by number? row-filter-list)
@@ -99,6 +106,7 @@
    `(dt-get ~dataset ~row-filter-list ~select-list [])))
 
 (defn dataset
+  "Create and return a dataset object from an associative map `data`."
   [data]
   (case @backend
     "tech.v3.dataset" (ds/->dataset data)
@@ -107,6 +115,7 @@
     "geni" (g/map->dataset data)))
 
 (defn print-dataset
+  "Print the dataset `data`."
   [data]
   (case @backend
     "tech.v3.dataset" (println data)
@@ -115,6 +124,7 @@
     "geni" (g/show data)))
 
 (defn set-backend
+  "Choose `back` as the backend implementation."
   [back]
   (reset! backend back))
 

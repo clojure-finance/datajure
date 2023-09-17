@@ -11,21 +11,25 @@
         '[org.apache.commons.csv CSVFormat])
 
 (defn ck-transform
+  "Transform the structure of dataset from Datajure-style column-major associative map to Clojask-style row-major vector."
   [data]
   (into [] (cons (into [] (map name (keys data))) (apply map vector (vals data)))))
 
 (def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
+  "Perform `filter-operations` on `dataset`."
   [dataset filter-operations]
   (doall (map #(ck/filter dataset (name (first %)) (second %)) filter-operations))
   dataset)
 
 (defn where
+  "Filter rows of `dataset` according to the given condition in `query-map`."
   [dataset query-map]
   (filter-column-r dataset (:where query-map)))
 
 (defn row
+  "Select rows of `dataset` according to `query-map`."
   [dataset query-map]
   (let [where-val (get query-map :where)
         row-val (get query-map :row)]
@@ -36,22 +40,26 @@
       dataset)))
 
 (defn- get-agg-name
+  "Get the string representing the name of the aggregated column according to `col-name` and `agg-fun-keyword`."
   [col-name agg-fun-keyword]
   (str col-name "-" (name agg-fun-keyword)))
 
 (defn- count-valid
+  "Count the number of valid cells of `list`."
   [a b]
   (if (= a agg/start)
     (if (nil? b) 0 1)
     (+ a (if (nil? b) 0 1))))
 
 (defn- count-missing
+  "Count the number of missing cells of `list`."
   [a b]
   (if (= a agg/start)
     (if (nil? b) 1 0)
     (+ a (if (nil? b) 1 0))))
 
-(defn mean
+(defn- mean
+  "Calculate the mean of `list`."
   [list]
   (let [sum (apply + list)
         count (count list)]
@@ -59,7 +67,8 @@
       (/ sum count)
       0)))
 
-(defn mode
+(defn- mode
+  "Calculate the mode of `list`."
   [list]
   (let [freqs (frequencies list)
         occurrences (clojure.core/group-by val freqs)
@@ -69,7 +78,8 @@
                    (map key))]
     modes))
 
-(defn median
+(defn- median
+  "Calculate the median of `list`."
   [list]
   (let [sorted (sort list)
         cnt (count sorted)
@@ -81,7 +91,8 @@
             top-val (nth sorted halfway)]
         (mean [bottom-val top-val])))))
 
-(defn sd
+(defn- sd
+  "Calculate the standard deviation of `list`."
   [list]
   (let [avg (mean list)
         squares (for [x list]
@@ -94,7 +105,8 @@
              (- total 1))
           (Math/sqrt)))))
 
-(defn skew
+(defn- skew
+  "Calculate the skew of `list`."
   [list]
   (let [mean (mean list)
         median (median list)
@@ -114,6 +126,7 @@
    :sd sd})
 
 (defn- calc-stats
+  "Calculate statistical information of `dataset` according to the operation represented by `mixed-words`."
   [dataset mixed-words]
   (if (empty? mixed-words)
     dataset
@@ -126,6 +139,7 @@
       (calc-stats dataset (rest mixed-words)))))
 
 (defn group-by
+  "Group the records in `dataset` according to `query-map`."
   [dataset query-map]
   (let [group-by-col (get query-map :group-by)]
     (if (nil? group-by-col)
@@ -140,6 +154,7 @@
   (ck/dataframe "./.dsl/group-by-result.csv"))
 
 (defn having
+  "Perform the `HAVING` operation on `dataset` by specifying a search condition for a group or an aggregate according to `query-map`."
   [dataset query-map]
   (let [unpharsed-filter-operations (get query-map :having)]
     (if (nil? unpharsed-filter-operations)
@@ -147,6 +162,7 @@
       (filter-column-r dataset (mapv #(list (get-agg-name (name (second %)) (first %)) (last %)) unpharsed-filter-operations)))))
 
 (defn- external-sort
+  "Perform external sorting with comparator `comp` on the dataset stored in `input` and write the result into `output`."
   [input output comp]
   (let
    [input-file (io/as-file input)
@@ -165,6 +181,7 @@
       (CsvExternalSort/mergeSortedFiles file-list output-file sort-option false header))))
 
 (defn- cmp-gen
+  "Generate comparator for the given `colname` and `compare-fn`."
   ([colname]
    #(- (Integer/parseInt (.get %1 colname))
        (Integer/parseInt (.get %2 colname))))
@@ -173,6 +190,7 @@
                 (Integer/parseInt (.get %2 colname)))))
 
 (defn sort-by
+  "Sort the records in `dataset` according to `query-map`."
   [dataset query-map]
   (let [sort-by-expressions (get query-map :sort-by)]
     (if (nil? sort-by-expressions)
@@ -194,6 +212,7 @@
           (ck/dataframe output))))))
 
 (defn- split-col-agg-keys-r
+  "Convert aggregation keywords in `mixed-words` from separated form to combined form."
   [dataset mixed-words]
   (reduce #(if (contains? aggregate-function-keywords (last %1))
              (do
@@ -202,6 +221,7 @@
              (conj %1 (name %2))) [] mixed-words))
 
 (defn select
+  "Select columns of `dataset` according to `query-map`."
   [dataset query-map]
   (let [select-all-keys (split-col-agg-keys-r dataset (:select query-map))]
      (if (empty? select-all-keys)
