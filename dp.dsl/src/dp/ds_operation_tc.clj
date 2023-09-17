@@ -41,8 +41,6 @@
   "Convert the statistical information of the columns described by `groupby-col` and `groupby-col-val` from `descriptive-ds` to a dataset."
   [descriptive-ds groupby-col groupby-col-val]
   (let [list-col (descriptive-ds :col-name)
-        num-col (get (meta list-col) :n-elems)
-
         list-min (descriptive-ds :min)
         list-mean (descriptive-ds :mean)
         list-mode (descriptive-ds :mode)
