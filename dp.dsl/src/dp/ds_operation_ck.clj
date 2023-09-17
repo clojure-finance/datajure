@@ -51,6 +51,56 @@
     (if (nil? b) 1 0)
     (+ a (if (nil? b) 1 0))))
 
+(defn mean
+  [list]
+  (let [sum (apply + list)
+        count (count list)]
+    (if (pos? count)
+      (/ sum count)
+      0)))
+
+(defn mode
+  [list]
+  (let [freqs (frequencies list)
+        occurrences (clojure.core/group-by val freqs)
+        modes (last (sort occurrences))
+        modes (->> modes
+                   val
+                   (map key))]
+    modes))
+
+(defn median
+  [list]
+  (let [sorted (sort list)
+        cnt (count sorted)
+        halfway (quot cnt 2)]
+    (if (odd? cnt)
+      (nth sorted halfway)
+      (let [bottom (dec halfway)
+            bottom-val (nth sorted bottom)
+            top-val (nth sorted halfway)]
+        (mean [bottom-val top-val])))))
+
+(defn sd
+  [list]
+  (let [avg (mean list)
+        squares (for [x list]
+                  (let [x-avg (- x avg)]
+                    (* x-avg x-avg)))
+        total (count list)]
+    (if (= 1 total)
+      0
+      (-> (/ (apply + squares)
+             (- total 1))
+          (Math/sqrt)))))
+
+(defn skew
+  [list]
+  (let [mean (mean list)
+        median (median list)
+        sd (sd list)]
+    (* 3 (/ (- mean median) sd))))
+
 (def stat-ops
   {:min gb-agg/min
    :max gb-agg/max
@@ -58,10 +108,10 @@
    :num-total gb-agg/count
    :num-valid count-valid
    :num-missing count-missing
-   :mean gb-agg/mean
-   :mode gb-agg/mode
-   :skew gb-agg/skew
-   :sd gb-agg/sd})
+   :mean mean
+   :mode mode
+   :skew skew
+   :sd sd})
 
 (defn- calc-stats
   [dataset mixed-words]
