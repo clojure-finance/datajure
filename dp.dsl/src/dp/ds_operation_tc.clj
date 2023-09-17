@@ -7,14 +7,17 @@
 (def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
+  "Perform `filter-operations` on `dataset`."
   [dataset filter-operations]
   (reduce #(tc/select-rows %1 (comp (second %2) (first %2))) dataset filter-operations))
 
 (defn where
+  "Filter rows of `dataset` according to the given condition in `query-map`."
   [dataset query-map]
   (filter-column-r dataset (:where query-map)))
 
 (defn row
+  "Select rows of `dataset` according to `query-map`."
   [dataset query-map]
   (let [where-val (get query-map :where)
         row-val (get query-map :row)]
@@ -25,18 +28,19 @@
       dataset)))
 
 (defn- get-agg-key
+  "Get the keyword representing the name of the aggregated column according to `col-name` and `agg-fun-keyword`."
   [col-name agg-fun-keyword]
   (keyword (str (name col-name) "-" (name agg-fun-keyword))))
 
 (defn- get-key-val
+  "Get a vector containing the keyword and value. The keyword is generated according to `col-name` and `attr-keyword`."
   [col-name val attr-keyword]
   [(get-agg-key col-name attr-keyword) val])
 
 (defn- get-description-column-ds
+  "Convert the statistical information of the columns described by `groupby-col` and `groupby-col-val` from `descriptive-ds` to a dataset."
   [descriptive-ds groupby-col groupby-col-val]
   (let [list-col (descriptive-ds :col-name)
-        num-col (get (meta list-col) :n-elems)
-
         list-min (descriptive-ds :min)
         list-mean (descriptive-ds :mean)
         list-mode (descriptive-ds :mode)
@@ -63,6 +67,7 @@
      (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))
 
 (defn group-by-single
+  "Perform `group-by` operation on `dataset` as specified by `group-by-col`."
   [dataset group-by-col]
   (if (nil? group-by-col)
     dataset
@@ -75,14 +80,17 @@
 
 
 (defn- get-combined-group-by-col
+  "Get the combined form of column names as described by `group-by-col`."
   [group-by-col]
   (keyword (apply str (mapv name group-by-col))))
 
 (defn- get-combined-group-by-val
+  "Get the combined form of columns of `dataset` as described by `group-by-col`."
   [dataset group-by-col]
   (mapv #(apply str (str %)) (tc/rows (tc/select-columns dataset group-by-col))))
 
 (defn group-by
+  "Group the records in `dataset` according to `query-map`."
   [dataset query-map]
   (let [group-by-col (get query-map :group-by)]
     (if (nil? group-by-col)
@@ -98,6 +106,7 @@
         (group-by-single dataset group-by-col)))))
 
 (defn having
+  "Perform the `HAVING` operation on `dataset` by specifying a search condition for a group or an aggregate according to `query-map`."
   [dataset query-map]
   (let [unpharsed-filter-operations (get query-map :having)]
     (if (nil? unpharsed-filter-operations)
@@ -105,6 +114,7 @@
       (filter-column-r dataset (mapv #(list (get-agg-key (second %) (first %)) (last %)) unpharsed-filter-operations)))))
 
 (defn sort-by
+  "Sort the records in `dataset` according to `query-map`."
   [dataset query-map]
   (let [sort-by-expressions (get query-map :sort-by)]
     (if (nil? sort-by-expressions)
@@ -122,12 +132,14 @@
 
 
 (defn- split-col-agg-keys-r
+  "Convert aggregation keywords in `mixed-words` from separated form to combined form."
   [mixed-words]
   (reduce #(if (contains? aggregate-function-keywords (last %1))
              (conj (into [] (butlast %1)) (get-agg-key %2 (last %1)))
              (conj %1 %2)) [] mixed-words))
 
 (defn select
+  "Select columns of `dataset` according to `query-map`."
   [dataset query-map]
   (let [select-all-keys (split-col-agg-keys-r (:select query-map))]
     (tc/select-columns dataset (if (empty? select-all-keys) :all select-all-keys))))

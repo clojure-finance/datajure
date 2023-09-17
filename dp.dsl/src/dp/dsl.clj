@@ -3,9 +3,11 @@
 (require '[tech.v3.dataset :as ds]
          '[tablecloth.api :as tc]
          '[clojask.dataframe :as ck]
+         '[zero-one.geni.core :as g]
          '[dp.ds-operation :as op]
          '[dp.ds-operation-tc :as op-tc]
-         '[dp.ds-operation-ck :as op-ck])
+         '[dp.ds-operation-ck :as op-ck]
+         '[dp.ds-operation-g :as op-g])
 
 (def operation-list [:where :row :group-by :having :select :sort-by])
 (def optional-keywords #{:group-by :sort-by})
@@ -31,28 +33,40 @@
                :row op-ck/row
                :group-by op-ck/group-by
                :having op-ck/having
-               :sort-by op-ck/sort-by}))
+               :sort-by op-ck/sort-by}
+    "geni" {:select op-g/select
+            :where op-g/where
+            :row op-g/row
+            :group-by op-g/group-by
+            :having op-g/having
+            :sort-by op-g/sort-by}))
 
 (defn- apply-generic-operation
+  "Perform the query actions on `dataset` according to `query-map` and `operations`."
   [dataset query-map operation]
   ((get operation-function-map operation) dataset query-map))
 
 (defn- generic-operation-r
+  "Perform the query actions on `dataset` according to `query-map` and `operations`."
   [dataset query-map operations]
   (reduce #(apply-generic-operation %1 query-map %2) dataset operations))
 
 (defn- get-col-names
+  "Get the column names of `dataset`."
   [dataset]
   (case @backend
     "tech.v3.dataset" (ds/column-names dataset)
     "tablecloth" (tc/column-names dataset)
-    "clojask" (ck/get-col-names dataset)))
+    "clojask" (ck/get-col-names dataset)
+    "geni" (g/columns dataset)))
 
 (defn query-using-map
+  "Perform the query actions on `dataset` according to `query-map`."
   [dataset query-map]
   (generic-operation-r dataset (assoc query-map :original-col (into [] (get-col-names dataset))) operation-list))
 
 (defn- partition-with
+  "Partite the collection `coll` according to the given function `f`."
   [f coll]
   (lazy-seq
    (when-let [s (seq coll)]
@@ -60,6 +74,7 @@
        (cons run (partition-with f (seq (drop (count run) s))))))))
 
 (defn- get-optional-exp-partition-map
+  "Re-organize the structure of `optional-exp` and return a map containing a `:group-by` field and a `:sort-by` field."
   [optional-exp]
   (if (nil? optional-exp)
     {:group-by []
@@ -69,6 +84,7 @@
       (into (sorted-map) partition-exp-listed))))
 
 (defmacro dt-get
+  "Generate `query-map` from Datajure DSL (`row-filter-list`, `select-list`, and `options-map`). Then perform the data operations to `dataset`."
   ([dataset row-filter-list select-list options-map]
    (let [options-map (get-optional-exp-partition-map options-map)
          {row-list true filter-list false} (group-by number? row-filter-list)
@@ -90,20 +106,25 @@
    `(dt-get ~dataset ~row-filter-list ~select-list [])))
 
 (defn dataset
+  "Create and return a dataset object from an associative map `data`."
   [data]
   (case @backend
     "tech.v3.dataset" (ds/->dataset data)
     "tablecloth" (tc/dataset data)
-    "clojask" (ck/dataframe #(op-ck/ck-transform data))))
+    "clojask" (ck/dataframe #(op-ck/ck-transform data))
+    "geni" (g/map->dataset data)))
 
 (defn print-dataset
+  "Print the dataset `data`."
   [data]
   (case @backend
     "tech.v3.dataset" (println data)
     "tablecloth" (println data)
-    "clojask" (ck/print-df data)))
+    "clojask" (ck/print-df data)
+    "geni" (g/show data)))
 
 (defn set-backend
+  "Choose `back` as the backend implementation."
   [back]
   (reset! backend back))
 
@@ -111,8 +132,6 @@
   "Testing Funciton for DSL"
   [& args]
   (set-backend "tablecloth")
-  ;; the test cases are not applicable to Clojask backend
-  ;; for Clojask, please read the dataset from a .csv file
   (def data {:age [31 25 18 18 25]
              :name ["a" "b" "c" "c" "d"]
              :salary [200 500 200 370 3500]})
