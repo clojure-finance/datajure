@@ -14,7 +14,9 @@
 
 (def backend (atom "tablecloth"))
 
-(def operation-function-map
+(defn- get-operation-function-map
+  "Return the operation function map according to the current backend."
+  []
   (case @backend
     "tech.v3.dataset" {:select op/select
                        :where op/where
@@ -44,7 +46,7 @@
 (defn- apply-generic-operation
   "Perform the query actions on `dataset` according to `query-map` and `operations`."
   [dataset query-map operation]
-  ((get operation-function-map operation) dataset query-map))
+  ((get (get-operation-function-map) operation) dataset query-map))
 
 (defn- generic-operation-r
   "Perform the query actions on `dataset` according to `query-map` and `operations`."
@@ -131,7 +133,7 @@
 (defn -main
   "Testing Funciton for DSL"
   [& args]
-  (set-backend "tablecloth")
+  (set-backend "tech.v3.dataset")
   (def data {:age [31 25 18 18 25]
              :name ["a" "b" "c" "c" "d"]
              :salary [200 500 200 370 3500]})
