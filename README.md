@@ -1,44 +1,19 @@
-# dp.dsl
+# Datajure
 
-FIXME: description
+Welcome to Datajure! This is an open-source domain-specific language for data processing developed at HKU Business School.
 
-## Installation
+To get started, please read our [docs](https://clojure-finance.github.io/datajure-website/pages-output/docs) and try our [examples](https://clojure-finance.github.io/datajure-website/pages-output/examples).
 
-Download from http://example.com/FIXME.
+To know more about our design and implementation ideas, please read our [posts](https://clojure-finance.github.io/datajure-website/archives).
 
-## Usage
+## About
 
-FIXME: explanation
+Domain Specific Language (DSL) is a computer language, declared syntax or grammar that is specialised to a specific application. In contrast to General-Purpose Language, implemenation of DSL is designed with specific goals in that application domain. The use of macros in Lisp dialects enables developers to rewrite source code at compile time, making implementation of DSL more convenient. As one of the Lisp dialects, Clojure also inheriates such advantage. In addition to macros, the heavy use of core data literals in Clojure also gives an extensive developing opportunity in implementing DSLs.
 
-    $ java -jar dp.dsl-0.1.0-standalone.jar [args]
+In this project, a DSL extension to existing data processing libraries, including [tech.ml.dataset](https://github.com/techascent/tech.ml.dataset), [tablecloth](https://github.com/scicloj/tablecloth), [clojask](https://github.com/clojure-finance/clojask) and [geni](https://github.com/zero-one-group/geni), is developed. A generic query using core data literal serves as the foundation of the DSL. This enables huge flexibility in defining the syntax, subject to Clojure’s limitation.
 
-## Options
+## Report Bugs
 
-FIXME: listing of options this app accepts.
+Datajure is currently under active development.
 
-## Examples
-
-...
-
-### Bugs
-
-...
-
-### Any Other Sections
-### That You Think
-### Might be Useful
-
-## License
-
-Copyright © 2022 FIXME
-
-This program and the accompanying materials are made available under the
-terms of the Eclipse Public License 2.0 which is available at
-http://www.eclipse.org/legal/epl-2.0.
-
-This Source Code may also be made available under the following Secondary
-Licenses when the conditions for such availability set forth in the Eclipse
-Public License, v. 2.0 are satisfied: GNU General Public License as published by
-the Free Software Foundation, either version 2 of the License, or (at your
-option) any later version, with the GNU Classpath Exception which is available
-at https://www.gnu.org/software/classpath/license.html.
+If you find any bugs or errors, we would appreciate if you could help [report](https://github.com/clojure-finance/HKU-TDLEG-data-processing-DSL/issues) these issues so that we could repair them accordingly.
