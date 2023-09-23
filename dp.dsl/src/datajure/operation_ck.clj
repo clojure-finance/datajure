@@ -1,4 +1,4 @@
-(ns dp.ds-operation-ck
+(ns datajure.operation-ck
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[clojask.dataframe :as ck]

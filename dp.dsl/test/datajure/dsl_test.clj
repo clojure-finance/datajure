@@ -1,6 +1,6 @@
-(ns dp.dsl-test
+(ns datajure.dsl-test
   (:require [clojure.test :refer :all]
-            [dp.dsl :refer :all]
+            [datajure.dsl :refer :all]
             [zero-one.geni.core :as g]))
 
 (def data {:age [31 25 18 18 25]
