@@ -129,17 +129,3 @@
   "Choose `back` as the backend implementation."
   [back]
   (reset! backend back))
-
-(defn -main
-  "Testing Funciton for DSL"
-  [& args]
-  (set-backend "tech.v3.dataset")
-  (def data {:age [31 25 18 18 25]
-             :name ["a" "b" "c" "c" "d"]
-             :salary [200 500 200 370 3500]})
-  (print-dataset (dt-get (dataset data) [[:salary #(< 300 %)] [:age #(> 20 %)]] []))
-  (print-dataset (dt-get (dataset data) [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age]))
-  (print-dataset (dt-get (dataset data) [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >]))
-  (print-dataset (dt-get (dataset data) [] [:age :name :sum :salary] [:group-by :age :name]))
-  (print-dataset (dt-get (dataset data) [[:salary #(< 0 %)] [:age #(< 24 %)]] []))
-  (print-dataset (dt-get (dataset data) [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])))
