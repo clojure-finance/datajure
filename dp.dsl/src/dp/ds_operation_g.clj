@@ -8,7 +8,7 @@
 (defn- filter-column-r
   "Perform `filter-operations` on `dataset`."
   [dataset filter-operations]
-  (reduce #(g/filter %1 %2) dataset filter-operations))
+  (reduce #(g/filter %1 (get %2 1)) dataset filter-operations))
 
 (defn where
   "Filter rows of `dataset` according to the given condition in `query-map`."
@@ -53,7 +53,7 @@
   (let [unpharsed-filter-operations (get query-map :having)]
     (if (nil? unpharsed-filter-operations)
       dataset
-      (filter-column-r dataset (mapv #(list (get-agg-key (second %) (first %)) (last %)) unpharsed-filter-operations)))))
+      (filter-column-r dataset (mapv #(vector (get-agg-key (second %) (first %)) (last %)) unpharsed-filter-operations)))))
 
 (defn sort-by
   "Sort the records in `dataset` according to `query-map`."
