@@ -1,4 +1,4 @@
-(ns dp.ds-operation-g
+(ns datajure.operation-g
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[zero-one.geni.core :as g])

@@ -1,13 +1,13 @@
-(ns dp.dsl)
+(ns datajure.dsl)
 
 (require '[tech.v3.dataset :as ds]
          '[tablecloth.api :as tc]
          '[clojask.dataframe :as ck]
          '[zero-one.geni.core :as g]
-         '[dp.ds-operation :as op]
-         '[dp.ds-operation-tc :as op-tc]
-         '[dp.ds-operation-ck :as op-ck]
-         '[dp.ds-operation-g :as op-g])
+         '[datajure.operation-ds :as op-ds]
+         '[datajure.operation-tc :as op-tc]
+         '[datajure.operation-ck :as op-ck]
+         '[datajure.operation-g :as op-g])
 
 (def operation-list [:where :row :group-by :having :select :sort-by])
 (def optional-keywords #{:group-by :sort-by})
@@ -18,12 +18,12 @@
   "Return the operation function map according to the current backend."
   []
   (case @backend
-    "tech.v3.dataset" {:select op/select
-                       :where op/where
-                       :row op/row
-                       :group-by op/group-by
-                       :having op/having
-                       :sort-by op/sort-by}
+    "tech.v3.dataset" {:select op-ds/select
+                       :where op-ds/where
+                       :row op-ds/row
+                       :group-by op-ds/group-by
+                       :having op-ds/having
+                       :sort-by op-ds/sort-by}
     "tablecloth" {:select op-tc/select
                   :where op-tc/where
                   :row op-tc/row

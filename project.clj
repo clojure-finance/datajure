@@ -1,8 +1,8 @@
-(defproject dp.dsl "0.1.0-SNAPSHOT"
-  :description "FIXME: write description"
-  :url "http://example.com/FIXME"
-  :license {:name "EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0"
-            :url "https://www.eclipse.org/legal/epl-2.0/"}
+(defproject datajure "0.1.0-SNAPSHOT"
+  :description "An open-source domain-specific language for data processing."
+  :url "https://clojure-finance.github.io/datajure-website/"
+  :license {:name "The MIT License"
+            :url "http://opensource.org/licenses/MIT"}
   :dependencies [[org.clojure/clojure "1.10.3"]
                  [org.apache.arrow/arrow-memory-unsafe "2.0.0"]
                  [org.apache.arrow/arrow-memory-core "2.0.0"]
@@ -14,7 +14,7 @@
                  [zero.one/geni "0.0.40"]
                  [com.fasterxml.jackson.core/jackson-core "2.15.2"]
                  [metrics-clojure "2.10.0"]]
-  :main ^:skip-aot dp.dsl
+  :main ^:skip-aot datajure.dsl
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}

@@ -1,15 +1,17 @@
-(ns dp.ds-operation-tc
+(ns datajure.operation-ds
   (:refer-clojure :exclude [group-by sort-by]))
 
-(require '[tablecloth.api :as tc]
+(require '[tech.v3.dataset :as ds]
+         '[tech.v3.dataset.join :as ds-join]
          '[clojure.algo.generic.functor :as gen])
+
 
 (def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
   "Perform `filter-operations` on `dataset`."
   [dataset filter-operations]
-  (reduce #(tc/select-rows %1 (comp (second %2) (first %2))) dataset filter-operations))
+  (reduce #(ds/filter-column %1 (first %2) (second %2)) dataset filter-operations))
 
 (defn where
   "Filter rows of `dataset` according to the given condition in `query-map`."
@@ -24,7 +26,7 @@
     (if (or (nil? where-val) (empty? where-val))
       (if (or (= row-val :all) (empty? row-val))
         dataset
-        (tc/select-rows dataset (get query-map :row)))
+        (ds/select-rows-by-index dataset (get query-map :row)))
       dataset)))
 
 (defn- get-agg-key
@@ -63,7 +65,7 @@
         num-valid-keys (mapv #(get-key-val %1 %2 :n-valid) list-col list-num-valid)
         num-missing-keys (mapv #(get-key-val %1 %2 :n-missing) list-col list-num-missing)
         num-total-keys (mapv #(get-key-val %1 %2 :n) list-col list-num-total)]
-    (tc/dataset
+    (ds/->dataset
      (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))
 
 (defn group-by-single
@@ -71,12 +73,12 @@
   [dataset group-by-col]
   (if (nil? group-by-col)
     dataset
-    (let [grouped-map (tc/group-by dataset group-by-col {:result-type :as-map})
-          descriptive-grouped-map (gen/fmap #(get-description-column-ds (tc/info %) group-by-col ((% group-by-col) 0)) grouped-map)
-          fisrt-rows (mapv #(tc/select-rows % [0]) (vals grouped-map))
-          first-ds (apply tc/concat fisrt-rows)
-          agg-ds (apply tc/concat (vals descriptive-grouped-map))]
-      (tc/left-join first-ds agg-ds group-by-col))))
+    (let [grouped-map (ds/group-by-column dataset group-by-col)
+          descriptive-grouped-map (gen/fmap #(get-description-column-ds (ds/descriptive-stats %) group-by-col ((% group-by-col) 0)) grouped-map)
+          fisrt-rows (mapv #(ds/select-rows-by-index % [0]) (vals grouped-map))
+          first-ds (apply ds/concat fisrt-rows)
+          agg-ds (apply ds/concat (vals descriptive-grouped-map))]
+      (ds-join/left-join group-by-col first-ds agg-ds))))
 
 
 (defn- get-combined-group-by-col
@@ -87,7 +89,7 @@
 (defn- get-combined-group-by-val
   "Get the combined form of columns of `dataset` as described by `group-by-col`."
   [dataset group-by-col]
-  (mapv #(apply str (str %)) (tc/rows (tc/select-columns dataset group-by-col))))
+  (mapv #(apply str (str %)) (ds/value-reader (ds/select-columns dataset group-by-col))))
 
 (defn group-by
   "Group the records in `dataset` according to `query-map`."
@@ -127,8 +129,8 @@
               colname (if (contains? aggregate-function-keywords first-exp) (get-agg-key second-exp first-exp) first-exp)
               compare-fn (if (contains? aggregate-function-keywords first-exp) third-exp second-exp)]
           (if (nil? compare-fn)
-            (tc/order-by dataset colname)
-            (tc/order-by dataset colname compare-fn)))))))
+            (ds/sort-by-column dataset colname)
+            (ds/sort-by-column dataset colname compare-fn)))))))
 
 
 (defn- split-col-agg-keys-r
@@ -142,4 +144,4 @@
   "Select columns of `dataset` according to `query-map`."
   [dataset query-map]
   (let [select-all-keys (split-col-agg-keys-r (:select query-map))]
-    (tc/select-columns dataset (if (empty? select-all-keys) :all select-all-keys))))
+    (ds/select-columns dataset (if (empty? select-all-keys) :all select-all-keys))))
