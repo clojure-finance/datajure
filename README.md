@@ -16,4 +16,4 @@ In this project, a DSL extension to existing data processing libraries, includin
 
 Datajure is currently under active development.
 
-If you find any bugs or errors, we would appreciate if you could help [report](https://github.com/clojure-finance/HKU-TDLEG-data-processing-DSL/issues) these issues so that we could repair them accordingly.
+If you find any bugs or errors, we would appreciate if you could help [report](https://github.com/clojure-finance/datajure/issues) these issues so that we could repair them accordingly.
