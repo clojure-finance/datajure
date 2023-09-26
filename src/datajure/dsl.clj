@@ -9,10 +9,10 @@
          '[datajure.operation-ck :as op-ck]
          '[datajure.operation-g :as op-g])
 
-(def operation-list [:where :row :group-by :having :select :sort-by])
-(def optional-keywords #{:group-by :sort-by})
+(def ^:private operation-list [:where :row :group-by :having :select :sort-by])
+(def ^:private optional-keywords #{:group-by :sort-by})
 
-(def backend (atom "tablecloth"))
+(def ^:private backend (atom "tablecloth"))
 
 (defn- get-operation-function-map
   "Return the operation function map according to the current backend."
@@ -85,7 +85,7 @@
           partition-exp-listed (mapv #(vector (first %) (into (vector) (rest %))) partition-exp)]
       (into (sorted-map) partition-exp-listed))))
 
-(defmacro dt-get
+(defmacro query
   "Generate `query-map` from Datajure DSL (`row-filter-list`, `select-list`, and `options-map`). Then perform the data operations to `dataset`."
   ([dataset row-filter-list select-list options-map]
    (let [options-map (get-optional-exp-partition-map options-map)
@@ -105,7 +105,7 @@
                     :select select-list}]
     `(query-using-map ~dataset ~query-map)))
   ([dataset row-filter-list select-list]
-   `(dt-get ~dataset ~row-filter-list ~select-list [])))
+   `(query ~dataset ~row-filter-list ~select-list [])))
 
 (defn dataset
   "Create and return a dataset object from an associative map `data`."
@@ -116,7 +116,7 @@
     "clojask" (ck/dataframe #(op-ck/ck-transform data))
     "geni" (g/map->dataset data)))
 
-(defn print-dataset
+(defn print
   "Print the dataset `data`."
   [data]
   (case @backend
