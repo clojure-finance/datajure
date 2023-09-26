@@ -15,7 +15,7 @@
   [data]
   (into [] (cons (into [] (map name (keys data))) (apply map vector (vals data)))))
 
-(def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
+(def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
   "Perform `filter-operations` on `dataset`."
@@ -113,7 +113,7 @@
         sd (sd list)]
     (* 3 (/ (- mean median) sd))))
 
-(def stat-ops
+(def ^:private stat-ops
   {:min gb-agg/min
    :max gb-agg/max
    :sum gb-agg/sum

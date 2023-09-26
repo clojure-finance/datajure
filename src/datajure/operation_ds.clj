@@ -6,7 +6,7 @@
          '[clojure.algo.generic.functor :as gen])
 
 
-(def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
+(def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
   "Perform `filter-operations` on `dataset`."
@@ -68,7 +68,7 @@
     (ds/->dataset
      (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))
 
-(defn group-by-single
+(defn- group-by-single
   "Perform `group-by` operation on `dataset` as specified by `group-by-col`."
   [dataset group-by-col]
   (if (nil? group-by-col)

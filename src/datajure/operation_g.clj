@@ -3,7 +3,7 @@
 
 (require '[zero-one.geni.core :as g])
 
-(def aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
+(def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
   "Perform `filter-operations` on `dataset`."
@@ -26,7 +26,7 @@
   (let [agg-fun-name (if (= :sd agg-fun-keyword) "stddev_samp" (name agg-fun-keyword))]
     (keyword (str agg-fun-name "(" (name col-name) ")"))))
 
-(def numeric-types ["ByteType" "ShortType" "IntegerType" "LongType" "FloatType" "DoubleType" "DecimalType"])
+(def ^:private numeric-types ["ByteType" "ShortType" "IntegerType" "LongType" "FloatType" "DoubleType" "DecimalType"])
 
 (defn- get-describe
   "Calculate statistical information of `grouped-dataset`."

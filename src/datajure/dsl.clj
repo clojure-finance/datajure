@@ -9,10 +9,10 @@
          '[datajure.operation-ck :as op-ck]
          '[datajure.operation-g :as op-g])
 
-(def operation-list [:where :row :group-by :having :select :sort-by])
-(def optional-keywords #{:group-by :sort-by})
+(def ^:private operation-list [:where :row :group-by :having :select :sort-by])
+(def ^:private optional-keywords #{:group-by :sort-by})
 
-(def backend (atom "tablecloth"))
+(def ^:private backend (atom "tablecloth"))
 
 (defn- get-operation-function-map
   "Return the operation function map according to the current backend."
