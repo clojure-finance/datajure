@@ -1,6 +1,6 @@
 # Datajure
 
-[![Build Status](actions/workflows/test.yml/badge.svg)](actions/workflows/test.yml)
+[![Build Status](../../actions/workflows/test.yml/badge.svg)](../../actions/workflows/test.yml)
 
 Welcome to Datajure! This is an open-source domain-specific language for data processing developed at HKU Business School.
 
