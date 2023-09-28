@@ -66,8 +66,7 @@
     (is (= actual expected) actual)))
 
 (deftest g-test
-  (let [expected-1 (slurp "./test/datajure/g-expected-1.txt")
-        expected-2 (slurp "./test/datajure/g-expected-2.txt")
+  (let [expected (slurp "./test/datajure/g-expected.txt")
         actual (with-out-str (do (dtj/set-backend "geni")
                                  (-> data
                                         (dtj/dataset)
@@ -83,14 +82,14 @@
                                         (dtj/print))
                                     (-> data
                                         (dtj/dataset)
-                                        (dtj/query [] [:age :name :sum :salary] [:group-by :age :name])
+                                        (dtj/query [] [:age :name :sum :salary] [:group-by :age :name :sort-by :sum :salary])
                                         (dtj/print))
                                     (-> data
                                         (dtj/dataset)
-                                        (dtj/query [[:salary (g/< (g/lit 0) :salary)] [:age (g/< (g/lit 24) :age)]] [])
+                                        (dtj/query [[:salary (g/< (g/lit 0) :salary)] [:age (g/< (g/lit 24) :age)]] [] [:sort-by :salary])
                                         (dtj/print))
                                     (-> data
                                         (dtj/dataset)
-                                        (dtj/query [[:sum :salary (g/< (g/lit 0) (keyword "sum(salary)"))] [:age (g/< (g/lit 0) :age)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])
+                                        (dtj/query [[:sum :salary (g/< (g/lit 0) (keyword "sum(salary)"))] [:age (g/< (g/lit 0) :age)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :sum :salary])
                                         (dtj/print))))]
-    (is (or (= actual expected-1) (= actual expected-2)) actual)))
+    (is (= actual expected) actual)))
