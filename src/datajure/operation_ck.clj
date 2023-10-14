@@ -163,7 +163,7 @@
       dataset
       (filter-column-r dataset (mapv #(list (get-agg-name (name (second %)) (first %)) (last %)) unpharsed-filter-operations)))))
 
-(defn- external-sort
+(defn external-sort
   "Perform external sorting with comparator `comp` on the dataset stored in `input` and write the result into `output`."
   [input output comp]
   (let

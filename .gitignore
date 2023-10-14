@@ -14,5 +14,5 @@ pom.xml.asc
 .lsp/
 .clj-kondo/
 .vscode/
-.external-sort/
+.dsl/
 test/datajure/*-output.txt

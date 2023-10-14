@@ -1,0 +1,5 @@
+
+|            age |             name |         salary |
+|----------------+------------------+----------------|
+| java.lang.Long | java.lang.String | java.lang.Long |
+|             18 |                c |            370 |
