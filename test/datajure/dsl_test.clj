@@ -1,6 +1,8 @@
 (ns datajure.dsl-test
-  (:require [clojure.test :refer :all]
+  (:require [clojask.dataframe :as ck]
+            [clojure.test :refer :all]
             [datajure.dsl :as dtj]
+            [datajure.operation-ck :as op-ck]
             [zero-one.geni.core :as g]))
 
 (def data {:age [31 25 18 18 25]
@@ -63,6 +65,33 @@
                                         (dtj/dataset)
                                         (dtj/query [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])
                                         (dtj/print))))]
+    (is (= actual expected) actual)))
+
+(deftest ck-test
+  (dtj/set-backend "clojask")
+  (let [expected (slurp "./test/datajure/ck-create-expected.txt")
+        actual (with-out-str (-> data
+                                 (dtj/dataset)
+                                 (dtj/print)))]
+    (is (= actual expected) actual))
+  (let [expected (slurp "./test/datajure/ck-create-expected.txt")
+        actual (with-out-str (-> "./test/datajure/ck-input.txt"
+                                 (ck/dataframe)
+                                 (ck/set-parser "salary" #(Long/parseLong %))
+                                 (ck/set-parser "age" #(Long/parseLong %))
+                                 (dtj/print)))]
+    (is (= actual expected) actual))
+  (let [input "./test/datajure/ck-sort-input.txt"
+        output "./test/datajure/ck-sort-output.txt"
+        expected (slurp "./test/datajure/ck-sort-expected.txt")
+        actual (do (op-ck/external-sort input output #(- (Integer/parseInt (.get %1 "salary")) (Integer/parseInt (.get %2 "salary"))))
+                   (slurp output))]
+    (is (= actual expected) actual))
+  (let [expected (slurp "./test/datajure/ck-where-expected.txt")
+        actual (with-out-str (-> data
+                                 (dtj/dataset)
+                                 (op-ck/where {:where [[:salary #(< 300 %)] [:age #(> 20 %)]]})
+                                 (dtj/print)))]
     (is (= actual expected) actual)))
 
 (deftest g-test
