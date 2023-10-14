@@ -1,5 +1,7 @@
 (ns datajure.operation-ck
-  (:refer-clojure :exclude [group-by sort-by]))
+  (:refer-clojure :exclude [group-by sort-by]) 
+  (:require [clojure.java.io :refer [make-parents]]
+            [clojask.dataframe :as ck]))
 
 (require '[clojask.dataframe :as ck]
          '[clojask.api.gb-aggregate :as gb-agg]
@@ -204,6 +206,8 @@
               compare-fn (if (contains? aggregate-function-keywords first-exp) third-exp second-exp)
               input "./.dsl/sort-input.csv"
               output "./.dsl/sort-output.csv"]
+          (make-parents input)
+          (make-parents output)
           (with-open [writer (io/writer input :append false)]
             (output/write-csv writer (ck/compute dataset 8 nil) ","))
           (if (nil? compare-fn)
