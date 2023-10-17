@@ -17,7 +17,7 @@
 
 (deftest ds-test
   (let [expected (slurp "./test/datajure/ds-expected.txt")
-        actual (with-out-str (do (dtj/set-backend "tech.v3.dataset")
+        actual (with-out-str (do (dtj/set-backend "tech.ml.dataset")
                                  (-> data
                                      (dtj/dataset)
                                      (dtj/query [[:salary #(< 300 %)] [:age #(> 20 %)]] [])
