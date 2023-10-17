@@ -18,7 +18,7 @@
   "Return the operation function map according to the current backend."
   []
   (case @backend
-    "tech.v3.dataset" {:select op-ds/select
+    "tech.ml.dataset" {:select op-ds/select
                        :where op-ds/where
                        :row op-ds/row
                        :group-by op-ds/group-by
@@ -57,7 +57,7 @@
   "Get the column names of `dataset`."
   [dataset]
   (case @backend
-    "tech.v3.dataset" (ds/column-names dataset)
+    "tech.ml.dataset" (ds/column-names dataset)
     "tablecloth" (tc/column-names dataset)
     "clojask" (ck/get-col-names dataset)
     "geni" (g/columns dataset)))
@@ -111,7 +111,7 @@
   "Create and return a dataset object from an associative map `data`."
   [data]
   (case @backend
-    "tech.v3.dataset" (ds/->dataset data)
+    "tech.ml.dataset" (ds/->dataset data)
     "tablecloth" (tc/dataset data)
     "clojask" (ck/dataframe #(op-ck/ck-transform data))
     "geni" (g/map->dataset data)))
@@ -120,7 +120,7 @@
   "Print the dataset `data`."
   [data]
   (case @backend
-    "tech.v3.dataset" (println data)
+    "tech.ml.dataset" (println data)
     "tablecloth" (println data)
     "clojask" (ck/print-df data)
     "geni" (g/show data)))
