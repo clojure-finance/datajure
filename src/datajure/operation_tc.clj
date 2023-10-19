@@ -1,8 +1,7 @@
 (ns datajure.operation-tc
   (:refer-clojure :exclude [group-by sort-by]))
 
-(require '[tablecloth.api :as tc]
-         '[clojure.algo.generic.functor :as gen])
+(require '[tablecloth.api :as tc])
 
 (def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
@@ -64,7 +63,7 @@
         num-missing-keys (mapv #(get-key-val %1 %2 :n-missing) list-col list-num-missing)
         num-total-keys (mapv #(get-key-val %1 %2 :n) list-col list-num-total)]
     (tc/dataset
-     (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))
+     (into {} (into {} (filter second (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))))
 
 (defn- group-by-single
   "Perform `group-by` operation on `dataset` as specified by `group-by-col`."
@@ -72,7 +71,7 @@
   (if (nil? group-by-col)
     dataset
     (let [grouped-map (tc/group-by dataset group-by-col {:result-type :as-map})
-          descriptive-grouped-map (gen/fmap #(get-description-column-ds (tc/info %) group-by-col ((% group-by-col) 0)) grouped-map)
+          descriptive-grouped-map (into {} (map (fn [[k v]] [k (get-description-column-ds (tc/info v) group-by-col k)]) grouped-map))
           fisrt-rows (mapv #(tc/select-rows % [0]) (vals grouped-map))
           first-ds (apply tc/concat fisrt-rows)
           agg-ds (apply tc/concat (vals descriptive-grouped-map))]
