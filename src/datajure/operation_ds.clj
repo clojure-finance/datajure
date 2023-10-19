@@ -2,8 +2,7 @@
   (:refer-clojure :exclude [group-by sort-by]))
 
 (require '[tech.v3.dataset :as ds]
-         '[tech.v3.dataset.join :as ds-join]
-         '[clojure.algo.generic.functor :as gen])
+         '[tech.v3.dataset.join :as ds-join])
 
 
 (def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
@@ -26,7 +25,7 @@
     (if (or (nil? where-val) (empty? where-val))
       (if (or (= row-val :all) (empty? row-val))
         dataset
-        (ds/select-rows-by-index dataset (get query-map :row)))
+        (ds/select-rows dataset (get query-map :row)))
       dataset)))
 
 (defn- get-agg-key
@@ -66,7 +65,7 @@
         num-missing-keys (mapv #(get-key-val %1 %2 :n-missing) list-col list-num-missing)
         num-total-keys (mapv #(get-key-val %1 %2 :n) list-col list-num-total)]
     (ds/->dataset
-     (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))
+     (into {} (filter second (into {} (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))))
 
 (defn- group-by-single
   "Perform `group-by` operation on `dataset` as specified by `group-by-col`."
@@ -74,8 +73,8 @@
   (if (nil? group-by-col)
     dataset
     (let [grouped-map (ds/group-by-column dataset group-by-col)
-          descriptive-grouped-map (gen/fmap #(get-description-column-ds (ds/descriptive-stats %) group-by-col ((% group-by-col) 0)) grouped-map)
-          fisrt-rows (mapv #(ds/select-rows-by-index % [0]) (vals grouped-map))
+          descriptive-grouped-map (into {} (map (fn [[k v]] [k (get-description-column-ds (ds/descriptive-stats v) group-by-col k)]) grouped-map))
+          fisrt-rows (mapv #(ds/select-rows % [0]) (vals grouped-map))
           first-ds (apply ds/concat fisrt-rows)
           agg-ds (apply ds/concat (vals descriptive-grouped-map))]
       (ds-join/left-join group-by-col first-ds agg-ds))))
