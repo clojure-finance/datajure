@@ -1,4 +1,5 @@
-(ns datajure.dsl)
+(ns datajure.dsl
+  (:refer-clojure :exclude [print]))
 
 (require '[tech.v3.dataset :as ds]
          '[tablecloth.api :as tc]
