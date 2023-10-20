@@ -14,11 +14,12 @@
                  [org.apache.zookeeper/zookeeper "3.7.2" :exclusions [org.slf4j/slf4j-log4j12]]]
   :main ^:skip-aot datajure.dsl
   :target-path "target/%s"
-  :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED",
-             "--add-opens=java.base/java.net=ALL-UNNAMED",
-             "--add-opens=java.base/java.lang=ALL-UNNAMED",
-             "--add-opens=java.base/java.util=ALL-UNNAMED",
-             "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED"]
+  :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+             "--add-opens=java.base/java.net=ALL-UNNAMED"
+             "--add-opens=java.base/java.lang=ALL-UNNAMED"
+             "--add-opens=java.base/java.util=ALL-UNNAMED"
+             "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED"
+             "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
              :provided {:dependencies [[org.apache.spark/spark-core_2.12 "3.1.1" :exclusions [org.slf4j/slf4j-log4j12]]
