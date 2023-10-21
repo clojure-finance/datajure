@@ -22,6 +22,7 @@
              "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
+             :test {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
              :provided {:dependencies [[org.apache.spark/spark-core_2.12 "3.1.1" :exclusions [org.slf4j/slf4j-log4j12]]
                                        [org.apache.spark/spark-mllib_2.12 "3.1.1"]
                                        [org.apache.spark/spark-sql_2.12 "3.1.1"]
