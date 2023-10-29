@@ -1,4 +1,4 @@
-(defproject datajure "0.1.0-SNAPSHOT"
+(defproject datajure "1.0.0"
   :description "An open-source domain-specific language for data processing."
   :url "https://clojure-finance.github.io/datajure-website/"
   :license {:name "The MIT License"
