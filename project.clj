@@ -10,7 +10,7 @@
                  [zero.one/geni "0.0.41"]
                  [com.fasterxml.jackson.core/jackson-core "2.15.3"]
                  [metrics-clojure "2.10.0"]
-                 [org.apache.poi/poi "5.2.3"]
+                 [org.apache.poi/poi "5.2.4"]
                  [org.apache.zookeeper/zookeeper "3.7.2" :exclusions [org.slf4j/slf4j-log4j12]]]
   :main ^:skip-aot datajure.dsl
   :target-path "target/%s"
