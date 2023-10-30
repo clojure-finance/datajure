@@ -1,6 +1,7 @@
 # Datajure
 
 [![Build Status](../../actions/workflows/test.yml/badge.svg)](../../actions/workflows/test.yml)
+[![Clojars Project](https://img.shields.io/clojars/v/com.github.clojure-finance/datajure.svg)](https://clojars.org/com.github.clojure-finance/datajure)
 
 Welcome to Datajure! This is an open-source domain-specific language for data processing developed at HKU Business School.
 
