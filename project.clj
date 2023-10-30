@@ -3,7 +3,7 @@
   :url "https://clojure-finance.github.io/datajure-website/"
   :license {:name "The MIT License"
             :url "http://opensource.org/licenses/MIT"}
-  :dependencies [[org.clojure/clojure "1.11.1"]
+  :dependencies [[org.clojure/clojure "1.10.3"]
                  [techascent/tech.ml.dataset "7.018"]
                  [scicloj/tablecloth "7.014"]
                  [com.github.clojure-finance/clojask "2.0.2"]
