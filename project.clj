@@ -1,16 +1,16 @@
-(defproject datajure "1.0.0"
+(defproject com.github.clojure-finance/datajure "1.0.0"
   :description "An open-source domain-specific language for data processing."
   :url "https://clojure-finance.github.io/datajure-website/"
   :license {:name "The MIT License"
             :url "http://opensource.org/licenses/MIT"}
-  :dependencies [[org.clojure/clojure "1.11.1"]
-                 [techascent/tech.ml.dataset "7.018"]
+  :dependencies [[org.clojure/clojure "1.10.3"]
+                 [techascent/tech.ml.dataset "7.020"]
                  [scicloj/tablecloth "7.014"]
                  [com.github.clojure-finance/clojask "2.0.2"]
                  [zero.one/geni "0.0.41"]
-                 [com.fasterxml.jackson.core/jackson-core "2.15.2"]
+                 [com.fasterxml.jackson.core/jackson-core "2.15.3"]
                  [metrics-clojure "2.10.0"]
-                 [org.apache.poi/poi "5.2.3"]
+                 [org.apache.poi/poi "5.2.4"]
                  [org.apache.zookeeper/zookeeper "3.7.2" :exclusions [org.slf4j/slf4j-log4j12]]]
   :main ^:skip-aot datajure.dsl
   :target-path "target/%s"
@@ -25,7 +25,7 @@
              :test {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
              :provided {:dependencies [[com.fasterxml.jackson.core/jackson-core "2.15.3"]
                                        [com.fasterxml.jackson.core/jackson-annotations "2.15.3"]
-                                       [org.apache.spark/spark-core_2.12 "3.3.3" :exclusions [org.slf4j/slf4j-log4j12]]
+                                       [org.apache.spark/spark-core_2.12 "3.3.3" :exclusions [org.apache.logging.log4j/log4j-slf4j-impl]]
                                        [org.apache.spark/spark-mllib_2.12 "3.3.3"]
                                        [org.apache.spark/spark-sql_2.12 "3.3.3"]
                                        [org.apache.arrow/arrow-vector "4.0.0"
