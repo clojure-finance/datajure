@@ -23,6 +23,7 @@
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
              :test {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
+             :repl {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
              :provided {:dependencies [[com.fasterxml.jackson.core/jackson-core "2.15.3"]
                                        [com.fasterxml.jackson.core/jackson-annotations "2.15.3"]
                                        [org.apache.spark/spark-core_2.12 "3.3.3" :exclusions [org.apache.logging.log4j/log4j-slf4j-impl]]
