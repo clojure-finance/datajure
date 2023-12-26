@@ -21,7 +21,22 @@
              "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED"
              "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
   :profiles {:uberjar {:aot :all
-                       :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
+                       :plugins [[arctype/log4j2-plugins-cache "1.0.0"]]
+                       :middleware [leiningen.log4j2-plugins-cache/middleware]
+                       :manifest {"Multi-Release" true}
+                       :dependencies [[log4j/log4j "1.2.17"]
+                                      [org.apache.logging.log4j/log4j-core "2.21.0"]
+                                      ;; Arrow
+                                      [org.apache.arrow/arrow-memory-core "4.0.0"]
+                                      [org.apache.arrow/arrow-vector "4.0.0"
+                                       :exclusions [commons-codec com.fasterxml.jackson.core/jackson-databind]]
+                                      ;; Spark
+                                      [org.apache.spark/spark-avro_2.12 "3.3.3"]
+                                      [org.apache.spark/spark-core_2.12 "3.3.3"]
+                                      [org.apache.spark/spark-hive_2.12 "3.3.3"]
+                                      [org.apache.spark/spark-mllib_2.12 "3.3.3"]
+                                      [org.apache.spark/spark-sql_2.12 "3.3.3"]
+                                      [org.apache.spark/spark-streaming_2.12 "3.3.3"]]}
              :test {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
              :repl {:dependencies [[org.apache.logging.log4j/log4j-core "2.21.0"]]}
              :provided {:dependencies [[com.fasterxml.jackson.core/jackson-core "2.15.3"]
