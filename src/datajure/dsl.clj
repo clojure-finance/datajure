@@ -1,5 +1,7 @@
 (ns datajure.dsl
-  (:refer-clojure :exclude [print]))
+  (:refer-clojure :exclude [print]) 
+  (:require [datajure.repl :as repl])
+  (:gen-class))
 
 (require '[tech.v3.dataset :as ds]
          '[tablecloth.api :as tc]
@@ -130,3 +132,40 @@
   "Choose `back` as the backend implementation."
   [back]
   (reset! backend back))
+
+(def init-eval
+  "The initial form evaluated when the REPL starts up."
+  '(do
+     (require
+      '[tech.v3.dataset :as ds]
+      '[tablecloth.api :as tc]
+      '[clojask.dataframe :as ck]
+      '[zero-one.geni.core :as g]
+      '[datajure.dsl :as dtj])))
+
+(defn- custom-stream [script-path]
+  (try
+    (-> (str (slurp script-path) "\nexit\n")
+        (.getBytes "UTF-8")
+        (java.io.ByteArrayInputStream.))
+    (catch Exception _
+      (println (str "Cannot find file " script-path "!"))
+      (System/exit 1))))
+
+(defn -main
+  "The Datajure CLI entrypoint.
+
+  It does the following:
+  - Prints a welcome note.
+  - Launches an nREPL server, which writes to `.nrepl-port` for a
+    text editor to connect to.
+  - Starts a REPL(-y).
+  "
+  [& args]
+  (println repl/welcome-note)
+  (let [script-path (if (empty? args) nil (first args))]
+    (repl/launch-repl (merge {:port (+ 65001 (rand-int 500))
+                              :custom-eval init-eval}
+                             (when script-path
+                               {:input-stream (custom-stream script-path)}))))
+  (System/exit 0))
