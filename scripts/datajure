@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+# inspired by
+# https://gist.github.com/lukechilds/a83e1d7127b78fef38c2914c4ececc3c
+# https://github.com/borkdude/clj-kondo
+# https://github.com/zero-one-group/geni
+
+set -euo pipefail
+
+repo_name="clojure-finance/datajure"
+
+get_latest_release() {
+  curl --silent "https://api.github.com/repos/$1/releases/latest" | # Get latest release from GitHub api
+    grep '"tag_name":' |                                            # Get tag line
+    sed -E 's/.*"([^"]+)".*/\1/'                                    # Pluck JSON value
+}
+
+version=`get_latest_release $repo_name`
+original_dir="$PWD"
+download_dir="$HOME/.datajure/downloads"
+download_url="https://github.com/$repo_name/releases/download/$version/datajure-$version-standalone.jar"
+uberjar_dir="$HOME/.datajure"
+uberjar_name="datajure.jar"
+jvm_opts="--add-opens=java.base/java.nio=ALL-UNNAMED\
+ --add-opens=java.base/java.net=ALL-UNNAMED\
+ --add-opens=java.base/java.lang=ALL-UNNAMED\
+ --add-opens=java.base/java.util=ALL-UNNAMED\
+ --add-opens=java.base/java.util.concurrent=ALL-UNNAMED\
+ --add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+
+print_help() {
+    echo "Downloads the latest release of Datajure REPL if it is not found."
+    echo "Runs the Datajure REPL + starts an nREPL server with an .nrepl-port file."
+    echo "Usage:"
+    echo -e "\tdatajure [<path>] [--force-download] [--help]"
+    echo "The optional input file should be a Datajure source file (.dtj suffix)."
+}
+
+script_path=false
+force_download=false
+while [[ $# -gt 0 ]]
+do
+    key="$1"
+    case $key in
+        *.dtj)
+            script_path="$key"
+            shift
+            ;;
+        --force-download)
+            force_download=true
+            shift
+            ;;
+        --help)
+            print_help
+            exit 0
+            ;;
+        *)
+            echo "Unrecognised option!"
+            print_help
+            exit 1
+    esac
+done
+
+mkdir -p "$uberjar_dir"
+cd "$uberjar_dir"
+if [[ ! -f "$uberjar_name" ]] || [[ "$force_download" = true ]]; then
+    mkdir -p "$download_dir"
+    cd "$download_dir"
+    echo -e "Downloading $download_url to $download_dir ..."
+    wget -O "$uberjar_name" "$download_url"
+    echo "Moving $download_dir/$uberjar_name to $uberjar_dir/$uberjar_name"
+    mv -f "$uberjar_name" "$uberjar_dir/$uberjar_name"
+    echo "Successfully downloaded Datajure REPL uberjar in $uberjar_dir/$uberjar_name"
+fi
+
+cd "$original_dir"
+if [[ "$script_path" = false ]]; then
+    java $jvm_opts -jar $uberjar_dir/$uberjar_name
+else
+    java $jvm_opts -jar $uberjar_dir/$uberjar_name $script_path
+fi
