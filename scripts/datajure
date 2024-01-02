@@ -32,12 +32,14 @@ print_help() {
     echo "Downloads the latest release of Datajure REPL if it is not found."
     echo "Runs the Datajure REPL + starts an nREPL server with an .nrepl-port file."
     echo "Usage:"
-    echo -e "\tdatajure [<path>] [--force-download] [--help]"
+    echo -e "\tdatajure [<path>] [--force-download] [--proxy <https-proxy>] [--help]"
     echo "The optional input file should be a Datajure source file (.dtj suffix)."
 }
 
 script_path=false
 force_download=false
+use_proxy=false
+https_proxy=false
 while [[ $# -gt 0 ]]
 do
     key="$1"
@@ -48,6 +50,17 @@ do
             ;;
         --force-download)
             force_download=true
+            shift
+            ;;
+        --proxy)
+            use_proxy=true
+            shift
+            if [[ $# = 0 ]]; then
+                echo "Missing proxy server address!"
+                print_help
+                exit 1
+            fi
+            https_proxy="$1"
             shift
             ;;
         --help)
@@ -66,8 +79,13 @@ cd "$uberjar_dir"
 if [[ ! -f "$uberjar_name" ]] || [[ "$force_download" = true ]]; then
     mkdir -p "$download_dir"
     cd "$download_dir"
-    echo -e "Downloading $download_url to $download_dir ..."
-    wget -O "$uberjar_name" "$download_url"
+    if [[ "$use_proxy" = true ]]; then
+        echo -e "Downloading $download_url to $download_dir via proxy server $https_proxy ..."
+        wget -O "$uberjar_name" "$download_url" "-e use_proxy=on" "-e https_proxy=$https_proxy"
+    else
+        echo -e "Downloading $download_url to $download_dir ..."
+        wget -O "$uberjar_name" "$download_url"
+    fi
     echo "Moving $download_dir/$uberjar_name to $uberjar_dir/$uberjar_name"
     mv -f "$uberjar_name" "$uberjar_dir/$uberjar_name"
     echo "Successfully downloaded Datajure REPL uberjar in $uberjar_dir/$uberjar_name"
