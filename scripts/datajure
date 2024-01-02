@@ -7,27 +7,6 @@
 
 set -euo pipefail
 
-repo_name="clojure-finance/datajure"
-
-get_latest_release() {
-  curl --silent "https://api.github.com/repos/$1/releases/latest" | # Get latest release from GitHub api
-    grep '"tag_name":' |                                            # Get tag line
-    sed -E 's/.*"([^"]+)".*/\1/'                                    # Pluck JSON value
-}
-
-version=`get_latest_release $repo_name`
-original_dir="$PWD"
-download_dir="$HOME/.datajure/downloads"
-download_url="https://github.com/$repo_name/releases/download/$version/datajure-$version-standalone.jar"
-uberjar_dir="$HOME/.datajure"
-uberjar_name="datajure.jar"
-jvm_opts="--add-opens=java.base/java.nio=ALL-UNNAMED\
- --add-opens=java.base/java.net=ALL-UNNAMED\
- --add-opens=java.base/java.lang=ALL-UNNAMED\
- --add-opens=java.base/java.util=ALL-UNNAMED\
- --add-opens=java.base/java.util.concurrent=ALL-UNNAMED\
- --add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
-
 print_help() {
     echo "Downloads the latest release of Datajure REPL if it is not found."
     echo "Runs the Datajure REPL + starts an nREPL server with an .nrepl-port file."
@@ -73,6 +52,28 @@ do
             exit 1
     esac
 done
+
+get_latest_release() {
+    if [[ "$use_proxy" = true ]]; then
+        curl --silent "https://api.github.com/repos/$1/releases/latest" --proxy "$https_proxy" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    else
+        curl --silent "https://api.github.com/repos/$1/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    fi
+}
+
+repo_name="clojure-finance/datajure"
+version=`get_latest_release $repo_name`
+original_dir="$PWD"
+download_dir="$HOME/.datajure/downloads"
+download_url="https://github.com/$repo_name/releases/download/$version/datajure-$version-standalone.jar"
+uberjar_dir="$HOME/.datajure"
+uberjar_name="datajure.jar"
+jvm_opts="--add-opens=java.base/java.nio=ALL-UNNAMED\
+ --add-opens=java.base/java.net=ALL-UNNAMED\
+ --add-opens=java.base/java.lang=ALL-UNNAMED\
+ --add-opens=java.base/java.util=ALL-UNNAMED\
+ --add-opens=java.base/java.util.concurrent=ALL-UNNAMED\
+ --add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
 
 mkdir -p "$uberjar_dir"
 cd "$uberjar_dir"
