@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-function Print-Help {
+function Write-Help {
     Write-Output "Downloads the latest release of Datajure REPL if it is not found."
     Write-Output "Runs the Datajure REPL + starts an nREPL server with an .nrepl-port file."
     Write-Output "Usage:"
@@ -28,19 +28,19 @@ for ($i = 0; $i -lt $args.count;) {
             $i++
             if ($i -ge $args.count) {
                 Write-Output "Missing proxy server address!"
-                Print-Help
+                Write-Help
                 Exit 1
             }
             HttpsProxy = $aegs[$i]
             $i++
         }
         "--help" {
-            Print-Help
+            Write-Help
             Exit 0
         }
         Default {
             Write-Output "Unrecognised option!"
-            Print-Help
+            Write-Help
             Exit 1
         }
     }
