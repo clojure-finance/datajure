@@ -28,4 +28,4 @@
 
 (def welcome-note
   "A REPL welcome note."
-  (str "Datajure " "1.0.1"))
+  (str "Datajure " "1.1.0"))
