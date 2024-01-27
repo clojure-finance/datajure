@@ -30,3 +30,9 @@ jobs:
 
       - name: Run tests
         run: lein test
+
+      - name: Test Leiningen template
+        run: chmod +x ./.github/scripts/test-lein-template && ./.github/scripts/test-lein-template
+
+      - name: Test Datajure REPL
+        run: chmod +x ./.github/scripts/test-datajure-repl && ./.github/scripts/test-datajure-repl
