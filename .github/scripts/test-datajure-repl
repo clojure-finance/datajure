@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+wget https://raw.githubusercontent.com/clojure-finance/datajure/main/scripts/datajure
+chmod +x datajure
+exit | ./datajure
