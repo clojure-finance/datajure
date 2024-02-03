@@ -48,29 +48,29 @@
   (let [expected (slurp "./test/datajure/tc-expected.txt")
         actual (with-out-str (do (dtj/set-backend "tablecloth")
                                  (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:salary #(< 300 %)] [:age #(> 20 %)]] [])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [] [:age :name :sum :salary] [:group-by :age :name])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:salary #(< 0 %)] [:age #(< 24 %)]] [])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])
-                                        (dtj/print))))]
+                                     (dtj/dataset)
+                                     (dtj/query [[:salary #(< 300 %)] [:age #(> 20 %)]] [])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:sum :salary #(< 1000 %)]] [:age :sum :salary] [:group-by :age])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary >])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [] [:age :name :sum :salary] [:group-by :age :name])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:salary #(< 0 %)] [:age #(< 24 %)]] [])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:sum :salary #(< 0 %)] [:age #(< 0 %)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :salary])
+                                     (dtj/print))))]
     (is (check actual expected) actual)))
 
 (deftest ck-test
@@ -104,27 +104,27 @@
   (let [expected (slurp "./test/datajure/g-expected.txt")
         actual (with-out-str (do (dtj/set-backend "geni")
                                  (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:salary (g/< (g/lit 300) :salary)] [:age (g/> (g/lit 20) :age)]] [])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:sum :salary (g/< (g/lit 1000) (keyword "sum(salary)"))]] [:age :sum :salary] [:group-by :age])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [] [:age :name :sum :salary] [:group-by :age :name :sort-by :sum :salary])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:salary (g/< (g/lit 0) :salary)] [:age (g/< (g/lit 24) :age)]] [] [:sort-by :salary])
-                                        (dtj/print))
-                                    (-> data
-                                        (dtj/dataset)
-                                        (dtj/query [[:sum :salary (g/< (g/lit 0) (keyword "sum(salary)"))] [:age (g/< (g/lit 0) :age)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :sum :salary])
-                                        (dtj/print))))]
+                                     (dtj/dataset)
+                                     (dtj/query [[:salary (g/< (g/lit 300) :salary)] [:age (g/> (g/lit 20) :age)]] [])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:sum :salary (g/< (g/lit 1000) (keyword "sum(salary)"))]] [:age :sum :salary] [:group-by :age])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [] [:age :sum :salary :sd :salary] [:group-by :age :sort-by :sd :salary])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [] [:age :name :sum :salary] [:group-by :age :name :sort-by :sum :salary])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:salary (g/< (g/lit 0) :salary)] [:age (g/< (g/lit 24) :age)]] [] [:sort-by :salary])
+                                     (dtj/print))
+                                 (-> data
+                                     (dtj/dataset)
+                                     (dtj/query [[:sum :salary (g/< (g/lit 0) (keyword "sum(salary)"))] [:age (g/< (g/lit 0) :age)]] [:name :age :salary :sum :salary :sd :salary] [:group-by :name :age :sort-by :sum :salary])
+                                     (dtj/print))))]
     (is (check actual expected) actual)))

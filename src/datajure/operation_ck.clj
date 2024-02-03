@@ -1,5 +1,5 @@
 (ns datajure.operation-ck
-  (:refer-clojure :exclude [group-by sort-by]) 
+  (:refer-clojure :exclude [group-by sort-by])
   (:require [clojure.java.io :refer [make-parents]]
             [clojask.dataframe :as ck]))
 
@@ -228,7 +228,7 @@
   "Select columns of `dataset` according to `query-map`."
   [dataset query-map]
   (let [select-all-keys (split-col-agg-keys-r dataset (:select query-map))]
-     (if (empty? select-all-keys)
-       (ck/compute dataset 8 "./.dsl/select-result.csv")
-       (ck/compute dataset 8 "./.dsl/select-result.csv" :select select-all-keys)))
+    (if (empty? select-all-keys)
+      (ck/compute dataset 8 "./.dsl/select-result.csv")
+      (ck/compute dataset 8 "./.dsl/select-result.csv" :select select-all-keys)))
   dataset)

@@ -4,7 +4,6 @@
 (require '[tech.v3.dataset :as ds]
          '[tech.v3.dataset.join :as ds-join])
 
-
 (def ^:private aggregate-function-keywords #{:min :mean :mode :max :sum :sd :skew :n-valid :n-missing :n})
 
 (defn- filter-column-r
@@ -52,8 +51,6 @@
         list-num-missing (descriptive-ds :n-missing)
         list-num-total (mapv #(+ %1 %2) list-num-missing list-num-valid)
         list-sum (mapv #(if (and (number? %1) (number? %2)) (* %1 %2) nil) list-mean list-num-valid)
-
-
         min-keys (mapv #(get-key-val %1 %2 :min) list-col list-min)
         mean-keys (mapv #(get-key-val %1 %2 :mean) list-col list-mean)
         mode-keys (mapv #(get-key-val %1 %2 :mode) list-col list-mode)
@@ -79,7 +76,6 @@
           agg-ds (apply ds/concat (vals descriptive-grouped-map))]
       (ds-join/left-join group-by-col first-ds agg-ds))))
 
-
 (defn- get-combined-group-by-col
   "Get the combined form of column names as described by `group-by-col`."
   [group-by-col]
@@ -96,15 +92,13 @@
   (let [group-by-col (get query-map :group-by)]
     (if (nil? group-by-col)
       dataset
-      (if (or (seq? group-by-col) (list? group-by-col) (vector? group-by-col))
-        (if (empty? group-by-col)
-          dataset
-          (if (= 1 (count group-by-col))
-            (group-by-single dataset (first group-by-col))
-            (let [new-col (get-combined-group-by-col group-by-col)
-                  new-dataset (assoc dataset new-col (get-combined-group-by-val dataset group-by-col))]
-              (group-by-single new-dataset new-col))))
-        (group-by-single dataset group-by-col)))))
+      (if (empty? group-by-col)
+        dataset
+        (if (= 1 (count group-by-col))
+          (group-by-single dataset (first group-by-col))
+          (let [new-col (get-combined-group-by-col group-by-col)
+                new-dataset (assoc dataset new-col (get-combined-group-by-val dataset group-by-col))]
+            (group-by-single new-dataset new-col)))))))
 
 (defn having
   "Perform the `HAVING` operation on `dataset` by specifying a search condition for a group or an aggregate according to `query-map`."
@@ -130,7 +124,6 @@
           (if (nil? compare-fn)
             (ds/sort-by-column dataset colname)
             (ds/sort-by-column dataset colname compare-fn)))))))
-
 
 (defn- split-col-agg-keys-r
   "Convert aggregation keywords in `mixed-words` from separated form to combined form."

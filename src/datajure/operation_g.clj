@@ -72,7 +72,6 @@
                           (get-agg-key first-exp :first)))]
           (g/sort dataset colname))))))
 
-
 (defn- split-col-agg-keys-r
   "Convert aggregation keywords in `mixed-words` from separated form to combined form."
   [mixed-words]
