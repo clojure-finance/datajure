@@ -26,6 +26,7 @@
                  [org.apache.spark/spark-sql_2.12 "3.3.3"]
                  [org.apache.spark/spark-streaming_2.12 "3.3.3"]]
   :main ^:skip-aot datajure.dsl
+  :plugins [[dev.weavejester/lein-cljfmt "0.12.0"]]
   :target-path "target/%s"
   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
              "--add-opens=java.base/java.net=ALL-UNNAMED"

@@ -1,5 +1,5 @@
 (ns datajure.dsl
-  (:refer-clojure :exclude [print]) 
+  (:refer-clojure :exclude [print])
   (:require [datajure.repl :as repl])
   (:gen-class))
 
@@ -99,14 +99,13 @@
                           (filterv #(= 3 (count %))))
          group-by-list (:group-by options-map)
          sort-by-list (:sort-by options-map)
-
          query-map {:row row-list
                     :where where-list
                     :group-by group-by-list
                     :having having-list
                     :sort-by sort-by-list
                     :select select-list}]
-    `(query-using-map ~dataset ~query-map)))
+     `(query-using-map ~dataset ~query-map)))
   ([dataset row-filter-list select-list]
    `(query ~dataset ~row-filter-list ~select-list [])))
 

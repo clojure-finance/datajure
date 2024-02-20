@@ -37,8 +37,8 @@
   [(get-agg-key col-name attr-keyword) val])
 
 (defn- get-description-column-ds
-  "Convert the statistical information of the columns described by `groupby-col` and `groupby-col-val` from `descriptive-ds` to a dataset."
-  [descriptive-ds groupby-col groupby-col-val]
+  "Convert the statistical information of the columns described by `groupby-cols` and `groupby-col-val` from `descriptive-ds` to a dataset."
+  [descriptive-ds groupby-cols groupby-col-val]
   (let [list-col (descriptive-ds :col-name)
         list-min (descriptive-ds :min)
         list-mean (descriptive-ds :mean)
@@ -50,8 +50,6 @@
         list-num-missing (descriptive-ds :n-missing)
         list-num-total (mapv #(+ %1 %2) list-num-missing list-num-valid)
         list-sum (mapv #(if (and (number? %1) (number? %2)) (* %1 %2) nil) list-mean list-num-valid)
-
-
         min-keys (mapv #(get-key-val %1 %2 :min) list-col list-min)
         mean-keys (mapv #(get-key-val %1 %2 :mean) list-col list-mean)
         mode-keys (mapv #(get-key-val %1 %2 :mode) list-col list-mode)
@@ -61,32 +59,10 @@
         skew-keys (mapv #(get-key-val %1 %2 :skew) list-col list-skew)
         num-valid-keys (mapv #(get-key-val %1 %2 :n-valid) list-col list-num-valid)
         num-missing-keys (mapv #(get-key-val %1 %2 :n-missing) list-col list-num-missing)
-        num-total-keys (mapv #(get-key-val %1 %2 :n) list-col list-num-total)]
+        num-total-keys (mapv #(get-key-val %1 %2 :n) list-col list-num-total)
+        group-by-list (into [] (map (fn [k] [k [(get groupby-col-val k)]]) groupby-cols))]
     (tc/dataset
-     (into {} (into {} (filter second (reduce into [[[groupby-col groupby-col-val]] min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))))
-
-(defn- group-by-single
-  "Perform `group-by` operation on `dataset` as specified by `group-by-col`."
-  [dataset group-by-col]
-  (if (nil? group-by-col)
-    dataset
-    (let [grouped-map (tc/group-by dataset group-by-col {:result-type :as-map})
-          descriptive-grouped-map (into {} (map (fn [[k v]] [k (get-description-column-ds (tc/info v) group-by-col k)]) grouped-map))
-          fisrt-rows (mapv #(tc/select-rows % [0]) (vals grouped-map))
-          first-ds (apply tc/concat fisrt-rows)
-          agg-ds (apply tc/concat (vals descriptive-grouped-map))]
-      (tc/left-join first-ds agg-ds group-by-col))))
-
-
-(defn- get-combined-group-by-col
-  "Get the combined form of column names as described by `group-by-col`."
-  [group-by-col]
-  (keyword (apply str (mapv name group-by-col))))
-
-(defn- get-combined-group-by-val
-  "Get the combined form of columns of `dataset` as described by `group-by-col`."
-  [dataset group-by-col]
-  (mapv #(apply str (str %)) (tc/rows (tc/select-columns dataset group-by-col))))
+     (into {} (into {} (filter second (reduce into [group-by-list min-keys mean-keys mode-keys max-keys sum-keys sd-keys skew-keys num-valid-keys num-missing-keys num-total-keys])))))))
 
 (defn group-by
   "Group the records in `dataset` according to `query-map`."
@@ -94,15 +70,17 @@
   (let [group-by-col (get query-map :group-by)]
     (if (nil? group-by-col)
       dataset
-      (if (or (seq? group-by-col) (list? group-by-col) (vector? group-by-col))
-        (if (empty? group-by-col)
+      (let [group-by-cols (if (or (seq? group-by-col) (list? group-by-col) (vector? group-by-col))
+                            group-by-col
+                            [group-by-col])]
+        (if (empty? group-by-cols)
           dataset
-          (if (= 1 (count group-by-col))
-            (group-by-single dataset (first group-by-col))
-            (let [new-col (get-combined-group-by-col group-by-col)
-                  new-dataset (assoc dataset new-col (get-combined-group-by-val dataset group-by-col))]
-              (group-by-single new-dataset new-col))))
-        (group-by-single dataset group-by-col)))))
+          (let [grouped-map (tc/group-by dataset group-by-cols {:result-type :as-map})
+                descriptive-grouped-map (into {} (map (fn [[k v]] [k (get-description-column-ds (tc/info v) group-by-cols k)]) grouped-map))
+                fisrt-rows (mapv #(tc/select-rows % [0]) (vals grouped-map))
+                first-ds (apply tc/concat fisrt-rows)
+                agg-ds (apply tc/concat (vals descriptive-grouped-map))]
+            (tc/left-join first-ds agg-ds group-by-cols)))))))
 
 (defn having
   "Perform the `HAVING` operation on `dataset` by specifying a search condition for a group or an aggregate according to `query-map`."
@@ -128,7 +106,6 @@
           (if (nil? compare-fn)
             (tc/order-by dataset colname)
             (tc/order-by dataset colname compare-fn)))))))
-
 
 (defn- split-col-agg-keys-r
   "Convert aggregation keywords in `mixed-words` from separated form to combined form."
