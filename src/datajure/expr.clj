@@ -8,9 +8,15 @@
     - Reader tag handler registered via resources/data_readers.clj (primary)
       and register-reader! / alter-var-root (AOT/script fallback)
 
-  For #dt/e to work at the REPL, users must require this namespace (or
-  datajure.core). This resolves the exported vars sq, log, and, or, not
-  which shadow clojure.core macros/fns so the reader sees them as plain vars.
+  REPL usage: to use and/or/not inside #dt/e literals at the REPL, require
+  the stub fns that shadow the clojure.core macros:
+
+    (require '[datajure.expr :refer [and or not]])   ; or via datajure.core
+
+  This is necessary because the Clojure compiler resolves and/or/not as macros
+  before the reader tag fires. The stub fns are plain functions whose values
+  are recognised by reverse-op-table and mapped to dfn/and, dfn/or, dfn/not.
+  In .clj files and read-string contexts this is not needed (reader fires first).
 
   Nil-safety rules (matching spec):
     - Comparison ops with nil arg -> false column (all rows false)
@@ -27,11 +33,11 @@
 ;; op-table. They exist solely so the reader can resolve them as plain vars.
 ;; ---------------------------------------------------------------------------
 
-(def sq "Marker var for #dt/e sq — resolved by the expression compiler." ::sq)
-(def log "Marker var for #dt/e log — resolved by the expression compiler." ::log)
-(def and "Marker var for #dt/e and — shadows clojure.core/and macro." ::and)
-(def or "Marker var for #dt/e or — shadows clojure.core/or macro." ::or)
-(def not "Marker var for #dt/e not — resolved by the expression compiler." ::not)
+(defn sq "Stub fn — value recognised by reverse-op-table." [& _] ::sq)
+(defn log "Stub fn — value recognised by reverse-op-table." [& _] ::log)
+(defn and "Stub fn — shadows clojure.core/and macro, value recognised by reverse-op-table." [& _] ::and)
+(defn or "Stub fn — shadows clojure.core/or macro, value recognised by reverse-op-table." [& _] ::or)
+(defn not "Stub fn — shadows clojure.core/not, value recognised by reverse-op-table." [& _] ::not)
 
 ;; ---------------------------------------------------------------------------
 ;; Op dispatch table: symbol -> dfn fn
@@ -63,17 +69,18 @@
    clojure.core/< '<
    clojure.core/>= '>=
    clojure.core/<= '<=
+   clojure.core/= '=
    clojure.core/+ '+
    clojure.core/- '-
    clojure.core/* '*
    clojure.core// '/
    clojure.core/not 'not
-   ;; datajure.expr stubs -> their canonical symbols
-   ::sq 'sq
-   ::log 'log
-   ::and 'and
-   ::or 'or
-   ::not 'not})
+   ;; datajure.expr stub fns -> their canonical symbols
+   sq 'sq
+   log 'log
+   and 'and
+   or 'or
+   not 'not})
 
 (defn- ->op-sym
   "Normalise an op to its canonical symbol. Accepts symbols directly,
@@ -126,7 +133,7 @@
   (case (:node/type node)
     :col (fn [ds] (ds (:col/name node)))
     :lit (fn [_ds] (:lit/value node))
-    :op (let [op-sym (:op/name node)
+    :op (let [op-sym (->op-sym (:op/name node))
               op-fn (clojure.core/or (op-table op-sym)
                                      (throw (ex-info "Unknown op in #dt/e expression"
                                                      {:op op-sym})))
