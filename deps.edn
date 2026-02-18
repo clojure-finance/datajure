@@ -1,9 +1,8 @@
 {:paths ["src" "resources"]
- :deps {techascent/tech.ml.dataset {:mvn/version "7.021"}
-        org.clojure/clojure {:mvn/version "1.12.0"}}
+ :deps {techascent/tech.ml.dataset {:mvn/version "8.003"}
+        org.clojure/clojure {:mvn/version "1.12.4"}}
  :aliases
  {:nrepl
-  {:extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}}
+  {:extra-deps {nrepl/nrepl {:mvn/version "1.5.2"}}
    :main-opts ["-m" "nrepl.cmdline" "--port" "7888"]
    :extra-paths ["test"]}}}
-
