@@ -1,0 +1,25 @@
+# Clojure/deps.edn
+.cpcache/
+target/
+classes/
+
+# nREPL
+.nrepl-port
+.nrepl-history
+
+# Clojure MCP (local dev tooling)
+.clojure-mcp/
+
+# Editor
+.calva/
+.clj-kondo/
+.lsp/
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
