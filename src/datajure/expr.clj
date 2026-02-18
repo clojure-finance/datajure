@@ -5,13 +5,12 @@
   these ASTs when executing dt queries. This namespace handles:
     - AST node constructors
     - compile-expr: AST -> fn of dataset -> column/scalar
-    - Reader tag handler (registered on require via alter-var-root)
+    - Reader tag handler registered via resources/data_readers.clj (primary)
+      and register-reader! / alter-var-root (AOT/script fallback)
 
-  Auto-registration: loading this namespace (via datajure.core) merges the
-  #dt/e data reader into *data-readers* at load time -- same pattern as
-  clojure.instant / #inst. This is an intentional side effect; document in
-  consumer namespaces. Use (datajure.expr/register-reader!) for AOT/script
-  edge cases.
+  For #dt/e to work at the REPL, users must require this namespace (or
+  datajure.core). This resolves the exported vars sq, log, and, or, not
+  which shadow clojure.core macros/fns so the reader sees them as plain vars.
 
   Nil-safety rules (matching spec):
     - Comparison ops with nil arg -> false column (all rows false)
@@ -22,20 +21,20 @@
             [tech.v3.dataset :as ds]))
 
 ;; ---------------------------------------------------------------------------
-;; AST node constructors
+;; Exported stub vars for ops that don't exist in clojure.core
+;; (sq, log) or that are macros in clojure.core (and, or, not).
+;; These stubs are never called directly -- the AST compiler always uses
+;; op-table. They exist solely so the reader can resolve them as plain vars.
 ;; ---------------------------------------------------------------------------
 
-(defn col-node [kw]
-  {:node/type :col :col/name kw})
-
-(defn lit-node [v]
-  {:node/type :lit :lit/value v})
-
-(defn op-node [op args]
-  {:node/type :op :op/name op :op/args args})
+(def sq "Marker var for #dt/e sq — resolved by the expression compiler." ::sq)
+(def log "Marker var for #dt/e log — resolved by the expression compiler." ::log)
+(def and "Marker var for #dt/e and — shadows clojure.core/and macro." ::and)
+(def or "Marker var for #dt/e or — shadows clojure.core/or macro." ::or)
+(def not "Marker var for #dt/e not — resolved by the expression compiler." ::not)
 
 ;; ---------------------------------------------------------------------------
-;; Op dispatch table
+;; Op dispatch table: symbol -> dfn fn
 ;; ---------------------------------------------------------------------------
 
 (def ^:private comparison-ops #{'> '< '>= '<= '= 'and 'or 'not})
@@ -56,6 +55,49 @@
    'or dfn/or
    'not dfn/not})
 
+;; Reverse map: resolved fn/var value -> canonical symbol.
+;; Needed because nREPL resolves symbols before passing forms to read-expr,
+;; so (> :mass 4000) arrives with clojure.core/> instead of the symbol '>.
+(def ^:private reverse-op-table
+  {clojure.core/> '>
+   clojure.core/< '<
+   clojure.core/>= '>=
+   clojure.core/<= '<=
+   clojure.core/+ '+
+   clojure.core/- '-
+   clojure.core/* '*
+   clojure.core// '/
+   clojure.core/not 'not
+   ;; datajure.expr stubs -> their canonical symbols
+   ::sq 'sq
+   ::log 'log
+   ::and 'and
+   ::or 'or
+   ::not 'not})
+
+(defn- ->op-sym
+  "Normalise an op to its canonical symbol. Accepts symbols directly,
+  or looks up fn/var values via reverse-op-table."
+  [op]
+  (if (symbol? op)
+    op
+    (clojure.core/or (reverse-op-table op)
+                     (throw (ex-info "Unknown op in #dt/e expression — not a recognised symbol or fn"
+                                     {:op op :op-type (type op)})))))
+
+;; ---------------------------------------------------------------------------
+;; AST node constructors
+;; ---------------------------------------------------------------------------
+
+(defn col-node [kw]
+  {:node/type :col :col/name kw})
+
+(defn lit-node [v]
+  {:node/type :lit :lit/value v})
+
+(defn op-node [op args]
+  {:node/type :op :op/name op :op/args args})
+
 ;; ---------------------------------------------------------------------------
 ;; AST builder: Clojure form -> AST
 ;; ---------------------------------------------------------------------------
@@ -65,7 +107,7 @@
     (keyword? form) (col-node form)
     (symbol? form) (lit-node form)
     (seq? form) (let [[op & args] form]
-                  (op-node op (mapv parse-form args)))
+                  (op-node (->op-sym op) (mapv parse-form args)))
     :else (lit-node form)))
 
 ;; ---------------------------------------------------------------------------
@@ -85,14 +127,14 @@
     :col (fn [ds] (ds (:col/name node)))
     :lit (fn [_ds] (:lit/value node))
     :op (let [op-sym (:op/name node)
-              op-fn (or (op-table op-sym)
-                        (throw (ex-info "Unknown op in #dt/e expression"
-                                        {:op op-sym})))
+              op-fn (clojure.core/or (op-table op-sym)
+                                     (throw (ex-info "Unknown op in #dt/e expression"
+                                                     {:op op-sym})))
               arg-fns (mapv compile-expr (:op/args node))
               cmp? (comparison-ops op-sym)]
           (fn [ds]
             (let [args (map #(% ds) arg-fns)]
-              (if (some nil? args)
+              (if (clojure.core/some nil? args)
                 (if cmp?
                   (boolean-array (ds/row-count ds) false)
                   nil)
@@ -108,9 +150,9 @@
   (parse-form form))
 
 (defn register-reader!
-  "Register the #dt/e reader tag in *data-readers*. Called automatically
-  when this namespace is loaded."
+  "Register the #dt/e reader tag via alter-var-root on *data-readers*.
+  Fallback for AOT compilation or scripts where data_readers.clj is not picked
+  up at startup. The primary registration mechanism is resources/data_readers.clj,
+  which Clojure merges automatically for all threads at JVM startup."
   []
   (alter-var-root #'*data-readers* assoc 'dt/e #'read-expr))
-
-(register-reader!)
