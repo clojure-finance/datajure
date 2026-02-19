@@ -8,89 +8,69 @@
     - Reader tag handler registered via resources/data_readers.clj (primary)
       and register-reader! / alter-var-root (AOT/script fallback)
 
-  REPL usage: to use and/or/not inside #dt/e literals at the REPL, require
-  the stub fns that shadow the clojure.core macros:
-
-    (require '[datajure.expr :refer [and or not]])   ; or via datajure.core
-
-  This is necessary because the Clojure compiler resolves and/or/not as macros
-  before the reader tag fires. The stub fns are plain functions whose values
-  are recognised by reverse-op-table and mapped to dfn/and, dfn/or, dfn/not.
-  In .clj files and read-string contexts this is not needed (reader fires first).
+  Op names are stored as keywords in the AST (e.g. :and, :>, :+) rather than
+  symbols, because the Clojure compiler tries to resolve symbols in literal
+  data structures. Since and/or/not are macros, the compiler rejects
+  'Can't take value of a macro' when it encounters them as bare symbols in
+  the map values returned by the reader tag. Keywords are self-evaluating
+  and avoid this entirely.
 
   Nil-safety rules (matching spec):
     - Comparison ops with nil arg -> false column (all rows false)
     - Arithmetic ops with nil arg -> nil (becomes missing when stored in dataset)
   These rules only activate when a Clojure nil literal appears in an expression.
   Dataset columns with missing values are handled natively by dfn."
-  (:require [tech.v3.datatype.functional :as dfn]
+  (:require [tech.v3.datatype :as dtype]
+            [tech.v3.datatype.functional :as dfn]
             [tech.v3.dataset :as ds]))
 
 ;; ---------------------------------------------------------------------------
-;; Exported stub vars for ops that don't exist in clojure.core
-;; (sq, log) or that are macros in clojure.core (and, or, not).
-;; These stubs are never called directly -- the AST compiler always uses
-;; op-table. They exist solely so the reader can resolve them as plain vars.
+;; Op dispatch table: symbol -> keyword -> dfn fn
 ;; ---------------------------------------------------------------------------
 
-(defn sq "Stub fn — value recognised by reverse-op-table." [& _] ::sq)
-(defn log "Stub fn — value recognised by reverse-op-table." [& _] ::log)
-(defn and "Stub fn — shadows clojure.core/and macro, value recognised by reverse-op-table." [& _] ::and)
-(defn or "Stub fn — shadows clojure.core/or macro, value recognised by reverse-op-table." [& _] ::or)
-(defn not "Stub fn — shadows clojure.core/not, value recognised by reverse-op-table." [& _] ::not)
-
-;; ---------------------------------------------------------------------------
-;; Op dispatch table: symbol -> dfn fn
-;; ---------------------------------------------------------------------------
-
-(def ^:private comparison-ops #{'> '< '>= '<= '= 'and 'or 'not})
+(def ^:private comparison-ops #{:> :< :>= :<= := :and :or :not :in :between?})
 
 (def ^:private op-table
-  {'+ dfn/+
-   '- dfn/-
-   '* dfn/*
-   '/ dfn//
-   'sq dfn/sq
-   'log dfn/log
-   '> dfn/>
-   '< dfn/<
-   '>= dfn/>=
-   '<= dfn/<=
-   '= dfn/eq
-   'and dfn/and
-   'or dfn/or
-   'not dfn/not})
+  {:+ dfn/+
+   :- dfn/-
+   :* dfn/*
+   :div (fn [a b] (dfn// (dfn/double a) (dfn/double b)))
+   :sq dfn/sq
+   :log dfn/log
+   :> dfn/>
+   :< dfn/<
+   :>= dfn/>=
+   :<= dfn/<=
+   := dfn/eq
+   :and dfn/and
+   :or dfn/or
+   :not dfn/not
+   :mn dfn/mean
+   :sm dfn/sum
+   :md dfn/median
+   :sd dfn/standard-deviation
+   :in (fn [col s]
+         (dtype/make-reader :boolean (dtype/ecount col)
+                            (boolean (contains? s (nth col idx)))))
+   :between? (fn [col lo hi] (dfn/and (dfn/>= col lo) (dfn/<= col hi)))})
 
-;; Reverse map: resolved fn/var value -> canonical symbol.
-;; Needed because nREPL resolves symbols before passing forms to read-expr,
-;; so (> :mass 4000) arrives with clojure.core/> instead of the symbol '>.
-(def ^:private reverse-op-table
-  {clojure.core/> '>
-   clojure.core/< '<
-   clojure.core/>= '>=
-   clojure.core/<= '<=
-   clojure.core/= '=
-   clojure.core/+ '+
-   clojure.core/- '-
-   clojure.core/* '*
-   clojure.core// '/
-   clojure.core/not 'not
-   ;; datajure.expr stub fns -> their canonical symbols
-   sq 'sq
-   log 'log
-   and 'and
-   or 'or
-   not 'not})
+(def ^:private sym->op
+  "Maps source-form symbols to canonical keyword op names."
+  {'+ :+, '- :-, '* :*, '/ :div
+   'sq :sq, 'log :log
+   '> :>, '< :<, '>= :>=, '<= :<=, '= :=
+   'and :and, 'or :or, 'not :not
+   'mn :mn, 'sm :sm, 'md :md, 'sd :sd
+   'in :in, 'between? :between?})
 
-(defn- ->op-sym
-  "Normalise an op to its canonical symbol. Accepts symbols directly,
-  or looks up fn/var values via reverse-op-table."
+(defn- ->op-kw
+  "Normalise a source-form op to its canonical keyword.
+  At read time, ops arrive as plain symbols ('and, '>, etc.)."
   [op]
-  (if (symbol? op)
-    op
-    (clojure.core/or (reverse-op-table op)
-                     (throw (ex-info "Unknown op in #dt/e expression — not a recognised symbol or fn"
-                                     {:op op :op-type (type op)})))))
+  (or (sym->op op)
+      (when (keyword? op) op)
+      (throw (ex-info "Unknown op in #dt/e expression"
+                      {:op op :op-type (type op)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; AST node constructors
@@ -112,14 +92,21 @@
 (defn- parse-form [form]
   (cond
     (keyword? form) (col-node form)
-    (symbol? form) (lit-node form)
     (seq? form) (let [[op & args] form]
-                  (op-node (->op-sym op) (mapv parse-form args)))
+                  (op-node (->op-kw op) (mapv parse-form args)))
     :else (lit-node form)))
 
 ;; ---------------------------------------------------------------------------
 ;; Compiler: AST -> fn of dataset
 ;; ---------------------------------------------------------------------------
+
+(defn col-refs
+  "Extract the set of column keywords referenced by an AST node."
+  [node]
+  (case (:node/type node)
+    :col #{(:col/name node)}
+    :lit #{}
+    :op (into #{} (mapcat col-refs) (:op/args node))))
 
 (defn compile-expr
   "Compile an AST node to a fn [ds] -> column/scalar.
@@ -133,17 +120,17 @@
   (case (:node/type node)
     :col (fn [ds] (ds (:col/name node)))
     :lit (fn [_ds] (:lit/value node))
-    :op (let [op-sym (->op-sym (:op/name node))
-              op-fn (clojure.core/or (op-table op-sym)
-                                     (throw (ex-info "Unknown op in #dt/e expression"
-                                                     {:op op-sym})))
+    :op (let [op-kw (:op/name node)
+              op-fn (or (op-table op-kw)
+                        (throw (ex-info "Unknown op in #dt/e expression"
+                                        {:op op-kw})))
               arg-fns (mapv compile-expr (:op/args node))
-              cmp? (comparison-ops op-sym)]
+              cmp? (comparison-ops op-kw)]
           (fn [ds]
             (let [args (map #(% ds) arg-fns)]
-              (if (clojure.core/some nil? args)
+              (if (some nil? args)
                 (if cmp?
-                  (boolean-array (ds/row-count ds) false)
+                  (dtype/make-reader :boolean (ds/row-count ds) false)
                   nil)
                 (apply op-fn args)))))))
 
