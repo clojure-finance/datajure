@@ -1,5 +1,8 @@
 # Datajure v2
 
+[![Clojars Project](https://img.shields.io/clojars/v/com.github.clojure-finance/datajure.svg)](https://clojars.org/com.github.clojure-finance/datajure)
+[![cljdoc](https://cljdoc.org/badge/com.github.clojure-finance/datajure)](https://cljdoc.org/d/com.github.clojure-finance/datajure/CURRENT)
+
 **One function. Six keywords. Two expression modes.**
 
 Datajure is a Clojure data manipulation library for finance and empirical research. It provides a clean, composable query DSL built directly on [tech.ml.dataset](https://github.com/techascent/tech.ml.dataset).
