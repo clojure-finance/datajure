@@ -5,4 +5,10 @@
  {:nrepl
   {:extra-deps {nrepl/nrepl {:mvn/version "1.5.2"}}
    :main-opts ["-m" "nrepl.cmdline" "--port" "7888"]
-   :extra-paths ["test"]}}}
+   :extra-paths ["test"]}
+  :clerk
+  {:extra-deps {io.github.nextjournal/clerk {:mvn/version "0.18.1158"}}
+   :extra-paths ["notebooks"]}
+  :clay
+  {:extra-deps {org.scicloj/clay {:mvn/version "2-beta56"}}
+   :extra-paths ["notebooks"]}}}
