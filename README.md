@@ -515,6 +515,8 @@ Datajure v1 was a routing layer across three backends (tablecloth, clojask, geni
 - v1 repo: https://github.com/clojure-finance/datajure
 - v1 website: https://clojure-finance.github.io/datajure-website/
 
+Special thanks to [YANG Ming-Tian](https://github.com/skylee03) for the original v1 implementation.
+
 ## License
 
 Copyright © 2024–2025 Centre for Investment Management, HKU Business School.
