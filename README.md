@@ -33,14 +33,11 @@ Datajure is a **syntax layer**, not an engine — it sits above tech.v3.dataset 
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {datajure/datajure {:local/root "/path/to/datajure"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.0"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
 
-<!-- When published to Clojars:
-{:deps {io.github.clojure-finance/datajure {:mvn/version "2.0.0"}}}
--->
 
 ## The Key Insight: `:by` × `:set`/`:agg`
 

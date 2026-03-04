@@ -11,4 +11,8 @@
    :extra-paths ["notebooks"]}
   :clay
   {:extra-deps {org.scicloj/clay {:mvn/version "2-beta56"}}
-   :extra-paths ["notebooks"]}}}
+   :extra-paths ["notebooks"]}
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}
+          slipset/deps-deploy {:mvn/version "0.2.2"}}
+   :ns-default build}}}
