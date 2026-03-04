@@ -23,3 +23,7 @@ classes/
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal dev docs
+PROJECT_SUMMARY.md
+datajure-v2-syntax-revised.md
