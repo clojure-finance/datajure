@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: DeLaGuardo/setup-clojure@12.5
+        with:
+          cli: latest
+      - name: Run tests
+        run: |
+          clj -A:nrepl -e "
+            (load-file \"test/datajure/core_test.clj\")
+            (load-file \"test/datajure/concise_test.clj\")
+            (load-file \"test/datajure/util_test.clj\")
+            (load-file \"test/datajure/io_test.clj\")
+            (load-file \"test/datajure/reshape_test.clj\")
+            (load-file \"test/datajure/join_test.clj\")
+            (load-file \"test/datajure/nrepl_test.clj\")
+            (load-file \"test/datajure/clerk_test.clj\")
+            (load-file \"test/datajure/clay_test.clj\")
+            (let [result (clojure.test/run-tests
+                           'datajure.core-test 'datajure.concise-test
+                           'datajure.util-test 'datajure.io-test
+                           'datajure.reshape-test 'datajure.join-test
+                           'datajure.nrepl-test 'datajure.clerk-test
+                           'datajure.clay-test)]
+              (when (pos? (+ (:fail result) (:error result)))
+                (System/exit 1)))"
