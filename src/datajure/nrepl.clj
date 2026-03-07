@@ -1,4 +1,4 @@
-(ns datajure.nrepl
+(ns ^:no-doc datajure.nrepl
   "nREPL middleware that automatically binds datajure.core/*dt* to the last
   dataset result in an interactive REPL session.
 
