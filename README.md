@@ -486,6 +486,8 @@ Datajure is a syntax layer. Computation delegates to `tech.v3.dataset` and `tech
 
 ## Development
 
+Tests run automatically on every push to `main` via GitHub Actions.
+
 ```bash
 # Start nREPL
 clj -A:nrepl
