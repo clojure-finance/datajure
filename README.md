@@ -1,8 +1,8 @@
 # Datajure v2
 
 [![Clojars Project](https://img.shields.io/clojars/v/com.github.clojure-finance/datajure.svg)](https://clojars.org/com.github.clojure-finance/datajure)
-[![cljdoc](https://cljdoc.org/badge/com.github.clojure-finance/datajure)](https://cljdoc.org/d/com.github.clojure-finance/datajure/CURRENT)
 [![Tests](https://github.com/clojure-finance/datajure/actions/workflows/tests.yml/badge.svg)](https://github.com/clojure-finance/datajure/actions/workflows/tests.yml)
+[![cljdoc](https://cljdoc.org/badge/com.github.clojure-finance/datajure)](https://cljdoc.org/d/com.github.clojure-finance/datajure/CURRENT)
 
 **One function. Six keywords. Two expression modes.**
 
