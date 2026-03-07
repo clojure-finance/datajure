@@ -6,7 +6,7 @@
 
 **One function. Six keywords. Two expression modes.**
 
-Datajure is a Clojure data manipulation library for finance and empirical research. It provides a clean, composable query DSL built directly on [tech.ml.dataset](https://github.com/techascent/tech.ml.dataset).
+Datajure is a Clojure data manipulation library built on [tech.ml.dataset](https://github.com/techascent/tech.ml.dataset). It provides a clean, composable query DSL for filtering, transforming, grouping, and aggregating tabular data.
 
 ```clojure
 (require '[datajure.core :as core])
@@ -30,7 +30,7 @@ Datajure is a Clojure data manipulation library for finance and empirical resear
     (core/dt :order-by [(core/desc :avg-bmi)]))
 ```
 
-Datajure is a **syntax layer**, not an engine — it sits above tech.v3.dataset exactly as data.table sits above R's data frames. Every result is a standard `tech.v3.dataset` dataset. Full interop with tablecloth, Clerk, Clay, and the Scicloj ecosystem.
+Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expressions to vectorized operations and delegates all computation to `tech.v3.dataset`. Every result is a standard `tech.v3.dataset` dataset. Full interop with tablecloth, Clerk, Clay, and the Scicloj ecosystem.
 
 ## Installation
 
@@ -68,7 +68,7 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
     (core/dt :by [:sym :date]
              :agg {:open  #dt/e (first-val :price)
                    :close #dt/e (last-val :price)
-                   :hi    #dt/e (mn :price)
+                   :hi    #dt/e (mx :price)
                    :vol   #dt/e (sm :size)}))
 
 ;; wavg / wsum — VWAP and weighted sum
@@ -299,9 +299,7 @@ Supported: CSV, TSV, Parquet, Arrow, Excel, Nippy. Gzipped variants auto-detecte
 Floor-division bucketing inspired by q's `xbar`. Primary use case is computed `:by` for time-series bar generation:
 
 ```clojure
-(require '[datajure.core :as core])
-
-;; Numeric bucketing in :by ? price buckets of width 10
+;; Numeric bucketing in :by — price buckets of width 10
 (core/dt ds :by [(core/xbar :price 10)] :agg {:n core/N :avg #dt/e (mn :volume)})
 
 ;; 5-minute OHLCV bars
@@ -454,7 +452,7 @@ User writes:   #dt/e (/ :mass (sq :height))
                tech.v3.dataset (columnar, JVM, fast)
 ```
 
-Datajure is a syntax layer. Computation delegates to `tech.v3.dataset` and `tech.v3.datatype.functional`. Performance matches the underlying engine — no overhead from the DSL.
+Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compile-expr` translates to vectorized `dfn` operations on `tech.v3.dataset` column vectors. Computation is entirely delegated to the underlying engine; the DSL itself adds only the parsing and dispatch overhead.
 
 ## Namespace Guide
 
@@ -517,7 +515,7 @@ clj -A:nrepl -e "
 
 ## Prior Work
 
-Datajure v1 was a routing layer across three backends (tablecloth, clojask, geni/Spark). v2 takes a different approach: a single, opinionated syntax layer directly on tech.v3.dataset, inspired by R's data.table and Julia's DataFramesMeta.jl.
+Datajure v1 was a routing layer across three backends (tablecloth, clojask, geni/Spark). v2 takes a different approach: a single, opinionated syntax layer directly on tech.v3.dataset, with a DSL design inspired by R's data.table and Julia's DataFramesMeta.jl.
 
 - v1 repo: https://github.com/clojure-finance/datajure
 - v1 website: https://clojure-finance.github.io/datajure-website/
