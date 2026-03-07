@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-clj -Sdeps '{:paths ["src" "resources" "test"] :deps {org.clojure/clojure {:mvn/version "1.12.4"} techascent/tech.ml.dataset {:mvn/version "8.003"}}}' \
+clojure -Sdeps '{:paths ["src" "resources" "test"] :deps {org.clojure/clojure {:mvn/version "1.12.4"} techascent/tech.ml.dataset {:mvn/version "8.003"}}}' \
   -M -e "
 (require '[clojure.test :as t])
 (load-file \"test/datajure/core_test.clj\")
