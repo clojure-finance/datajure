@@ -1,5 +1,5 @@
 {:paths ["src" "resources"]
- :deps {techascent/tech.ml.dataset {:mvn/version "8.003"}
+ :deps {techascent/tech.ml.dataset {:mvn/version "8.007"}
         org.clojure/clojure {:mvn/version "1.12.4"}}
  :aliases
  {:nrepl
@@ -10,9 +10,9 @@
   {:extra-deps {io.github.nextjournal/clerk {:mvn/version "0.18.1158"}}
    :extra-paths ["notebooks"]}
   :clay
-  {:extra-deps {org.scicloj/clay {:mvn/version "2-beta56"}}
+  {:extra-deps {org.scicloj/clay {:mvn/version "2.0.11"}}
    :extra-paths ["notebooks"]}
   :build
-  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.10"}
           slipset/deps-deploy {:mvn/version "0.2.2"}}
    :ns-default build}}}
