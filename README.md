@@ -493,8 +493,11 @@ Tests run automatically on every push to `main` via GitHub Actions. CI runs the 
 # Start nREPL
 clj -A:nrepl
 
-# Run all tests
-clj -A:nrepl -e "(require '[clojure.test :as t])
+# Run core tests (same as CI)
+bash bin/run-tests.sh
+
+# Run all tests locally (including optional-dep suites)
+clj -A:nrepl -e "
   (load-file \"test/datajure/core_test.clj\")
   (load-file \"test/datajure/concise_test.clj\")
   (load-file \"test/datajure/util_test.clj\")
@@ -504,7 +507,8 @@ clj -A:nrepl -e "(require '[clojure.test :as t])
   (load-file \"test/datajure/nrepl_test.clj\")
   (load-file \"test/datajure/clerk_test.clj\")
   (load-file \"test/datajure/clay_test.clj\")
-  (t/run-tests 'datajure.core-test 'datajure.concise-test 'datajure.util-test
+  (clojure.test/run-tests
+    'datajure.core-test 'datajure.concise-test 'datajure.util-test
     'datajure.io-test 'datajure.reshape-test 'datajure.join-test
     'datajure.nrepl-test 'datajure.clerk-test 'datajure.clay-test)"
 ```
