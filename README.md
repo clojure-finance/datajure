@@ -517,7 +517,7 @@ clj -A:nrepl -e "
 
 Datajure v1 was a routing layer across three backends (tablecloth, clojask, geni/Spark). v2 takes a different approach: a single, opinionated syntax layer directly on tech.v3.dataset, with a DSL design inspired by R's data.table and Julia's DataFramesMeta.jl.
 
-- v1 repo: https://github.com/clojure-finance/datajure
+- v1 repo: https://github.com/clojure-finance/datajure/tree/v1
 
 Special thanks to [YANG Ming-Tian](https://github.com/skylee03) for the original v1 implementation.
 
