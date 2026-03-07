@@ -18,7 +18,7 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@12.5
         with:
           cli: latest
-      - name: Run tests
+      - name: Run core tests
         run: |
           clj -A:nrepl -e "
             (load-file \"test/datajure/core_test.clj\")
@@ -27,14 +27,9 @@ jobs:
             (load-file \"test/datajure/io_test.clj\")
             (load-file \"test/datajure/reshape_test.clj\")
             (load-file \"test/datajure/join_test.clj\")
-            (load-file \"test/datajure/nrepl_test.clj\")
-            (load-file \"test/datajure/clerk_test.clj\")
-            (load-file \"test/datajure/clay_test.clj\")
             (let [result (clojure.test/run-tests
                            'datajure.core-test 'datajure.concise-test
                            'datajure.util-test 'datajure.io-test
-                           'datajure.reshape-test 'datajure.join-test
-                           'datajure.nrepl-test 'datajure.clerk-test
-                           'datajure.clay-test)]
+                           'datajure.reshape-test 'datajure.join-test)]
               (when (pos? (+ (:fail result) (:error result)))
                 (System/exit 1)))"
