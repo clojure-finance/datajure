@@ -487,7 +487,7 @@ Datajure is a syntax layer. Computation delegates to `tech.v3.dataset` and `tech
 
 ## Development
 
-Tests run automatically on every push to `main` via GitHub Actions.
+Tests run automatically on every push to `main` via GitHub Actions. CI runs the core test suites (core, concise, util, io, reshape, join) via `bin/run-tests.sh`. The nrepl, clerk, and clay test suites require optional deps and are run locally only. When adding a new core test namespace, add it to `bin/run-tests.sh` to include it in CI.
 
 ```bash
 # Start nREPL
