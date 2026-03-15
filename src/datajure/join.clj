@@ -1,8 +1,9 @@
 (ns datajure.join
-  "Join functions for datajure. Wraps tech.v3.dataset.join/pd-merge with
-   keyword-driven syntax matching the datajure spec."
+  "Join functions for datajure. Wraps tech.v3.dataset.join/pd-merge for
+   regular joins and datajure.asof for as-of joins."
   (:require [tech.v3.dataset :as ds]
-            [tech.v3.dataset.join :as ds-join]))
+            [tech.v3.dataset.join :as ds-join]
+            [datajure.asof :as asof]))
 
 (defn- has-duplicate-keys?
   [dataset key-cols]
@@ -28,6 +29,11 @@
     (println (format "[datajure] join report: %d matched, %d left-only, %d right-only"
                      n-matched n-left-only n-right-only))))
 
+(defn- normalize-keys
+  "Normalize a keyword or vector of keywords to a vector."
+  [k]
+  (when k (if (keyword? k) [k] (vec k))))
+
 (defn join
   "Join two datasets. Returns a dataset.
 
@@ -35,49 +41,77 @@
     :on        — column keyword or vector of keywords (same name in both datasets)
     :left-on   — column keyword(s) for left dataset (use with :right-on)
     :right-on  — column keyword(s) for right dataset (use with :left-on)
-    :how       — join type: :inner (default), :left, :right, :outer
+    :how       — join type: :inner (default), :left, :right, :outer, :asof
     :validate  — cardinality check: :1:1, :1:m, :m:1, :m:m
     :report    — if true, print merge diagnostics (matched/left-only/right-only)
 
-  Must provide either :on or both :left-on and :right-on."
+  Must provide either :on or both :left-on and :right-on.
+
+  As-of join (:how :asof):
+    The last column in :on (or :left-on/:right-on) is the asof column —
+    each left row is matched to the last right row where right-key <= left-key.
+    Preceding columns are exact-match keys. All left rows are preserved;
+    unmatched rows get nil for right columns."
   [left right & {:keys [on left-on right-on how validate report]
                  :or {how :inner report false}}]
   (let [how-kw (if (string? how) (keyword how) how)
-        left-keys (or (some-> on (as-> o (if (keyword? o) [o] o)))
-                      (some-> left-on (as-> o (if (keyword? o) [o] o))))
-        right-keys (or (some-> on (as-> o (if (keyword? o) [o] o)))
-                       (some-> right-on (as-> o (if (keyword? o) [o] o))))
-        merge-opts (cond-> {:how how-kw}
-                     on (assoc :on (if (keyword? on) [on] on))
-                     left-on (assoc :left-on (if (keyword? left-on) [left-on] left-on))
-                     right-on (assoc :right-on (if (keyword? right-on) [right-on] right-on)))]
+        left-keys (or (normalize-keys on) (normalize-keys left-on))
+        right-keys (or (normalize-keys on) (normalize-keys right-on))]
+
+    ;; --- shared validation ---
     (when (and on (or left-on right-on))
       (throw (ex-info "Cannot combine :on with :left-on/:right-on"
                       {:dt/error :join-invalid-keys})))
     (when (and (not on) (not (and left-on right-on)))
       (throw (ex-info "Must provide either :on or both :left-on and :right-on"
                       {:dt/error :join-missing-keys})))
-    (when-not (#{:inner :left :right :outer} how-kw)
-      (throw (ex-info (str "Unknown join type: " how-kw ". Must be :inner, :left, :right, or :outer.")
+    (when-not (#{:inner :left :right :outer :asof} how-kw)
+      (throw (ex-info (str "Unknown join type: " how-kw
+                           ". Must be :inner, :left, :right, :outer, or :asof.")
                       {:dt/error :join-unknown-how :dt/how how-kw})))
-    (when validate
-      (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
-        (throw (ex-info (str "Unknown :validate value: " validate ". Must be :1:1, :1:m, :m:1, or :m:m.")
-                        {:dt/error :join-unknown-validate :dt/validate validate})))
-      (when (and (#{:1:1 :1:m} validate) (has-duplicate-keys? left left-keys))
-        (throw (ex-info (str "Cardinality violation: left dataset has duplicate keys (expected "
-                             validate ", left side must be unique).")
-                        {:dt/error :join-cardinality-violation
-                         :dt/validate validate
-                         :dt/side :left
-                         :dt/keys left-keys})))
-      (when (and (#{:1:1 :m:1} validate) (has-duplicate-keys? right right-keys))
-        (throw (ex-info (str "Cardinality violation: right dataset has duplicate keys (expected "
-                             validate ", right side must be unique).")
-                        {:dt/error :join-cardinality-violation
-                         :dt/validate validate
-                         :dt/side :right
-                         :dt/keys right-keys}))))
-    (when report
-      (print-report left right left-keys right-keys))
-    (ds-join/pd-merge left right merge-opts)))
+
+    ;; --- :asof dispatch ---
+    (if (= how-kw :asof)
+      (do
+        (when validate
+          (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
+            (throw (ex-info (str "Unknown :validate value: " validate
+                                 ". Must be :1:1, :1:m, :m:1, or :m:m.")
+                            {:dt/error :join-unknown-validate :dt/validate validate})))
+          (when (and (#{:1:1 :m:1} validate) (has-duplicate-keys? right right-keys))
+            (throw (ex-info (str "Cardinality violation: right dataset has duplicate keys "
+                                 "(expected " validate ", right side must be unique).")
+                            {:dt/error :join-cardinality-violation
+                             :dt/validate validate
+                             :dt/side :right
+                             :dt/keys right-keys}))))
+        (let [pairs (asof/asof-match left right left-keys right-keys)]
+          (asof/build-result left right pairs right-keys)))
+
+      ;; --- regular join dispatch ---
+      (let [merge-opts (cond-> {:how how-kw}
+                         on (assoc :on (normalize-keys on))
+                         left-on (assoc :left-on (normalize-keys left-on))
+                         right-on (assoc :right-on (normalize-keys right-on)))]
+        (when validate
+          (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
+            (throw (ex-info (str "Unknown :validate value: " validate
+                                 ". Must be :1:1, :1:m, :m:1, or :m:m.")
+                            {:dt/error :join-unknown-validate :dt/validate validate})))
+          (when (and (#{:1:1 :1:m} validate) (has-duplicate-keys? left left-keys))
+            (throw (ex-info (str "Cardinality violation: left dataset has duplicate keys "
+                                 "(expected " validate ", left side must be unique).")
+                            {:dt/error :join-cardinality-violation
+                             :dt/validate validate
+                             :dt/side :left
+                             :dt/keys left-keys})))
+          (when (and (#{:1:1 :m:1} validate) (has-duplicate-keys? right right-keys))
+            (throw (ex-info (str "Cardinality violation: right dataset has duplicate keys "
+                                 "(expected " validate ", right side must be unique).")
+                            {:dt/error :join-cardinality-violation
+                             :dt/validate validate
+                             :dt/side :right
+                             :dt/keys right-keys}))))
+        (when report
+          (print-report left right left-keys right-keys))
+        (ds-join/pd-merge left right merge-opts)))))

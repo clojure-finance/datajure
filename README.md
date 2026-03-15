@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.3"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.4"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -247,13 +247,13 @@ Functions: `row/sum` (nil as 0), `row/mean`, `row/min`, `row/max` (skip nil), `r
 Column-level statistical transforms via `stat/*` inside `#dt/e`. All functions are nil-safe: nil values are excluded from reference statistics (mean, sd, percentiles) and produce nil outputs.
 
 ```clojure
-;; Standardize: (x - mean) / sd ? returns all-nil if sd is zero
+;; Standardize: (x - mean) / sd — returns all-nil if sd is zero
 (core/dt ds :set {:z #dt/e (stat/standardize :ret)})
 
 ;; Demean: x - mean(x)
 (core/dt ds :set {:dm #dt/e (stat/demean :ret)})
 
-;; Winsorize at 1% tails ? clips to [p, 1-p] percentile bounds
+;; Winsorize at 1% tails — clips to [p, 1-p] percentile bounds
 (core/dt ds :set {:wr #dt/e (stat/winsorize :ret 0.01)})
 
 ;; Compose with arithmetic
@@ -267,7 +267,7 @@ Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`.
 
 ## Joins
 
-Standalone function with cardinality validation and merge diagnostics:
+Standalone function with cardinality validation and merge diagnostics. Supports regular joins (`:inner`, `:left`, `:right`, `:outer`) and as-of joins (`:asof`).
 
 ```clojure
 (require '[datajure.join :refer [join]])
@@ -282,6 +282,41 @@ Standalone function with cardinality validation and merge diagnostics:
     (core/dt :where #dt/e (> :year 2008)
              :agg {:total #dt/e (sm :revenue)}))
 ```
+
+## As-of Joins
+
+Inspired by q's `aj`. For each left row, find the last right row where `right-key <= left-key` within an exact-match group. All left rows are always preserved; unmatched rows get nil for right columns.
+
+The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — preceding columns are exact-match keys.
+
+```clojure
+(require '[datajure.join :refer [join]])
+
+;; Trade-quote matching: each trade gets the last prevailing bid/ask
+;; sym is exact-match, time is asof (last quote where quote-time <= trade-time)
+(join trades quotes :on [:sym :time] :how :asof)
+
+;; Asymmetric key names
+(join trades quotes
+      :left-on  [:sym :trade-time]
+      :right-on [:sym :quote-time]
+      :how :asof)
+
+;; Single asof key — no exact grouping, match across entire dataset
+(join left right :on [:time] :how :asof)
+
+;; With cardinality validation (right side only)
+(join trades quotes :on [:sym :time] :how :asof :validate :m:1)
+
+;; Pipeline: match ticks to bars, then compute OHLC
+(-> (join bars ticks :on [:sym :time] :how :asof)
+    (core/dt :where #dt/e (> :px 100)
+             :order-by [(core/asc :time)]))
+```
+
+**Result schema:** all left columns in original order, plus right non-key columns appended. Conflicting non-key column names are suffixed `:right.<name>` (same convention as regular joins).
+
+**`:validate` for `:asof`:** only the right side is checked (`:1:1` and `:m:1` require unique right keys). The left side is never checked since all left rows always appear.
 
 ## Reshaping
 
@@ -496,7 +531,8 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
 | `datajure.reshape` | `melt` for wide→long |
-| `datajure.join` | `join` with `:validate` and `:report` |
+| `datajure.join` | `join` with `:validate`, `:report`, and `:how :asof` |
+| `datajure.asof` | As-of join engine: `asof-search`, `asof-indices`, `asof-match`, `build-result` |
 | `datajure.nrepl` | nREPL middleware for `*dt*` auto-binding |
 | `datajure.clerk` | Rich Clerk notebook viewers |
 | `datajure.clay` | Clay/Kindly notebook integration |
@@ -515,7 +551,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 
 ## Development
 
-Tests run automatically on every push to `main` via GitHub Actions. CI runs the core test suites (core, concise, util, io, reshape, join) via `bin/run-tests.sh`. The nrepl, clerk, and clay test suites require optional deps and are run locally only. When adding a new core test namespace, add it to `bin/run-tests.sh` to include it in CI.
+Tests run automatically on every push to `main` via GitHub Actions. CI runs the core test suites (core, concise, util, io, reshape, join, asof, stat) via `bin/run-tests.sh`. The nrepl, clerk, and clay test suites require optional deps and are run locally only. When adding a new core test namespace, add it to `bin/run-tests.sh` to include it in CI.
 
 ```bash
 # Start nREPL
@@ -532,6 +568,7 @@ clj -A:nrepl -e "
   (load-file \"test/datajure/io_test.clj\")
   (load-file \"test/datajure/reshape_test.clj\")
   (load-file \"test/datajure/join_test.clj\")
+  (load-file \"test/datajure/asof_test.clj\")
   (load-file \"test/datajure/nrepl_test.clj\")
   (load-file \"test/datajure/clerk_test.clj\")
   (load-file \"test/datajure/clay_test.clj\")
@@ -539,10 +576,11 @@ clj -A:nrepl -e "
   (clojure.test/run-tests
     'datajure.core-test 'datajure.concise-test 'datajure.util-test
     'datajure.io-test 'datajure.reshape-test 'datajure.join-test
-    'datajure.nrepl-test 'datajure.clerk-test 'datajure.clay-test)"
+    'datajure.asof-test 'datajure.nrepl-test 'datajure.clerk-test
+    'datajure.clay-test 'datajure.stat-test)"
 ```
 
-237 tests, 761 assertions.
+246 tests, 798 assertions.
 
 ## Prior Work
 
