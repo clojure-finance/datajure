@@ -170,6 +170,20 @@
       (is (= 3 (ds/row-count result)))
       (is (= [11 13 14] (vec (result :px)))))))
 
+(deftest asof-report-test
+  (testing ":report true on asof join prints diagnostics and does not suppress result"
+    (let [output (with-out-str
+                   (join trades quotes :on [:sym :time] :how :asof :report true))]
+      (is (re-find #"\[datajure\] join report:" output))))
+  (testing ":report false on asof join prints nothing"
+    (let [output (with-out-str
+                   (join trades quotes :on [:sym :time] :how :asof :report false))]
+      (is (= "" output))))
+  (testing ":report true on asof join still returns correct dataset"
+    (let [result (join trades quotes :on [:sym :time] :how :asof :report true)]
+      (is (ds/dataset? result))
+      (is (= 4 (ds/row-count result))))))
+
 ;;; ---- regression: regular joins unaffected ----------------------------------
 
 (deftest regular-joins-unaffected-test

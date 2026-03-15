@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.4"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.5"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -580,7 +580,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-246 tests, 798 assertions.
+260 tests, 824 assertions.
 
 ## Prior Work
 

@@ -171,13 +171,18 @@
    :div (fn [a b] (dfn// (dfn/double a) (dfn/double b)))
    :div0 (fn [a b]
            (let [av (dfn/double a)
-                 bv (dfn/double b)]
-             (dtype/make-reader :float64 (dtype/ecount bv)
-                                (let [bi (nth bv idx)]
+                 bv (dfn/double b)
+                 a-reader? (dtype/reader? av)
+                 b-reader? (dtype/reader? bv)
+                 n (cond a-reader? (dtype/ecount av)
+                         b-reader? (dtype/ecount bv)
+                         :else 1)]
+             (dtype/make-reader :float64 n
+                                (let [ai (if a-reader? (nth av idx) av)
+                                      bi (if b-reader? (nth bv idx) bv)]
                                   (if (or (nil? bi) (zero? bi))
                                     nil
-                                    (let [ai (nth av idx)]
-                                      (if (nil? ai) nil (/ ai bi))))))))
+                                    (if (nil? ai) nil (/ ai bi)))))))
    :sq dfn/sq
    :log dfn/log
    :> dfn/>
@@ -399,12 +404,14 @@
   "Floor-divide a column by width to produce xbar bucket values.
   For numeric columns: quot(col, width) * width.
   For datetime columns: convert to epoch-milliseconds, divide by ms-per-unit,
-  then floor-divide by width. Returns a reader of longs (nil preserved for missing)."
+  then floor-divide by width. Returns a reader of longs (nil preserved for missing).
+  Uses (nil? (nth rdr idx)) for nil detection, which works for both full Column
+  objects and plain dtype readers."
   [col width unit]
   (let [col-dtype (-> col meta :datatype)
-        n (dtype/ecount col)
-        missing (tech.v3.dataset.column/missing col)]
-    (if (dtype-dt/datetime-datatype? col-dtype)
+        rdr (dtype/->reader col)
+        n (dtype/ecount rdr)]
+    (if (and col-dtype (dtype-dt/datetime-datatype? col-dtype))
       (let [ms-per-unit (condp = unit
                           :seconds dtype-dt/milliseconds-in-second
                           :minutes dtype-dt/milliseconds-in-minute
@@ -414,16 +421,17 @@
                           (throw (ex-info (str "Unknown xbar temporal unit: " unit)
                                           {:dt/error :xbar-unknown-unit :unit unit})))]
         (dtype/make-reader :object n
-                           (if (.contains missing idx)
-                             nil
-                             (let [epoch-ms (dtype-dt/datetime->epoch :epoch-milliseconds (nth col idx))
-                                   epoch-units (quot epoch-ms ms-per-unit)]
-                               (* width (quot epoch-units width))))))
+                           (let [v (nth rdr idx)]
+                             (if (nil? v)
+                               nil
+                               (let [epoch-ms (dtype-dt/datetime->epoch :epoch-milliseconds v)
+                                     epoch-units (quot epoch-ms ms-per-unit)]
+                                 (* width (quot epoch-units width)))))))
       (dtype/make-reader :object n
-                         (if (.contains missing idx)
-                           nil
-                           (let [v (long (nth col idx))]
-                             (* width (quot v width))))))))
+                         (let [v (nth rdr idx)]
+                           (if (nil? v)
+                             nil
+                             (* width (quot (long v) width))))))))
 
 (defn- cut-bucket
   "Assign each element of col to an equal-count bin in 1..n.
@@ -434,28 +442,30 @@
     (e.g. NYSE stocks only); breakpoints are computed from that subset and
     applied to all rows of col.
   Bin assignment uses right-open intervals (Java binarySearch). nil values in
-  col produce nil. All non-nil values land in [1, n]."
+  col produce nil. All non-nil values land in [1, n].
+  Uses (nil? (nth rdr idx)) for nil detection, which works for both full Column
+  objects and plain dtype readers."
   ([col n] (cut-bucket col n nil))
   ([col n mask]
    (let [n (int n)
-         cnt (dtype/ecount col)
-         missing (tech.v3.dataset.column/missing col)
-         col-reader (dtype/->reader col)
+         rdr (dtype/->reader col)
+         cnt (dtype/ecount rdr)
          ref-pop (if (some? mask)
                    (filterv some?
-                            (map-indexed (fn [i v] (when (nth mask i) v)) col-reader))
-                   (filterv some? col-reader))
+                            (map-indexed (fn [i v] (when (nth mask i) v)) rdr))
+                   (filterv some? rdr))
          pcts (mapv #(* % (/ 100.0 n)) (range 1 n))
          breaks-arr (if (empty? pcts)
                       (double-array 0)
                       (double-array (dfn/percentiles ref-pop pcts {:nan-strategy :remove})))]
      (dtype/make-reader :object cnt
-                        (if (.contains missing idx)
-                          nil
-                          (let [v (double (nth col-reader idx))
-                                r (java.util.Arrays/binarySearch breaks-arr v)
-                                b (if (>= r 0) r (- (- r) 1))]
-                            (min (inc b) n)))))))
+                        (let [v (nth rdr idx)]
+                          (if (nil? v)
+                            nil
+                            (let [dv (double v)
+                                  r (java.util.Arrays/binarySearch breaks-arr dv)
+                                  b (if (>= r 0) r (- (- r) 1))]
+                              (min (inc b) n))))))))
 
 (defn compile-expr
   "Compile an AST node to a fn [ds] -> column/scalar.

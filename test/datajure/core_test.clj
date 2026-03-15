@@ -556,12 +556,14 @@
       (is (= [nil nil 5.0 5.0] (vec (:cmax result)))))))
 
 (deftest empty-dataset-by
-  (testing "empty dataset with :by + :agg returns nil (B2 regression)"
+  (testing "empty dataset with :by + :agg returns empty dataset (not nil)"
     (let [ds (ds/->dataset {:species ["Adelie" "Gentoo"] :mass [4000 5000]})
           empty-ds (core/dt ds :where #dt/e (> :mass 9999))]
       (is (= 0 (ds/row-count empty-ds)))
-      (is (nil? (core/dt empty-ds :by [:species] :agg {:n core/N})))
-      (is (nil? (core/dt empty-ds :by [:species] :set {:mass2 #dt/e (* :mass 2)}))))))
+      (is (ds/dataset? (core/dt empty-ds :by [:species] :agg {:n core/N})))
+      (is (= 0 (ds/row-count (core/dt empty-ds :by [:species] :agg {:n core/N}))))
+      (is (ds/dataset? (core/dt empty-ds :by [:species] :set {:mass2 #dt/e (* :mass 2)})))
+      (is (= 0 (ds/row-count (core/dt empty-ds :by [:species] :set {:mass2 #dt/e (* :mass 2)})))))))
 
 (deftest win-rleid-basic
   (let [ds (ds/->dataset {:grp [1 1 1 1 1 1 1]
@@ -1121,6 +1123,22 @@
       (is (nil? (nth r 2)))
       (is (nil? (nth r 3))))))
 
+(deftest div0-scalar-denominator
+  (testing "div0 works with scalar (literal) denominator"
+    (let [ds (ds/->dataset {:a [0.0 10.0 nil 30.0]})
+          result (core/dt ds :set {:r #dt/e (div0 :a 2)})
+          r (vec (:r result))]
+      (is (= 0.0 (nth r 0)))
+      (is (= 5.0 (nth r 1)))
+      (is (nil? (nth r 2)))
+      (is (= 15.0 (nth r 3)))))
+  (testing "div0 returns nil for all rows when scalar denominator is zero"
+    (let [ds (ds/->dataset {:a [10.0 20.0]})
+          result (core/dt ds :set {:r #dt/e (div0 :a 0)})
+          r (vec (:r result))]
+      (is (nil? (nth r 0)))
+      (is (nil? (nth r 1))))))
+
 (deftest win-scan-basic
   (testing "win/scan +: cumulative sum equivalent"
     (core/reset-notes!)
@@ -1266,6 +1284,23 @@
       (is (= 2 (:n (first (filter #(and (= "B" (:sym %)) (= 0 (:price %))) rows)))))
       (is (= 1 (:n (first (filter #(and (= "B" (:sym %)) (= 10 (:price %))) rows)))))
       (is (= 1 (:n (first (filter #(and (= "B" (:sym %)) (= 20 (:price %))) rows))))))))
+
+(deftest xbar-by-plain-fn-group-key
+  (testing "plain fn in :by gets :fn-N fallback key, not :xbar-N"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:price [3 7 12 18] :vol [1 2 3 4]})
+          result (core/dt ds
+                          :by [(fn [row] (> (:price row) 10))]
+                          :agg {:n core/N})]
+      (is (contains? (set (ds/column-names result)) :fn-0))
+      (is (not (contains? (set (ds/column-names result)) :xbar-0)))))
+  (testing "plain fn with :datajure/col metadata uses that name as group key"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:price [3 7 12 18] :vol [1 2 3 4]})
+          big-fn (with-meta (fn [row] (> (:price row) 10)) {:datajure/col :big?})
+          result (core/dt ds :by [big-fn] :agg {:n core/N})]
+      (is (contains? (set (ds/column-names result)) :big?))
+      (is (not (contains? (set (ds/column-names result)) :fn-0))))))
 
 (deftest xbar-nil-handling
   (testing "nil value in #dt/e xbar produces nil bucket, not crash"

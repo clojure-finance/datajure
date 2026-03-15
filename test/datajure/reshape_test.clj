@@ -57,3 +57,23 @@
     (let [result (-> (melt wide-ds {:id [:species :year] :measure [:mass :flipper]})
                      (core/dt :where #dt/e (= :variable "mass")))]
       (is (= 2 (ds/row-count result))))))
+
+(deftest melt-empty-measure-cols
+  (testing "melt with all id columns returns empty dataset with correct schema"
+    (let [ds (ds/->dataset {:a [1 2 3] :b [4 5 6]})
+          result (melt ds {:id [:a :b]})]
+      (is (ds/dataset? result))
+      (is (= 0 (ds/row-count result)))
+      (is (= #{:a :b :variable :value} (set (ds/column-names result))))))
+  (testing "melt with explicit empty :measure returns empty dataset"
+    (let [ds (ds/->dataset {:a [1 2] :b [3 4]})
+          result (melt ds {:id [:a] :measure []})]
+      (is (ds/dataset? result))
+      (is (= 0 (ds/row-count result)))
+      (is (= #{:a :variable :value} (set (ds/column-names result))))))
+  (testing "melt with custom col names on empty measure"
+    (let [ds (ds/->dataset {:a [1] :b [2]})
+          result (melt ds {:id [:a :b] :variable-col :metric :value-col :val})]
+      (is (ds/dataset? result))
+      (is (= 0 (ds/row-count result)))
+      (is (= #{:a :b :metric :val} (set (ds/column-names result)))))))

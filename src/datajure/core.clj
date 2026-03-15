@@ -157,11 +157,15 @@
             (map-indexed (fn [i item]
                            (if (keyword? item)
                              [item (get row item)]
-                             [(or (-> item meta :xbar/col) (keyword (str "xbar-" i))) (item row)]))
+                             (let [col-name (or (-> item meta :xbar/col)
+                                                (-> item meta :datajure/col)
+                                                (keyword (str "fn-" i)))]
+                               [col-name (item row)])))
                          by)))))
 
 (defn- apply-group-agg [dataset by aggregations]
-  (when (pos? (ds/row-count dataset))
+  (if (zero? (ds/row-count dataset))
+    dataset
     (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
           group-fn (by->group-fn by)
           groups (ds/group-by dataset group-fn)]
@@ -176,7 +180,8 @@
            (apply ds/concat)))))
 
 (defn- apply-group-set [dataset by derivations within-order]
-  (when (pos? (ds/row-count dataset))
+  (if (zero? (ds/row-count dataset))
+    dataset
     (let [group-fn (by->group-fn by)
           groups (ds/group-by dataset group-fn)]
       (->> groups

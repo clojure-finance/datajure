@@ -14,6 +14,8 @@
       :value-col    - keyword for the new value column. Defaults to :value.
 
   Returns a dataset with one row per (id, measure) combination.
+  If no measure columns exist (all columns are id columns), returns an empty dataset
+  with the id columns plus the variable and value columns.
 
   Examples:
     ;; Basic melt
@@ -28,11 +30,16 @@
   [dataset {:keys [id measure variable-col value-col]
             :or {variable-col :variable value-col :value}}]
   (let [measure-cols (or measure (remove (set id) (ds/column-names dataset)))]
-    (apply ds/concat
-           (map (fn [mcol]
-                  (-> dataset
-                      (ds/select-columns (conj (vec id) mcol))
-                      (ds/rename-columns {mcol value-col})
-                      (ds/add-column (ds/new-column variable-col
-                                                    (repeat (ds/row-count dataset) (name mcol))))))
-                measure-cols))))
+    (if (empty? measure-cols)
+      (-> (ds/select-columns dataset (vec id))
+          (ds/select-rows [])
+          (ds/add-column (ds/new-column variable-col []))
+          (ds/add-column (ds/new-column value-col [])))
+      (apply ds/concat
+             (map (fn [mcol]
+                    (-> dataset
+                        (ds/select-columns (conj (vec id) mcol))
+                        (ds/rename-columns {mcol value-col})
+                        (ds/add-column (ds/new-column variable-col
+                                                      (repeat (ds/row-count dataset) (name mcol))))))
+                  measure-cols)))))

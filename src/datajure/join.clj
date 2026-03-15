@@ -85,6 +85,8 @@
                              :dt/validate validate
                              :dt/side :right
                              :dt/keys right-keys}))))
+        (when report
+          (print-report left right left-keys right-keys))
         (let [pairs (asof/asof-match left right left-keys right-keys)]
           (asof/build-result left right pairs right-keys)))
 
