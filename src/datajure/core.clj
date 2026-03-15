@@ -342,6 +342,18 @@
   (throw (ex-info "cut requires whole-column context — use inside #dt/e: (cut :col n)"
                   {:dt/error :cut-standalone-not-supported :col col-kw :n n})))
 
+(defn between
+  "Returns a column selector that selects all columns positionally between
+  start-col and end-col (inclusive). Both endpoints must exist in the dataset.
+  Intended for use with :select in dt.
+
+  Example:
+    (dt ds :select (between :month-01 :month-12))"
+  [start-col end-col]
+  {:dt/selector :between
+   :dt/start start-col
+   :dt/end end-col})
+
 (defn asc
   "Sort-spec helper: ascending order on col. Use in :order-by."
   [col]
@@ -398,6 +410,21 @@
         col-dtype (fn [col-kw]
                     (-> (ds/column dataset col-kw) meta :datatype))]
     (cond
+      (and (map? selector) (= :between (:dt/selector selector)))
+      (let [{:dt/keys [start end]} selector
+            _ (validate-select-cols dataset [start end])
+            all-names (vec all-cols)
+            si (.indexOf all-names start)
+            ei (.indexOf all-names end)]
+        (when (neg? si)
+          (throw (ex-info (str "between: start column " start " not found")
+                          {:dt/error :unknown-column :dt/columns #{start}})))
+        (when (neg? ei)
+          (throw (ex-info (str "between: end column " end " not found")
+                          {:dt/error :unknown-column :dt/columns #{end}})))
+        (let [[lo hi] (if (<= si ei) [si ei] [ei si])]
+          (ds/select-columns dataset (subvec all-names lo (inc hi)))))
+
       (map? selector)
       (do
         (validate-select-cols dataset (keys selector))

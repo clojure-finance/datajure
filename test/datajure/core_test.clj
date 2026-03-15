@@ -197,6 +197,38 @@
       (is (= :unknown-column (:dt/error (ex-data e))))
       (is (= #{:maas} (:dt/columns (ex-data e)))))))
 
+(deftest select-between
+  (testing ":select with between — basic forward range"
+    (let [ds (ds/->dataset {:a [1] :b [2] :c [3] :d [4] :e [5]})]
+      (is (= [:b :c :d] (vec (ds/column-names (core/dt ds :select (core/between :b :d))))))))
+  (testing ":select with between — full range"
+    (let [ds (ds/->dataset {:a [1] :b [2] :c [3]})]
+      (is (= [:a :b :c] (vec (ds/column-names (core/dt ds :select (core/between :a :c))))))))
+  (testing ":select with between — single column (start = end)"
+    (let [ds (ds/->dataset {:a [1] :b [2] :c [3]})]
+      (is (= [:b] (vec (ds/column-names (core/dt ds :select (core/between :b :b))))))))
+  (testing ":select with between — reversed endpoints selects same columns"
+    (let [ds (ds/->dataset {:a [1] :b [2] :c [3] :d [4]})]
+      (is (= [:b :c] (vec (ds/column-names (core/dt ds :select (core/between :c :b))))))))
+  (testing ":select with between — unknown start column throws"
+    (let [ds (ds/->dataset {:a [1] :b [2]})
+          e (try (core/dt ds :select (core/between :z :b)) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-column (:dt/error (ex-data e))))))
+  (testing ":select with between — unknown end column throws"
+    (let [ds (ds/->dataset {:a [1] :b [2]})
+          e (try (core/dt ds :select (core/between :a :z)) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-column (:dt/error (ex-data e)))))))
+
+(deftest select-between-pipeline
+  (testing ":select with between composes with :where and preserves row data"
+    (let [d (ds/->dataset {:id [1 2 3] :a [10 20 30] :b [40 50 60] :c [70 80 90]})
+          result (core/dt d :where #dt/e (> :a 10) :select (core/between :a :b))]
+      (is (= [:a :b] (vec (ds/column-names result))))
+      (is (= 2 (ds/row-count result)))
+      (is (= [20 30] (vec (result :a)))))))
+
 (deftest plain-fn-where
   (testing "plain fn predicate in :where"
     (let [result (core/dt penguins :where #(> (:mass %) 4000))]

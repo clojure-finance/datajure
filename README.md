@@ -158,12 +158,13 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
 ## `:select` — Polymorphic Column Selection
 
 ```clojure
-(core/dt ds :select [:species :mass])          ;; explicit list
-(core/dt ds :select :type/numerical)           ;; all numeric columns
-(core/dt ds :select :!type/numerical)          ;; all non-numeric
-(core/dt ds :select #"body-.*")                ;; regex match
-(core/dt ds :select [:not :id :timestamp])     ;; exclusion
-(core/dt ds :select {:species :sp :mass :m})   ;; select + rename
+(core/dt ds :select [:species :mass])                    ;; explicit list
+(core/dt ds :select :type/numerical)                     ;; all numeric columns
+(core/dt ds :select :!type/numerical)                    ;; all non-numeric
+(core/dt ds :select #"body-.*")                          ;; regex match
+(core/dt ds :select [:not :id :timestamp])               ;; exclusion
+(core/dt ds :select {:species :sp :mass :m})             ;; select + rename
+(core/dt ds :select (core/between :month-01 :month-12))  ;; positional range (inclusive)
 ```
 
 ## Window Functions
@@ -399,6 +400,7 @@ Short aliases for power users:
 | `standardize` | stat/stat-standardize |
 | `demean` | stat/stat-demean |
 | `winsorize` | stat/stat-winsorize |
+| `between` | positional range selector |
 
 ## Notebook Integration
 
@@ -485,7 +487,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `cut`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `cut`, `between`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |
@@ -540,7 +542,7 @@ clj -A:nrepl -e "
     'datajure.nrepl-test 'datajure.clerk-test 'datajure.clay-test)"
 ```
 
-234 tests, 751 assertions.
+237 tests, 761 assertions.
 
 ## Prior Work
 

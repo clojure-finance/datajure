@@ -2,7 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [tech.v3.dataset :as ds]
             [datajure.concise :refer [mn sm md sd ct nuniq N dt asc desc rename pass-nil
-                                      fst lst wa ws mx mi]]))
+                                      fst lst wa ws mx mi between]]))
 
 (def sample
   (ds/->dataset {:species ["Adelie" "Adelie" "Gentoo"]
@@ -60,3 +60,8 @@
   (testing "mi returns column minimum"
     (let [col (:mass sample)]
       (is (= 3750.0 (mi col))))))
+
+(deftest concise-between
+  (testing "between alias selects positional column range"
+    (let [d (ds/->dataset {:a [1] :b [2] :c [3] :d [4]})]
+      (is (= [:b :c] (vec (ds/column-names (dt d :select (between :b :c)))))))))

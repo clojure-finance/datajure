@@ -22,6 +22,9 @@
     demean      = stat/stat-demean
     winsorize   = stat/stat-winsorize
 
+  Column selectors:
+    between = positional range selector (core/between)
+
   Everything else re-exported from datajure.core:
     N, dt, asc, desc, rename, pass-nil"
   (:require [tech.v3.datatype :as dtype]
@@ -55,3 +58,7 @@
 (def ^{:doc "Standardize a column: (x - mean) / sd. Delegates to `stat/stat-standardize`."} standardize stat/stat-standardize)
 (def ^{:doc "Demean a column: x - mean(x). Delegates to `stat/stat-demean`."} demean stat/stat-demean)
 (def ^{:doc "Winsorize a column at tail probability p. Delegates to `stat/stat-winsorize`. Args: col p."} winsorize stat/stat-winsorize)
+
+(def ^{:doc "Between column selector. Re-exported from `datajure.core/between`.
+  Returns a selector map for use with :select in dt.
+  Example: (dt ds :select (between :month-01 :month-12))"} between core/between)
