@@ -3,7 +3,7 @@
         org.clojure/clojure {:mvn/version "1.12.4"}}
  :aliases
  {:nrepl
-  {:extra-deps {nrepl/nrepl {:mvn/version "1.5.2"}}
+  {:extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}}
    :main-opts ["-m" "nrepl.cmdline" "--port" "7888"]
    :extra-paths ["test"]}
   :clerk

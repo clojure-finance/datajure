@@ -16,11 +16,18 @@
     mx    = max* (column maximum)
     mi    = min* (column minimum)
 
+  Statistical transforms (use inside #dt/e expressions as stat/* — these are
+  direct refs to the runtime fns, useful outside #dt/e):
+    standardize = stat/stat-standardize
+    demean      = stat/stat-demean
+    winsorize   = stat/stat-winsorize
+
   Everything else re-exported from datajure.core:
     N, dt, asc, desc, rename, pass-nil"
   (:require [tech.v3.datatype :as dtype]
             [datajure.core :as core]
-            [datajure.expr :as expr]))
+            [datajure.expr :as expr]
+            [datajure.stat :as stat]))
 
 (def ^{:doc "Column mean. Short alias for `core/mean`."} mn core/mean)
 (def ^{:doc "Column sum. Short alias for `core/sum`."} sm core/sum)
@@ -44,3 +51,7 @@
 
 (def ^{:doc "Column maximum. Short alias for `core/max*`."} mx core/max*)
 (def ^{:doc "Column minimum. Short alias for `core/min*`."} mi core/min*)
+
+(def ^{:doc "Standardize a column: (x - mean) / sd. Delegates to `stat/stat-standardize`."} standardize stat/stat-standardize)
+(def ^{:doc "Demean a column: x - mean(x). Delegates to `stat/stat-demean`."} demean stat/stat-demean)
+(def ^{:doc "Winsorize a column at tail probability p. Delegates to `stat/stat-winsorize`. Args: col p."} winsorize stat/stat-winsorize)

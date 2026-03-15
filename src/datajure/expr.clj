@@ -25,7 +25,8 @@
             [tech.v3.datatype.datetime :as dtype-dt]
             [tech.v3.dataset :as ds]
             [datajure.window :as win]
-            [datajure.row :as row]))
+            [datajure.row :as row]
+            [datajure.stat :as stat]))
 
 ;; ---------------------------------------------------------------------------
 ;; Op dispatch table: symbol -> keyword -> dfn fn
@@ -106,6 +107,18 @@
    :row/max row/row-max
    :row/count-nil row/row-count-nil
    :row/any-nil? row/row-any-nil?})
+
+(def ^:private stat-sym->op
+  "Maps stat/* source symbols to canonical keyword op names."
+  {'stat/standardize :stat/standardize
+   'stat/demean :stat/demean
+   'stat/winsorize :stat/winsorize})
+
+(def ^:private stat-op-table
+  "Maps stat op keywords to runtime functions from datajure.stat."
+  {:stat/standardize stat/stat-standardize
+   :stat/demean stat/stat-demean
+   :stat/winsorize stat/stat-winsorize})
 
 (defn count-distinct
   "Count of distinct non-nil values in a column."
@@ -246,6 +259,12 @@
   [row-op args]
   {:node/type :row :row/op row-op :row/args args})
 
+(defn stat-node
+  "AST node for a stat/* function call.
+  stat-op is a keyword like :stat/standardize. args are parsed AST nodes."
+  [stat-op args]
+  {:node/type :stat :stat/op stat-op :stat/args args})
+
 ;; ---------------------------------------------------------------------------
 ;; AST builder: Clojure form -> AST
 ;; ---------------------------------------------------------------------------
@@ -312,6 +331,8 @@
          (win-node (win-sym->op op) (mapv #(parse-form % env) args))
          (contains? row-sym->op op)
          (row-node (row-sym->op op) (mapv #(parse-form % env) args))
+         (contains? stat-sym->op op)
+         (stat-node (stat-sym->op op) (mapv #(parse-form % env) args))
          :else
          (op-node (->op-kw op) (mapv #(parse-form % env) args))))
      :else (lit-node form))))
@@ -339,6 +360,7 @@
              base))
     :xbar (into (col-refs (:xbar/col node)) (col-refs (:xbar/width node)))
     :row (into #{} (mapcat col-refs) (:row/args node))
+    :stat (into #{} (mapcat col-refs) (:stat/args node))
     :if (into (col-refs (:if/pred node))
               (concat (col-refs (:if/then node))
                       (col-refs (:if/else node))))
@@ -365,6 +387,7 @@
              base))
     :xbar (into (win-refs (:xbar/col node)) (win-refs (:xbar/width node)))
     :row (into #{} (mapcat win-refs) (:row/args node))
+    :stat (into #{} (mapcat win-refs) (:stat/args node))
     :if (into (win-refs (:if/pred node))
               (concat (win-refs (:if/then node))
                       (win-refs (:if/else node))))
@@ -517,6 +540,14 @@
             (fn [ds]
               (let [args (map #(% ds) arg-fns)]
                 (apply row-fn args))))
+     :stat (let [stat-op-kw (:stat/op node)
+                 stat-fn (or (stat-op-table stat-op-kw)
+                             (throw (ex-info (str "Unknown stat op: " stat-op-kw)
+                                             {:dt/error :unknown-stat-op :stat-op stat-op-kw})))
+                 arg-fns (mapv #(compile-expr % env) (:stat/args node))]
+             (fn [ds]
+               (let [args (map #(% ds) arg-fns)]
+                 (apply stat-fn args))))
      :op (let [op-kw (:op/name node)
                op-fn (or (op-table op-kw)
                          (throw (ex-info "Unknown op in #dt/e expression"

@@ -240,6 +240,30 @@ Cross-column operations within a single row via `row/*`:
 
 Functions: `row/sum` (nil as 0), `row/mean`, `row/min`, `row/max` (skip nil), `row/count-nil`, `row/any-nil?`.
 
+
+## Statistical Transforms
+
+Column-level statistical transforms via `stat/*` inside `#dt/e`. All functions are nil-safe: nil values are excluded from reference statistics (mean, sd, percentiles) and produce nil outputs.
+
+```clojure
+;; Standardize: (x - mean) / sd ? returns all-nil if sd is zero
+(core/dt ds :set {:z #dt/e (stat/standardize :ret)})
+
+;; Demean: x - mean(x)
+(core/dt ds :set {:dm #dt/e (stat/demean :ret)})
+
+;; Winsorize at 1% tails ? clips to [p, 1-p] percentile bounds
+(core/dt ds :set {:wr #dt/e (stat/winsorize :ret 0.01)})
+
+;; Compose with arithmetic
+(core/dt ds :set {:scaled #dt/e (* 2 (stat/demean :x))})
+
+;; Cross-sectional standardization per group
+(core/dt ds :by [:date] :set {:z #dt/e (stat/standardize :signal)})
+```
+
+Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`.
+
 ## Joins
 
 Standalone function with cardinality validation and merge diagnostics:
@@ -372,6 +396,9 @@ Short aliases for power users:
 | `lst` | last-val (last element) |
 | `wa` | wavg (weighted average) |
 | `ws` | wsum (weighted sum) |
+| `standardize` | stat/stat-standardize |
+| `demean` | stat/stat-demean |
+| `winsorize` | stat/stat-winsorize |
 
 ## Notebook Integration
 
@@ -463,6 +490,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |
 | `datajure.row` | Row-wise function implementations |
+| `datajure.stat` | Statistical transforms: `stat/standardize`, `stat/demean`, `stat/winsorize` |
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
 | `datajure.reshape` | `melt` for wide→long |
@@ -505,13 +533,14 @@ clj -A:nrepl -e "
   (load-file \"test/datajure/nrepl_test.clj\")
   (load-file \"test/datajure/clerk_test.clj\")
   (load-file \"test/datajure/clay_test.clj\")
+  (load-file \"test/datajure/stat_test.clj\")
   (clojure.test/run-tests
     'datajure.core-test 'datajure.concise-test 'datajure.util-test
     'datajure.io-test 'datajure.reshape-test 'datajure.join-test
     'datajure.nrepl-test 'datajure.clerk-test 'datajure.clay-test)"
 ```
 
-209 tests, 693 assertions.
+234 tests, 751 assertions.
 
 ## Prior Work
 
