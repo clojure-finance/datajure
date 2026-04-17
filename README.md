@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.6"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.7"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -473,6 +473,30 @@ Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask compute
         :set {:size-q #dt/e (cut :mktcap 5 :from (= :exchcd 1))}))
 ```
 
+## Quantile Grouping with `qtile`
+
+`qtile` is the `:by`-friendly companion to `cut` — produces an equal-count bin assignment from a column's distribution, computed once from the dataset before grouping. Use it when you want to *group by* quantile, rather than *derive a column of* quantile bins. Inspired by R's `cut` and Stata's `xtile`; named `qtile` to evoke quintile/decile:
+
+```clojure
+;; Quintile buckets of market cap
+(dt stocks :by [(qtile :mktcap 5)]
+    :agg {:n nrow :mean-ret #dt/e (mn :ret)})
+;; Result column is auto-named :mktcap-q5
+
+;; Per-date size quintiles combined with an exact key
+(dt stocks :by [:date (qtile :mktcap 5)]
+    :agg {:mean-ret #dt/e (mn :ret)})
+```
+
+| | `qtile` | `#dt/e (cut ...)` |
+|---|---|---|
+| Context | `:by` (grouping) | `:set` / `:where` / `:agg` (expression) |
+| Result | Integer bin key (1..n, or nil for nil input) | Column of bin integers |
+| `:from` option | Not yet | Supported (reference subpopulation) |
+| Result column name | Auto `<col>-q<n>` (customise via `:datajure/col` metadata) | Whatever you name it in `:set` |
+
+Both compute the same breakpoints (equal-count bins from non-nil values). Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a column value.
+
 ## Computed `:by` — Custom Grouping Functions
 
 `:by` accepts a plain function of the row in addition to column keywords. Functions can attach `:datajure/col` metadata to control the result-column name:
@@ -650,7 +674,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `cut`, `between`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |
@@ -708,7 +732,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-267 tests, 896 assertions (CI subset: 200 tests, 734 assertions).
+273 tests, 913 assertions (CI subset: 206 tests, 751 assertions).
 
 ## Prior Work
 

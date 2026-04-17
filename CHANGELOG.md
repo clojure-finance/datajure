@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-04-17
+
+### Added
+
+- **`qtile` quantile grouping for `:by`.** `core/qtile` is the `:by`-friendly companion to `#dt/e (cut ...)` -- produces an equal-count bin assignment from a column's distribution, computed once from the dataset before grouping. Use it when you want to *group by* quantile rather than *derive a column of* quantile bins:
+  ```clojure
+  ;; Quintile buckets of market cap
+  (core/dt stocks :by [(core/qtile :mktcap 5)]
+           :agg {:n core/nrow :mean-ret #dt/e (mn :ret)})
+  ;; Result column is auto-named :mktcap-q5
+
+  ;; Per-date size quintiles combined with an exact key
+  (core/dt stocks :by [:date (core/qtile :mktcap 5)]
+           :agg {:mean-ret #dt/e (mn :ret)})
+  ```
+  Inspired by R's `cut` and Stata's `xtile`; named to evoke quintile/decile. Companion to `xbar` (equal-width bins) with a symmetric API. Result column name defaults to `<col>-q<n>`, overridable via `:datajure/col` metadata (the same extension point `xbar` uses). `nil` inputs form their own group (nil key). The `:from` option that `cut` supports for reference-subpopulation breakpoints is not yet available on `qtile` -- a future enhancement.
+
+### Changed
+
+- **`by->group-fn` now receives the dataset.** Internal refactor: the private `by->group-fn` helper takes the dataset as a parameter so that `:by` markers requiring population-level statistics (like `qtile`) can precompute their breakpoints before grouping. Both call sites (`apply-group-agg`, `apply-group-set`) have been updated. No user-visible behaviour change.
+
+### Testing
+
+- Test count: 267 -> 273 (+6 new deftests, +17 assertions). CI subset: 200 -> 206. All passing.
+
 ## [2.0.6] - 2026-04-17
 
 ### Added
@@ -46,5 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.6...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.7...HEAD
+[2.0.7]: https://github.com/clojure-finance/datajure/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/clojure-finance/datajure/compare/v2.0.5...v2.0.6

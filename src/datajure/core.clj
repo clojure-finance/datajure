@@ -178,23 +178,79 @@
                         pairs)]
      (ds/->dataset result))))
 
-(defn- by->group-fn [by]
+(defn- percentile-breakpoints
+  "Compute n-1 breakpoints at the 100/n, 200/n, ..., (n-1)*100/n percentiles
+  of the non-nil values in col. Returns a vector of breakpoints, or nil if
+  there are fewer than n non-nil values."
+  [col n]
+  (let [sorted (->> col dtype/->reader (remove nil?) sort vec)
+        k (count sorted)]
+    (when (>= k n)
+      (vec (for [i (range 1 n)]
+             (nth sorted (int (* (/ i n) k))))))))
+
+(defn- bin-via-breakpoints
+  "Given a scalar v and n-1 breakpoints (assumed sorted ascending), return the
+  1-based bin index in [1, n]. Right-open comparison: v lands in bin i if it is
+  less than breakpoints[i-1]. Returns nil for nil input."
+  [v breakpoints]
+  (when (some? v)
+    (loop [i 0]
+      (cond
+        (>= i (count breakpoints)) (inc (count breakpoints))
+        (< v (nth breakpoints i)) (inc i)
+        :else (recur (inc i))))))
+
+(defn- resolve-qtile-marker
+  "Given a {:dt/selector :qtile ...} marker and the dataset, compute
+  breakpoints once and return a metadata-tagged row-fn that bins each row's
+  value. The returned fn carries :datajure/col metadata so the resulting
+  group-key column has a friendly name."
+  [dataset marker]
+  (let [col-kw (:dt/col marker)
+        n (:dt/n marker)
+        result-col (or (:datajure/col marker)
+                       (keyword (str (name col-kw) "-q" n)))]
+    (when-not (contains? (set (ds/column-names dataset)) col-kw)
+      (throw (ex-info (str "qtile: column " col-kw " not found in dataset")
+                      {:dt/error :unknown-column
+                       :dt/columns #{col-kw}
+                       :dt/available (vec (sort (ds/column-names dataset)))})))
+    (let [breakpoints (percentile-breakpoints (ds/column dataset col-kw) n)]
+      (with-meta
+        (fn [row]
+          (bin-via-breakpoints (get row col-kw) breakpoints))
+        {:datajure/col result-col}))))
+
+(defn- qtile-marker? [x]
+  (and (map? x) (= :qtile (:dt/selector x))))
+
+(defn- by->group-fn
+  "Produce a row-to-group-key function from a :by spec. The dataset is required
+  so that markers like qtile (which need population-level statistics) can
+  precompute their breakpoints once before grouping."
+  [dataset by]
   (cond
     (fn? by)
     by
     (every? keyword? by)
     (fn [row] (select-keys row by))
     :else
-    (fn [row]
-      (into {}
-            (map-indexed (fn [i item]
-                           (if (keyword? item)
-                             [item (get row item)]
-                             (let [col-name (or (-> item meta :xbar/col)
-                                                (-> item meta :datajure/col)
-                                                (keyword (str "fn-" i)))]
-                               [col-name (item row)])))
-                         by)))))
+    (let [resolved (mapv (fn [item]
+                           (if (qtile-marker? item)
+                             (resolve-qtile-marker dataset item)
+                             item))
+                         by)]
+      (fn [row]
+        (into {}
+              (map-indexed (fn [i item]
+                             (if (keyword? item)
+                               [item (get row item)]
+                               (let [col-name (or (-> item meta :xbar/col)
+                                                  (-> item meta :datajure/col)
+                                                  (keyword (str "fn-" i)))]
+                                 [col-name (item row)])))
+                           resolved))))))
 
 (defn- apply-group-agg
   ([dataset by aggregations] (apply-group-agg dataset by aggregations nil))
@@ -202,7 +258,7 @@
    (if (zero? (ds/row-count dataset))
      dataset
      (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
-           group-fn (by->group-fn by)
+           group-fn (by->group-fn dataset by)
            groups (ds/group-by dataset group-fn)]
        (->> groups
             (map (fn [[group-key sub-ds]]
@@ -218,7 +274,7 @@
 (defn- apply-group-set [dataset by derivations within-order]
   (if (zero? (ds/row-count dataset))
     dataset
-    (let [group-fn (by->group-fn by)
+    (let [group-fn (by->group-fn dataset by)
           groups (ds/group-by dataset group-fn)]
       (->> groups
            (map (fn [[_group-key sub-ds]]
@@ -371,6 +427,48 @@
                    epoch-units (quot epoch-ms ms-per-unit)]
                (* width (quot epoch-units width))))))
        {:xbar/col col-kw}))))
+
+(defn qtile
+  "Quantile bucketing — produces a :by grouping that bins each row's value
+  in col-kw into one of n equal-count bins based on its percentile rank among
+  non-nil values. Inspired by R's `cut` and Stata's `xtile`.
+
+  Breakpoints are computed once from the entire dataset passed to `dt`, at the
+  100/n, 200/n, ..., (n-1)*100/n percentiles. Each row is then assigned to a
+  bin in [1, n] via right-open comparison. nil input values produce nil keys
+  (their own group).
+
+  Companion to `xbar` (equal-width bins). Use `#dt/e (cut :col n)` for the
+  same semantics in :set / :where / :agg contexts (cut also supports a :from
+  option for reference-subpopulation breakpoints; qtile currently does not).
+
+  Result column name defaults to `<col>-q<n>` (e.g. :mass-q5 for quintile bins
+  of :mass). Override by attaching `{:datajure/col :your-name}` metadata to
+  the qtile result via a second call, or compose with the standard `:by` of
+  keywords.
+
+  Usage:
+    ;; Quintile buckets of market cap
+    (dt stocks :by [(qtile :mktcap 5)]
+        :agg {:n N :mean-ret #dt/e (mn :ret)})
+
+    ;; Per-date quintile buckets combined with an exact key
+    (dt stocks :by [:date (qtile :mktcap 5)]
+        :agg {:mean-ret #dt/e (mn :ret)})
+
+    ;; Equivalent inside #dt/e (column derivation, not grouping):
+    (dt stocks :set {:q #dt/e (cut :mktcap 5)})"
+  [col-kw n]
+  (when-not (and (integer? n) (pos? n))
+    (throw (ex-info (str "qtile requires a positive integer n, got: " n)
+                    {:dt/error :qtile-invalid-n :n n})))
+  (when-not (keyword? col-kw)
+    (throw (ex-info (str "qtile requires a column keyword, got: " col-kw)
+                    {:dt/error :qtile-invalid-col :col col-kw})))
+  {:dt/selector :qtile
+   :dt/col col-kw
+   :dt/n n
+   :datajure/col (keyword (str (name col-kw) "-q" n))})
 
 (defn cut
   "Equal-count (quantile) binning — assigns each value in a column to a bin

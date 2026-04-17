@@ -1748,6 +1748,85 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (core/dt data :set {:q #dt/e (cut :x 4 :from (= :zzz 1))}))))))
 
+(deftest qtile-basic
+  (testing "qtile in :by produces equal-count bins with column-named result"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:species [:A :A :A :B :B :B :C :C :C :D :D :D]
+                              :mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
+          result (core/dt data :by [(core/qtile :mass 4)] :agg {:n core/N})]
+      (is (= 4 (ds/row-count result)))
+      (is (contains? (set (ds/column-names result)) :mass-q4))
+      ;; 12 rows / 4 bins = 3 per bin
+      (is (every? #(= 3 %) (vec (:n result))))))
+  (testing "qtile is equivalent to #dt/e (cut :col n) on the same column"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
+          via-cut (-> (core/dt data :set {:q #dt/e (cut :mass 4)})
+                      (core/dt :by [:q] :agg {:n core/N}))
+          via-qtile (core/dt data :by [(core/qtile :mass 4)] :agg {:n core/N})]
+      (is (= (vec (:n via-cut)) (vec (:n via-qtile)))))))
+
+(deftest qtile-combined-with-keyword
+  (testing "qtile combined with an exact key in :by"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:species [:A :A :A :B :B :B :C :C :C :D :D :D]
+                              :mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
+          result (core/dt data :by [:species (core/qtile :mass 2)] :agg {:n core/N})]
+      ;; 4 species × 2 bins, but bin counts can be uneven within each species
+      (is (= #{:species :mass-q2 :n} (set (ds/column-names result))))
+      ;; every species appears with at least one bin assignment
+      (is (= #{:A :B :C :D} (set (:species result)))))))
+
+(deftest qtile-nil-handling
+  (testing "nil values get their own group (nil key), non-nil values bin normally"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:mass [100 200 nil 400 nil 600 700]})
+          result (core/dt data :by [(core/qtile :mass 3)] :agg {:n core/N})
+          rows (ds/mapseq-reader result)
+          nil-row (first (filter #(nil? (:mass-q3 %)) rows))]
+      ;; 2 nil values form their own group
+      (is (= 2 (:n nil-row)))
+      ;; 5 non-nil values split into 3 bins
+      (is (= 5 (reduce + (map :n (remove #(nil? (:mass-q3 %)) rows))))))))
+
+(deftest qtile-unknown-column-error
+  (testing "qtile with non-existent column throws :unknown-column at dispatch time"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:mass [1 2 3 4]})
+          e (try (core/dt data :by [(core/qtile :flarg 2)] :agg {:n core/N}) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? e))
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (= #{:flarg} (:dt/columns (ex-data e)))))))
+
+(deftest qtile-invalid-arguments
+  (testing "qtile with non-positive n throws :qtile-invalid-n at call time"
+    (let [e (try (core/qtile :mass 0) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :qtile-invalid-n (:dt/error (ex-data e))))))
+  (testing "qtile with non-integer n throws :qtile-invalid-n"
+    (let [e (try (core/qtile :mass 2.5) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :qtile-invalid-n (:dt/error (ex-data e))))))
+  (testing "qtile with non-keyword column throws :qtile-invalid-col"
+    (let [e (try (core/qtile "mass" 5) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :qtile-invalid-col (:dt/error (ex-data e)))))))
+
+(deftest qtile-default-result-column-name
+  (testing "default result column name is <col>-q<n>"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:score [10 20 30 40 50]})
+          result (core/dt data :by [(core/qtile :score 5)] :agg {:n core/N})]
+      (is (contains? (set (ds/column-names result)) :score-q5))))
+  (testing "quintile bins of :mktcap produce :mktcap-q5"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:mktcap (range 1 21)})
+          result (core/dt data :by [(core/qtile :mktcap 5)] :agg {:n core/N})]
+      (is (contains? (set (ds/column-names result)) :mktcap-q5))
+      ;; 20 rows / 5 bins = 4 per bin
+      (is (every? #(= 4 %) (vec (:n result)))))))
+
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"
     (let [col [3750.0 nil 3800.0 5000.0]]
