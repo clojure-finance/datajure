@@ -54,6 +54,31 @@
     (is (contains? (set (ds/column-names result)) :leading))
     (is (contains? (set (ds/column-names result)) :upper))))
 
+(deftest clean-column-names-unicode
+  (testing "preserves CJK characters while stripping punctuation"
+    (let [ds (ds/->dataset {"市值 (HKD millions)!" [100]
+                            "公司 Name" ["A"]
+                            "Stock Code" ["0700.HK"]})
+          result (du/clean-column-names ds)
+          names (set (ds/column-names result))]
+      (is (contains? names :市值-hkd-millions))
+      (is (contains? names :公司-name))
+      (is (contains? names :stock-code))))
+  (testing "preserves accented Latin characters (with lowercasing)"
+    (let [ds (ds/->dataset {"Société Générale" [1]
+                            "Café @ Home" [2]})
+          result (du/clean-column-names ds)
+          names (set (ds/column-names result))]
+      (is (contains? names :société-générale))
+      (is (contains? names :café-home))))
+  (testing "mixed-script column names work correctly"
+    (let [ds (ds/->dataset {"股票代码/Code" ["X"]
+                            "价格 ($USD)" [100.0]})
+          result (du/clean-column-names ds)
+          names (set (ds/column-names result))]
+      (is (contains? names :股票代码-code))
+      (is (contains? names :价格-usd)))))
+
 (deftest duplicate-rows-all-columns
   (let [ds (ds/->dataset {:id [1 2 2 3] :val ["a" "b" "b" "c"]})
         result (du/duplicate-rows ds)]

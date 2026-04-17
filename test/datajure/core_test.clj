@@ -252,12 +252,13 @@
   (testing ":set + :agg in same call throws"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Cannot combine"
                           (core/dt penguins :set {:x #dt/e (/ :mass 1000)} :agg {:n core/N}))))
-  (testing ":within-order without :set throws"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":within-order requires :set"
+  (testing ":within-order with neither :set nor :agg throws"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":within-order requires :set or :agg"
                           (core/dt penguins :within-order [(core/desc :mass)]))))
-  (testing ":within-order with :agg throws"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":within-order"
-                          (core/dt penguins :by [:species] :agg {:n core/N} :within-order [(core/desc :mass)]))))
+  (testing ":within-order with :agg is accepted (new in 2.0.6 — order-sensitive aggregation)"
+    (core/reset-notes!)
+    (is (ds/dataset? (core/dt penguins :by [:species] :agg {:n core/N}
+                              :within-order [(core/desc :mass)]))))
   (testing ":within-order with :set (no :by) is accepted"
     (core/reset-notes!)
     (is (ds/dataset? (core/dt penguins :set {:x #dt/e (+ :mass 1)} :within-order [(core/desc :mass)]))))
@@ -509,18 +510,193 @@
       (is (contains? (set (ds/column-names result)) :rank)))))
 
 (deftest within-order-invalid-errors
-  (testing ":within-order with :agg throws :within-order-invalid"
-    (let [ed (try (core/dt penguins :by [:species] :agg {:n core/N} :within-order [(core/asc :mass)])
-                  nil
-                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
-      (is (some? ed))
-      (is (= :within-order-invalid (:dt/error ed)))))
-  (testing ":within-order without :set throws :within-order-invalid"
+  (testing ":within-order without :set or :agg throws :within-order-invalid"
     (let [ed (try (core/dt penguins :within-order [(core/asc :mass)])
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
       (is (some? ed))
+      (is (= :within-order-invalid (:dt/error ed)))))
+  (testing ":within-order + :where only (no :set or :agg) still throws"
+    (let [ed (try (core/dt penguins :where #dt/e (> :mass 0) :within-order [(core/asc :mass)])
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (some? ed))
       (is (= :within-order-invalid (:dt/error ed))))))
+
+(deftest within-order-with-agg
+  (testing ":within-order with :agg + :by enables OHLC in one call"
+    (core/reset-notes!)
+    (let [trades (ds/->dataset {:sym ["A" "A" "A" "B" "B" "B"]
+                                :time [3 1 2 2 1 3]
+                                :price [10.3 10.1 10.2 20.2 20.0 20.3]
+                                :size [100 300 200 200 500 100]})
+          result (core/dt trades
+                          :by [:sym]
+                          :within-order [(core/asc :time)]
+                          :agg {:open #dt/e (first-val :price)
+                                :close #dt/e (last-val :price)
+                                :n core/N})
+          rows (ds/mapseq-reader result)
+          a-row (first (filter #(= "A" (:sym %)) rows))
+          b-row (first (filter #(= "B" (:sym %)) rows))]
+      (is (= 10.1 (:open a-row)))
+      (is (= 10.3 (:close a-row)))
+      (is (= 20.0 (:open b-row)))
+      (is (= 20.3 (:close b-row)))))
+
+  (testing ":within-order with :agg (no :by) sorts whole dataset before aggregation"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:date [3 1 2] :price [105.0 100.0 110.0]})
+          result (core/dt ds
+                          :within-order [(core/asc :date)]
+                          :agg {:first-price #dt/e (first-val :price)
+                                :last-price #dt/e (last-val :price)
+                                :n core/N})]
+      (is (= 100.0 (first (vec (:first-price result)))))
+      (is (= 105.0 (first (vec (:last-price result)))))
+      (is (= 3 (first (vec (:n result)))))))
+
+  (testing ":within-order with :agg respects :desc"
+    (core/reset-notes!)
+    (let [trades (ds/->dataset {:sym ["A" "A" "A"] :time [1 2 3] :price [10.0 20.0 30.0]})
+          result (core/dt trades
+                          :by [:sym]
+                          :within-order [(core/desc :time)]
+                          :agg {:open #dt/e (first-val :price)
+                                :close #dt/e (last-val :price)})]
+      (is (= 30.0 (first (vec (:open result)))))
+      (is (= 10.0 (first (vec (:close result)))))))
+
+  (testing ":within-order is no-op for order-insensitive aggs"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:sym ["A" "A" "A"] :x [10.0 20.0 30.0]})
+          r1 (core/dt ds :by [:sym] :agg {:s #dt/e (sm :x) :m #dt/e (mn :x)})
+          r2 (core/dt ds :by [:sym]
+                      :within-order [(core/desc :x)]
+                      :agg {:s #dt/e (sm :x) :m #dt/e (mn :x)})]
+      (is (= (vec (:s r1)) (vec (:s r2))))
+      (is (= (vec (:m r1)) (vec (:m r2)))))))
+
+(deftest agg-plain-fn-footgun
+  (testing "plain fn returning a column via (:col %) throws structured error"
+    (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
+          ed (try (core/dt ds :by [:species] :agg {:x #(:mass %)})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (some? ed))
+      (is (= :agg-plain-fn-returned-non-scalar (:dt/error ed)))
+      (is (= :x (:dt/column ed)))
+      (is (= :column (:dt/returned-type ed)))))
+  (testing "whole-table plain fn also catches the footgun (no :by)"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:mass [10 20 30]})
+          ed (try (core/dt ds :agg {:x #(:mass %)})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (some? ed))
+      (is (= :agg-plain-fn-returned-non-scalar (:dt/error ed)))))
+  (testing "plain fn returning a dataset throws with :returned-type :dataset"
+    (let [ds (ds/->dataset {:species ["A" "A"] :mass [10 20]})
+          ed (try (core/dt ds :by [:species] :agg {:x identity})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (some? ed))
+      (is (= :agg-plain-fn-returned-non-scalar (:dt/error ed)))
+      (is (= :dataset (:dt/returned-type ed)))))
+  (testing "correct plain fn (dfn/mean) works as before"
+    (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
+          result (core/dt ds :by [:species]
+                          :agg {:avg (fn [sub] (tech.v3.datatype.functional/mean (:mass sub)))})
+          rows (ds/mapseq-reader result)]
+      (is (= 15.0 (:avg (first (filter #(= "A" (:species %)) rows)))))
+      (is (= 30.0 (:avg (first (filter #(= "B" (:species %)) rows)))))))
+  (testing "#dt/e agg unaffected by footgun check"
+    (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
+          result (core/dt ds :by [:species] :agg {:avg #dt/e (mn :mass)})
+          rows (ds/mapseq-reader result)]
+      (is (= 15.0 (:avg (first (filter #(= "A" (:species %)) rows)))))))
+  (testing "plain fn returning a string scalar works (not a footgun)"
+    (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
+          result (core/dt ds :by [:species] :agg {:label (fn [_] "ok")})]
+      (is (every? #(= "ok" %) (vec (:label result)))))))
+
+(deftest nrow-alias
+  (testing "nrow is equivalent to N in :agg"
+    (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
+          r1 (core/dt ds :by [:species] :agg {:n core/N})
+          r2 (core/dt ds :by [:species] :agg {:n core/nrow})]
+      (is (= (ds/mapseq-reader r1) (ds/mapseq-reader r2)))))
+  (testing "nrow works in whole-table agg"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:x [1 2 3 4 5]})
+          result (core/dt ds :agg {:count core/nrow})]
+      (is (= 5 (first (vec (:count result))))))))
+
+(deftest unknown-op-in-dt-e-error
+  (testing "typo for base op gets structured error with suggestion"
+    (let [ed (try (read-string "#dt/e (sqrt :x)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (some? ed))
+      (is (= :unknown-op (:dt/error ed)))
+      (is (= 'sqrt (:dt/op ed)))
+      (is (contains? (set (:dt/suggestions ed)) 'sq))))
+  (testing "typo for win/* op suggests the right namespaced op"
+    (let [ed (try (read-string "#dt/e (win/mvag :x 20)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :unknown-op (:dt/error ed)))
+      (is (contains? (set (:dt/suggestions ed)) 'win/mavg))))
+  (testing "typo for row/* op suggests correct row function"
+    (let [ed (try (read-string "#dt/e (row/sumz :a :b)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :unknown-op (:dt/error ed)))
+      (is (contains? (set (:dt/suggestions ed)) 'row/sum))))
+  (testing "typo for stat/* op suggests correct stat function"
+    (let [ed (try (read-string "#dt/e (stat/standardise :x)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :unknown-op (:dt/error ed)))
+      (is (contains? (set (:dt/suggestions ed)) 'stat/standardize))))
+  (testing "nonsense op gets error without misleading suggestions"
+    (let [ed (try (read-string "#dt/e (xxx :y)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :unknown-op (:dt/error ed)))
+      (is (nil? (:dt/suggestions ed)))))
+  (testing "error message is human-readable"
+    (let [msg (try (read-string "#dt/e (logg :x)")
+                   nil
+                   (catch clojure.lang.ExceptionInfo e (.getMessage e)))]
+      (is (re-find #"Unknown op" msg))
+      (is (re-find #"logg" msg))
+      (is (re-find #"log" msg)))))
+
+(deftest levenshtein-damerau-correctness
+  (testing "single-char substitution: distance 1"
+    (is (= 1 (#'core/levenshtein "cat" "bat")))
+    (is (= 1 (#'datajure.expr/levenshtein "cat" "bat"))))
+  (testing "single adjacent transposition: distance 1 (Damerau property)"
+    (is (= 1 (#'core/levenshtein "hieght" "height")))
+    (is (= 1 (#'datajure.expr/levenshtein "hieght" "height"))))
+  (testing "classic Levenshtein: kitten -> sitting is distance 3"
+    (is (= 3 (#'core/levenshtein "kitten" "sitting"))))
+  (testing "empty strings"
+    (is (= 0 (#'core/levenshtein "" "")))
+    (is (= 3 (#'core/levenshtein "abc" "")))
+    (is (= 3 (#'core/levenshtein "" "abc"))))
+  (testing "identical strings: distance 0"
+    (is (= 0 (#'core/levenshtein "height" "height"))))
+  (testing "no transposition credit for non-adjacent swaps"
+    ;; "acb" -> "bca" is 2 (two subs), not 1 — not adjacent
+    (is (= 2 (#'core/levenshtein "acb" "bca"))))
+  (testing "column typo suggestion reaches :height"
+    (let [ds (ds/->dataset {:species ["A"] :height [40] :mass [3500]})
+          ed (try (core/dt ds :set {:bmi #dt/e (/ :mass :hieght)})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= [:height] (get-in ed [:dt/closest :hieght]))))))
 
 (deftest win-rank-basic
   (let [ds (ds/->dataset {:grp ["A" "A" "A" "A"] :val [10 20 20 30]})
@@ -629,13 +805,15 @@
       (is (= [100.0 210.0 315.0] (vec (:cum result))))
       (is (= [1 2 3] (vec (:date result))))))
 
-  (testing ":within-order without :set throws"
-    (is (thrown-with-msg? Exception #"requires :set"
+  (testing ":within-order without :set or :agg throws"
+    (is (thrown-with-msg? Exception #"requires :set or :agg"
                           (core/dt (ds/->dataset {:x [1]}) :within-order [(core/asc :x)]))))
 
-  (testing ":within-order with :agg throws"
-    (is (thrown-with-msg? Exception #"not valid with :agg"
-                          (core/dt (ds/->dataset {:x [1]}) :within-order [(core/asc :x)] :agg {:n core/N})))))
+  (testing ":within-order with :agg is now accepted (2.0.6)"
+    (core/reset-notes!)
+    (is (ds/dataset? (core/dt (ds/->dataset {:x [1]})
+                              :within-order [(core/asc :x)]
+                              :agg {:n core/N})))))
 
 (deftest expr-composition-basic-reuse
   (testing "stored #dt/e expr works in :set"
@@ -858,6 +1036,49 @@
                           :within-order [(core/asc :date)]
                           :set {:chg #dt/e (win/differ :signal)})]
       (is (= [true false true] (vec (:chg result)))))))
+
+(deftest win-ratio-zero-guard
+  (testing "zero denominator produces nil, not Infinity"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:price [100.0 0.0 50.0 100.0]})
+          result (core/dt ds :set {:r #dt/e (win/ratio :price)})
+          vals (vec (:r result))]
+      (is (nil? (first vals)))
+      (is (= 0.0 (second vals)))
+      (is (nil? (nth vals 2)))
+      (is (= 2.0 (nth vals 3)))))
+
+  (testing "simple-return idiom handles zero prices cleanly"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:price [100.0 0.0 50.0 100.0]})
+          result (core/dt ds :set {:ret #dt/e (- (win/ratio :price) 1)})
+          vals (vec (:ret result))]
+      (is (nil? (first vals)))
+      (is (= -1.0 (second vals)))
+      (is (nil? (nth vals 2)))
+      (is (= 1.0 (nth vals 3)))))
+
+  (testing "no Infinity leaks into result"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:price [10.0 0.0 5.0]})
+          result (core/dt ds :set {:r #dt/e (win/ratio :price)})]
+      (is (every? (fn [v]
+                    (or (nil? v)
+                        (and (number? v) (Double/isFinite (double v)))))
+                  (vec (:r result))))))
+
+  (testing "per-partition: zero in one group doesn't affect others"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:sym ["A" "A" "B" "B"]
+                            :price [100.0 0.0 50.0 100.0]})
+          result (core/dt ds :by [:sym] :set {:r #dt/e (win/ratio :price)})
+          rows (ds/mapseq-reader result)
+          a-ratios (map :r (filter #(= "A" (:sym %)) rows))
+          b-ratios (map :r (filter #(= "B" (:sym %)) rows))]
+      (is (nil? (first a-ratios)))
+      (is (= 0.0 (second a-ratios)))
+      (is (nil? (first b-ratios)))
+      (is (= 2.0 (second b-ratios))))))
 
 (deftest win-rolling-fns
   (testing "win/mavg: expanding window at start, correct values"

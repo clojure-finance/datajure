@@ -9,22 +9,31 @@
 
 (declare apply-order-by)
 
-(defn- levenshtein [s t]
+(defn- levenshtein
+  "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
+  and single adjacent transpositions each cost 1. Used for typo suggestions
+  in :select and #dt/e column-name error messages."
+  [s t]
   (let [s (vec s) t (vec t)
         m (count s) n (count t)
-        row (vec (range (inc n)))]
-    (loop [i 0 row row]
-      (if (= i m)
-        (row n)
-        (recur (inc i)
-               (loop [j 0 prev (inc i) row row]
-                 (if (= j n)
-                   row
-                   (let [cost (if (= (s i) (t j)) 0 1)
-                         v (min (inc (row (inc j)))
-                                (inc prev)
-                                (+ (row j) cost))]
-                     (recur (inc j) (row (inc j)) (assoc row (inc j) v))))))))))
+        d (make-array Long/TYPE (inc m) (inc n))]
+    (dotimes [i (inc m)] (aset-long d i 0 i))
+    (dotimes [j (inc n)] (aset-long d 0 j j))
+    (dotimes [i m]
+      (dotimes [j n]
+        (let [i+ (inc i) j+ (inc j)
+              cost (if (= (get s i) (get t j)) 0 1)
+              del (inc (aget d i j+))
+              ins (inc (aget d i+ j))
+              sub (+ (aget d i j) cost)
+              basic (min del ins sub)
+              trans (if (and (>= i 1) (>= j 1)
+                             (= (get s i) (get t (dec j)))
+                             (= (get s (dec i)) (get t j)))
+                      (+ (aget d (dec i) (dec j)) cost)
+                      Long/MAX_VALUE)]
+          (aset-long d i+ j+ (min basic trans)))))
+    (aget d m n)))
 
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
@@ -131,19 +140,43 @@
             dataset
             derivations)))
 
+(defn- agg-result-footgun?
+  "Detects the plain-fn :agg footgun where the user returned a column or dataset
+  instead of a scalar. In :agg, a plain fn receives the group dataset, so
+  `(:mass %)` returns a column vector, not a scalar — a common mistake for users
+  coming from :set context where `(:mass %)` returns a scalar per row."
+  [v]
+  (or (ds/dataset? v)
+      (instance? tech.v3.dataset.impl.column.Column v)))
+
 (defn- eval-agg [dataset col-kw agg-fn]
   (if (expr-node? agg-fn)
     (do (validate-expr-cols dataset agg-fn (str ":agg " col-kw))
         ((expr/compile-expr agg-fn) dataset))
-    (agg-fn dataset)))
+    (let [result (agg-fn dataset)]
+      (when (agg-result-footgun? result)
+        (throw (ex-info
+                (str ":agg plain function for column " col-kw
+                     " returned a " (if (ds/dataset? result) "dataset" "column")
+                     ", not a scalar. In :agg, plain functions receive the group"
+                     " dataset, so `(:col %)` returns a column vector, not a scalar."
+                     " Use `(dfn/mean (:col %))` for aggregation, or prefer"
+                     " `#dt/e (mn :col)` which handles both cases uniformly.")
+                {:dt/error :agg-plain-fn-returned-non-scalar
+                 :dt/column col-kw
+                 :dt/returned-type (if (ds/dataset? result) :dataset :column)})))
+      result)))
 
-(defn- apply-agg [dataset aggregations]
-  (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
-        result (reduce (fn [m [col-kw agg-fn]]
-                         (assoc m col-kw [(eval-agg dataset col-kw agg-fn)]))
-                       {}
-                       pairs)]
-    (ds/->dataset result)))
+(defn- apply-agg
+  ([dataset aggregations] (apply-agg dataset aggregations nil))
+  ([dataset aggregations within-order]
+   (let [sorted (if within-order (apply-order-by dataset within-order) dataset)
+         pairs (if (map? aggregations) (seq aggregations) aggregations)
+         result (reduce (fn [m [col-kw agg-fn]]
+                          (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
+                        {}
+                        pairs)]
+     (ds/->dataset result))))
 
 (defn- by->group-fn [by]
   (cond
@@ -163,21 +196,24 @@
                                [col-name (item row)])))
                          by)))))
 
-(defn- apply-group-agg [dataset by aggregations]
-  (if (zero? (ds/row-count dataset))
-    dataset
-    (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
-          group-fn (by->group-fn by)
-          groups (ds/group-by dataset group-fn)]
-      (->> groups
-           (map (fn [[group-key sub-ds]]
-                  (let [wrapped-key (update-vals group-key vector)
-                        agg-result (reduce (fn [m [col-kw agg-fn]]
-                                             (assoc m col-kw [(eval-agg sub-ds col-kw agg-fn)]))
-                                           wrapped-key
-                                           pairs)]
-                    (ds/->dataset agg-result))))
-           (apply ds/concat)))))
+(defn- apply-group-agg
+  ([dataset by aggregations] (apply-group-agg dataset by aggregations nil))
+  ([dataset by aggregations within-order]
+   (if (zero? (ds/row-count dataset))
+     dataset
+     (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
+           group-fn (by->group-fn by)
+           groups (ds/group-by dataset group-fn)]
+       (->> groups
+            (map (fn [[group-key sub-ds]]
+                   (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)
+                         wrapped-key (update-vals group-key vector)
+                         agg-result (reduce (fn [m [col-kw agg-fn]]
+                                              (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
+                                            wrapped-key
+                                            pairs)]
+                     (ds/->dataset agg-result))))
+            (apply ds/concat))))))
 
 (defn- apply-group-set [dataset by derivations within-order]
   (if (zero? (ds/row-count dataset))
@@ -219,7 +255,15 @@
   nil)
 
 (def N
-  "Row count aggregation helper. Use as a value in :agg maps."
+  "Row count aggregation helper. Use as a value in :agg maps.
+  Terse alias matching data.table/q convention. See also `nrow` for
+  a more discoverable full name."
+  ds/row-count)
+
+(def nrow
+  "Row count aggregation helper. Use as a value in :agg maps.
+  Full-name alias for users who prefer readability over terseness.
+  Equivalent to `N`."
   ds/row-count)
 
 (def mean
@@ -476,8 +520,13 @@
                    with :by, computes within groups; without :by, whole dataset is one partition.
   :agg           - collapse to summary. Accepts map or vector-of-pairs. Use N for row count.
   :by            - grouping for :agg or :set (partitioned window mode). Vector of keywords or fn of row.
-  :within-order  - sort within each partition (or whole dataset) before window computation.
-                   Valid with :set (with or without :by). Not valid with :agg.
+  :within-order  - sort within each partition (or whole dataset) before :set or :agg runs.
+                   Useful for window functions (win/lag, win/cumsum, ...) and for
+                   order-sensitive aggregations (first-val, last-val, OHLC patterns).
+                   With :set and :by: sorts within each group before window computation.
+                   With :set and no :by: sorts whole dataset before window computation.
+                   With :agg and :by: sorts within each group before aggregation.
+                   With :agg and no :by: sorts whole dataset before aggregation.
   :select        - keep columns. Accepts: vector of kws, single kw, [:not kw ...],
                    regex, predicate fn, or map {old-kw new-kw} for rename-on-select.
   :order-by      - sort rows. Accepts a vector of (asc :col)/(desc :col) specs,
@@ -486,11 +535,8 @@
   (when (and set agg)
     (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
                     {:dt/error :set-agg-conflict})))
-  (when (and within-order agg)
-    (throw (ex-info ":within-order is not valid with :agg."
-                    {:dt/error :within-order-invalid})))
-  (when (and within-order (not set))
-    (throw (ex-info ":within-order requires :set."
+  (when (and within-order (not set) (not agg))
+    (throw (ex-info ":within-order requires :set or :agg."
                     {:dt/error :within-order-invalid})))
   (let [set-has-win? (and set (derivations-have-win? set))
         window-mode? (and by set (not agg))]
@@ -520,7 +566,7 @@
       (and set by) (apply-group-set by set within-order)
       (and set (not by) (or within-order set-has-win?)) (apply-window-set set within-order)
       (and set (not by) (not within-order) (not set-has-win?)) (apply-set set)
-      (and agg by) (apply-group-agg by agg)
-      (and agg (not by)) (apply-agg agg)
+      (and agg by) (apply-group-agg by agg within-order)
+      (and agg (not by)) (apply-agg agg within-order)
       select (apply-select select)
       order-by (apply-order-by order-by))))

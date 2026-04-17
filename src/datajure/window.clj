@@ -178,8 +178,15 @@
 
 (defn win-ratio
   "Ratio to previous element: x[i] / x[i-1].
-  Returns nil for the first element (no predecessor).
-  [10 20 30] -> [nil 2.0 1.5]"
+  Returns nil for the first element (no predecessor) and nil when the
+  previous element is zero (avoids Infinity propagation in financial data,
+  matching the div0 philosophy). The simple-return idiom
+  `(- (win/ratio :price) 1)` then yields nil for the observation after a
+  zero-price row, signalling 'exclude this observation' rather than
+  polluting downstream calculations with Infinity.
+
+  [10 20 30]       -> [nil 2.0 1.5]
+  [100 0 50 100]   -> [nil 0.0 nil 2.0]"
   [col]
   (let [n (dtype/ecount col)
         lagged (win-lag col 1)
@@ -188,7 +195,7 @@
     (dtype/make-reader :object n
                        (let [cur (nth rdr idx)
                              prev (nth lag-rdr idx)]
-                         (if (or (nil? cur) (nil? prev))
+                         (if (or (nil? cur) (nil? prev) (zero? (double prev)))
                            nil
                            (/ (double cur) (double prev)))))))
 

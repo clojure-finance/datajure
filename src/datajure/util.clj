@@ -45,16 +45,20 @@
      (ds/->dataset (mapv #(describe-column dataset %) cols)))))
 
 (defn clean-column-names
-  "Clean column names: lowercase, replace spaces/special chars with hyphens,
-  collapse consecutive hyphens, strip leading/trailing hyphens.
-  \"Some Ugly Name!\" → :some-ugly-name"
+  "Clean column names: lowercase, replace any run of non-letter/non-digit characters
+  with a single hyphen, collapse consecutive hyphens, strip leading/trailing hyphens.
+  Unicode-aware: preserves letters and digits in all scripts (CJK, Cyrillic, Greek,
+  accented Latin, etc). Only punctuation, whitespace, and symbols are replaced.
+
+  \"Some Ugly Name!\" → :some-ugly-name
+  \"市值 (HKD millions)!\" → :市值-hkd-millions"
   [dataset]
   (let [col-names (ds/column-names dataset)
         rename-map (into {}
                          (map (fn [col]
                                 (let [clean (-> (name col)
                                                 str/lower-case
-                                                (str/replace #"[^a-z0-9]+" "-")
+                                                (str/replace #"[^\p{L}\p{N}]+" "-")
                                                 (str/replace #"-+" "-")
                                                 (str/replace #"^-|-$" ""))]
                                   [col (keyword clean)])))

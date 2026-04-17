@@ -20,7 +20,8 @@
     - Arithmetic ops with nil arg -> nil (becomes missing when stored in dataset)
   These rules only activate when a Clojure nil literal appears in an expression.
   Dataset columns with missing values are handled natively by dfn."
-  (:require [tech.v3.datatype :as dtype]
+  (:require [clojure.string :as str]
+            [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.datetime :as dtype-dt]
             [tech.v3.dataset :as ds]
@@ -219,14 +220,72 @@
    'wavg :wavg, 'wsum :wsum
    'div0 :div0})
 
+(defn- levenshtein
+  "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
+  and single adjacent transpositions each cost 1. Used for typo suggestions
+  in column-name and op-name error messages."
+  [s t]
+  (let [s (vec s) t (vec t)
+        m (count s) n (count t)
+        d (make-array Long/TYPE (inc m) (inc n))]
+    (dotimes [i (inc m)] (aset-long d i 0 i))
+    (dotimes [j (inc n)] (aset-long d 0 j j))
+    (dotimes [i m]
+      (dotimes [j n]
+        (let [i+ (inc i) j+ (inc j)
+              cost (if (= (get s i) (get t j)) 0 1)
+              del (inc (aget d i j+))
+              ins (inc (aget d i+ j))
+              sub (+ (aget d i j) cost)
+              basic (min del ins sub)
+              trans (if (and (>= i 1) (>= j 1)
+                             (= (get s i) (get t (dec j)))
+                             (= (get s (dec i)) (get t j)))
+                      (+ (aget d (dec i) (dec j)) cost)
+                      Long/MAX_VALUE)]
+          (aset-long d i+ j+ (min basic trans)))))
+    (aget d m n)))
+
+(def ^:private known-ops
+  "Union of all symbols parse-form recognizes: base ops, win/*, row/*, stat/*,
+  plus structural special forms. Used for suggestion generation on typos."
+  (delay
+    (into (sorted-set)
+          (concat (keys sym->op)
+                  (keys win-sym->op)
+                  (keys row-sym->op)
+                  (keys stat-sym->op)
+                  '[if cond coalesce let cut xbar win/scan]))))
+
+(defn- suggest-op [op]
+  (let [op-str (str op)
+        candidates (->> @known-ops
+                        (map (fn [k] [k (levenshtein op-str (str k))]))
+                        (filter (fn [[k d]]
+                                  (and (<= d 2)
+                                       (>= (count (str k)) 2))))
+                        (sort-by second)
+                        (take 3)
+                        (mapv first))]
+    (seq candidates)))
+
 (defn- ->op-kw
   "Normalise a source-form op to its canonical keyword.
   At read time, ops arrive as plain symbols ('and, '>, etc.)."
   [op]
   (or (sym->op op)
       (when (keyword? op) op)
-      (throw (ex-info "Unknown op in #dt/e expression"
-                      {:op op :op-type (type op)}))))
+      (let [suggestions (when (symbol? op) (suggest-op op))]
+        (throw (ex-info
+                (str "Unknown op `" op "` in #dt/e expression."
+                     (when suggestions
+                       (str " Did you mean: "
+                            (str/join ", " (map #(str "`" % "`") suggestions))
+                            "?")))
+                {:dt/error :unknown-op
+                 :dt/op op
+                 :dt/op-type (type op)
+                 :dt/suggestions suggestions})))))
 
 ;; ---------------------------------------------------------------------------
 ;; AST node constructors
