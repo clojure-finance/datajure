@@ -52,7 +52,7 @@ Concretely, if you've used:
 - **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form rather than a pipeline of a dozen verbs.
 - **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), with less verbosity and without the function-per-verb proliferation.
 - **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`, but because Clojure has a real reader tag mechanism (rather than macros pretending to parse expressions), it integrates more cleanly with the rest of the language.
-- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `each-prior`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` are built in.
+- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `each-prior`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` and window joins (`:how :window`) are built in.
 
 Datajure's unique wedge is that `#dt/e` expressions are first-class AST values — you can store them in vars and compose them across queries. Build a shared vocabulary once, reuse it everywhere:
 
@@ -426,6 +426,74 @@ The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — 
 
 `:tolerance` requires a numeric asof key. Matches that exceed the tolerance produce nil for right columns — same as having no match.
 
+## Window Joins
+
+Inspired by q's `wj`. For each left row, finds **all** right rows whose asof-key falls within a window around the left row's asof-key, then aggregates them with `:agg`. All left rows are preserved.
+
+The **last column** in `:on` is the asof column — preceding columns are exact-match keys.
+
+```clojure
+(require '[datajure.join :refer [join]])
+
+;; 3-unit lookback: each left row aggregates right rows in [left-t - 3, left-t]
+(join trades quotes
+  :on [:sym :time]
+  :how :window
+  :window [-3 0]
+  :agg {:avg-bid #dt/e (mn :bid)
+        :n-quotes core/nrow})
+
+;; 5-minute lookback using temporal units
+(join trades quotes
+  :on [:sym :time]
+  :how :window
+  :window [-5 0 :minutes]
+  :agg {:avg-bid #dt/e (mn :bid)
+        :avg-ask #dt/e (mn :ask)
+        :n       core/nrow})
+
+;; Symmetric window: 2 units either side
+(join events signals
+  :on [:sym :time]
+  :how :window
+  :window [-2 2]
+  :agg {:mean-signal #dt/e (mn :value)})
+
+;; Asymmetric key names
+(join trades quotes
+  :left-on  [:sym :trade-time]
+  :right-on [:sym :quote-time]
+  :how :window
+  :window [-5 0 :minutes]
+  :agg {:vwap #dt/e (wavg :size :bid)})
+```
+
+**Window spec formats** — all three are equivalent:
+```clojure
+[-5 0 :minutes]   ;; [lo hi unit]  — recommended
+[-5 :minutes 0]   ;; [lo unit hi]  — also accepted
+[-300000 0]       ;; [lo hi]       ;; raw (300000 ms = 5 min)
+```
+Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
+
+**`:agg` values:**
+- `#dt/e` expressions — apply to the matched sub-dataset; return **nil** for empty windows (avoids NaN from `dfn/mean` on empty columns)
+- Plain fns — receive the 0-row sub-dataset directly; `nrow` naturally returns **0** for empty windows
+
+**Result schema:** all left columns preserved, plus one column per `:agg` entry.
+
+```clojure
+;; VWAP over 5-minute rolling window — thread into dt
+(-> (join trades quotes
+          :on [:sym :time]
+          :how :window
+          :window [-5 0 :minutes]
+          :agg {:vwap  #dt/e (wavg :size :bid)
+                :depth core/nrow})
+    (core/dt :where #dt/e (> :depth 0)
+             :order-by [(core/asc :time)]))
+```
+
 ## Reshaping
 
 ```clojure
@@ -724,8 +792,8 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
 | `datajure.reshape` | `melt` for wide→long |
-| `datajure.join` | `join` with `:validate`, `:report`, and `:how :asof` |
-| `datajure.asof` | As-of join engine: `asof-search`, `asof-indices`, `asof-match`, `build-result` |
+| `datajure.join` | `join` with `:validate`, `:report`, `:how :asof` (`:direction`, `:tolerance`), and `:how :window` (`:window`, `:agg`) |
+| `datajure.asof` | As-of/window join engine: `asof-search`, `asof-indices`, `asof-match`, `build-result`, `window-indices` |
 | `datajure.nrepl` | nREPL middleware for `*dt*` auto-binding |
 | `datajure.clerk` | Rich Clerk notebook viewers |
 | `datajure.clay` | Clay/Kindly notebook integration |
@@ -773,7 +841,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-286 tests, 957 assertions (CI subset: 219 tests, 795 assertions).
+299 tests, 980 assertions (CI subset: 232 tests, 818 assertions).
 
 ## Prior Work
 
