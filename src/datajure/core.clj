@@ -205,10 +205,15 @@
   "Given a {:dt/selector :qtile ...} marker and the dataset, compute
   breakpoints once and return a metadata-tagged row-fn that bins each row's
   value. The returned fn carries :datajure/col metadata so the resulting
-  group-key column has a friendly name."
+  group-key column has a friendly name.
+
+  When :dt/from is present (a #dt/e expr-node or boolean column keyword),
+  breakpoints are computed from the reference subpopulation where the mask is
+  true and col is non-nil — mirroring the :from semantics of cut-bucket."
   [dataset marker]
   (let [col-kw (:dt/col marker)
         n (:dt/n marker)
+        from (:dt/from marker)
         result-col (or (:datajure/col marker)
                        (keyword (str (name col-kw) "-q" n)))]
     (when-not (contains? (set (ds/column-names dataset)) col-kw)
@@ -216,7 +221,20 @@
                       {:dt/error :unknown-column
                        :dt/columns #{col-kw}
                        :dt/available (vec (sort (ds/column-names dataset)))})))
-    (let [breakpoints (percentile-breakpoints (ds/column dataset col-kw) n)]
+    (let [col (ds/column dataset col-kw)
+          from-mask (when (some? from)
+                      (dtype/->reader
+                       (cond
+                         (expr/expr-node? from) ((expr/compile-expr from) dataset)
+                         (keyword? from) (ds/column dataset from)
+                         :else (throw (ex-info "qtile :from must be a #dt/e expression or column keyword"
+                                               {:dt/error :qtile-invalid-from :from from})))))
+          ref-col (if (some? from-mask)
+                    (let [rdr (dtype/->reader col)]
+                      (filterv some?
+                               (map-indexed (fn [i v] (when (nth from-mask i) v)) rdr)))
+                    col)
+          breakpoints (percentile-breakpoints ref-col n)]
       (with-meta
         (fn [row]
           (bin-via-breakpoints (get row col-kw) breakpoints))
@@ -433,42 +451,44 @@
   in col-kw into one of n equal-count bins based on its percentile rank among
   non-nil values. Inspired by R's `cut` and Stata's `xtile`.
 
-  Breakpoints are computed once from the entire dataset passed to `dt`, at the
-  100/n, 200/n, ..., (n-1)*100/n percentiles. Each row is then assigned to a
-  bin in [1, n] via right-open comparison. nil input values produce nil keys
-  (their own group).
+  Breakpoints are computed once from the dataset at the 100/n, 200/n, ...,
+  (n-1)*100/n percentiles. Each row is assigned to a bin in [1, n] via
+  right-open comparison. nil input values produce nil keys (their own group).
 
-  Companion to `xbar` (equal-width bins). Use `#dt/e (cut :col n)` for the
-  same semantics in :set / :where / :agg contexts (cut also supports a :from
-  option for reference-subpopulation breakpoints; qtile currently does not).
+  The optional :from keyword accepts a #dt/e boolean expression or a boolean
+  column keyword to select a reference subpopulation for computing breakpoints.
+  Breakpoints are computed from that subset and applied to all rows — the same
+  semantics as #dt/e (cut :col n :from pred). The classic use case is
+  NYSE-style breakpoints: compute size quintile boundaries from NYSE stocks,
+  apply to all stocks (NYSE + AMEX + NASDAQ).
 
-  Result column name defaults to `<col>-q<n>` (e.g. :mass-q5 for quintile bins
-  of :mass). Override by attaching `{:datajure/col :your-name}` metadata to
-  the qtile result via a second call, or compose with the standard `:by` of
-  keywords.
+  Companion to `xbar` (equal-width bins). Use `#dt/e (cut :col n :from pred)`
+  for the same semantics in :set / :where / :agg contexts.
+
+  Result column name defaults to `<col>-q<n>` (e.g. :mktcap-q5 for quintile
+  bins of :mktcap).
 
   Usage:
-    ;; Quintile buckets of market cap
     (dt stocks :by [(qtile :mktcap 5)]
         :agg {:n N :mean-ret #dt/e (mn :ret)})
 
-    ;; Per-date quintile buckets combined with an exact key
-    (dt stocks :by [:date (qtile :mktcap 5)]
-        :agg {:mean-ret #dt/e (mn :ret)})
+    (dt stocks :by [(qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+        :agg {:n N :mean-ret #dt/e (mn :ret)})
 
-    ;; Equivalent inside #dt/e (column derivation, not grouping):
-    (dt stocks :set {:q #dt/e (cut :mktcap 5)})"
-  [col-kw n]
+    (dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+        :agg {:mean-ret #dt/e (mn :ret)})"
+  [col-kw n & {:keys [from]}]
   (when-not (and (integer? n) (pos? n))
     (throw (ex-info (str "qtile requires a positive integer n, got: " n)
                     {:dt/error :qtile-invalid-n :n n})))
   (when-not (keyword? col-kw)
     (throw (ex-info (str "qtile requires a column keyword, got: " col-kw)
                     {:dt/error :qtile-invalid-col :col col-kw})))
-  {:dt/selector :qtile
-   :dt/col col-kw
-   :dt/n n
-   :datajure/col (keyword (str (name col-kw) "-q" n))})
+  (cond-> {:dt/selector :qtile
+           :dt/col col-kw
+           :dt/n n
+           :datajure/col (keyword (str (name col-kw) "-q" n))}
+    (some? from) (assoc :dt/from from)))
 
 (defn cut
   "Equal-count (quantile) binning — assigns each value in a column to a bin

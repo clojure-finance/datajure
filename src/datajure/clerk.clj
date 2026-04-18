@@ -241,6 +241,7 @@
                               bindings)]
            (str "(let [" (clojure.string/join " " bind-strs) "] " body ")"))
     :scan (str "(win/scan " (name (:scan/op node)) " " (ast->string (:scan/arg node)) ")")
+    :each-prior (str "(win/each-prior " (name (:each-prior/op node)) " " (ast->string (:each-prior/arg node)) ")")
     :cut (let [base (str "(cut " (ast->string (:cut/col node)) " " (ast->string (:cut/n node)))]
            (if-let [from (:cut/from node)]
              (str base " :from " (ast->string from) ")")

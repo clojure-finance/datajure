@@ -1439,6 +1439,94 @@
           result (core/dt ds :within-order [(core/asc :x)] :set {:cs #dt/e (win/scan + :x)})]
       (is (= [1.0 3.0 6.0] (vec (:cs result)))))))
 
+(deftest win-each-prior-ast-parsing
+  (testing "subtraction op -> :each-prior node with op :- "
+    (let [node #dt/e (win/each-prior - :price)]
+      (is (= :each-prior (:node/type node)))
+      (is (= :- (:each-prior/op node)))
+      (is (= :price (-> node :each-prior/arg :col/name)))))
+  (testing "division op -> :div (matches sym->op)"
+    (let [node #dt/e (win/each-prior / :price)]
+      (is (= :div (:each-prior/op node)))))
+  (testing "max op -> :max (keyword fallback for non-sym->op symbols)"
+    (let [node #dt/e (win/each-prior max :val)]
+      (is (= :max (:each-prior/op node)))))
+  (testing "min op -> :min"
+    (let [node #dt/e (win/each-prior min :val)]
+      (is (= :min (:each-prior/op node)))))
+  (testing "comparison op -> :>"
+    (let [node #dt/e (win/each-prior > :val)]
+      (is (= :> (:each-prior/op node))))))
+
+(deftest win-each-prior-col-refs
+  (testing "col-refs extracts the arg column"
+    (is (= #{:price} (datajure.expr/col-refs #dt/e (win/each-prior - :price)))))
+  (testing "win-refs contains :win/each-prior"
+    (is (contains? (datajure.expr/win-refs #dt/e (win/each-prior - :price)) :win/each-prior)))
+  (testing "col-refs works for composite arg"
+    (is (= #{:a :b} (datajure.expr/col-refs #dt/e (win/each-prior + (+ :a :b)))))))
+
+(deftest win-each-prior-basic
+  (testing "subtraction: f(x[i], x[i-1]) = x[i] - x[i-1]"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:price [10.0 20.0 30.0]})
+          result (core/dt data :within-order [(core/asc :price)]
+                          :set {:d #dt/e (win/each-prior - :price)})
+          vals (vec (:d result))]
+      (is (nil? (nth vals 0)))
+      (is (= 10.0 (nth vals 1)))
+      (is (= 10.0 (nth vals 2)))))
+  (testing "division: f(x[i], x[i-1]) = x[i] / x[i-1]"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:price [10.0 20.0 30.0]})
+          result (core/dt data :within-order [(core/asc :price)]
+                          :set {:r #dt/e (win/each-prior / :price)})
+          vals (vec (:r result))]
+      (is (nil? (nth vals 0)))
+      (is (= 2.0 (nth vals 1)))
+      (is (= 1.5 (nth vals 2)))))
+  (testing "max: max(x[i], x[i-1])"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:price [30.0 10.0 50.0 20.0]})
+          result (core/dt data :set {:m #dt/e (win/each-prior max :price)})
+          vals (vec (:m result))]
+      (is (nil? (nth vals 0)))
+      (is (= 30.0 (nth vals 1)))
+      (is (= 50.0 (nth vals 2)))
+      (is (= 50.0 (nth vals 3)))))
+  (testing "single-row dataset: only element is nil"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:x [99.0]})
+          result (core/dt data :set {:d #dt/e (win/each-prior - :x)})]
+      (is (nil? (nth (vec (:d result)) 0))))))
+
+(deftest win-each-prior-nil-propagation
+  (testing "nil in col propagates: cur-nil and prev-nil both give nil"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:x [10.0 nil 30.0 40.0]})
+          result (core/dt data :set {:d #dt/e (win/each-prior - :x)})
+          vals (vec (:d result))]
+      (is (nil? (nth vals 0)))
+      (is (nil? (nth vals 1)))
+      (is (nil? (nth vals 2)))
+      (is (= 10.0 (nth vals 3))))))
+
+(deftest win-each-prior-by-partition
+  (testing "first element of each partition is nil"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:grp [:A :A :A :B :B :B]
+                              :x [10.0 20.0 30.0 100.0 150.0 200.0]})
+          result (core/dt data
+                          :by [:grp]
+                          :within-order [(core/asc :x)]
+                          :set {:d #dt/e (win/each-prior - :x)})
+          a-rows (sort-by :x (filter #(= :A (:grp %)) (ds/mapseq-reader result)))
+          b-rows (sort-by :x (filter #(= :B (:grp %)) (ds/mapseq-reader result)))]
+      (is (nil? (:d (first a-rows))))
+      (is (= 10.0 (:d (second a-rows))))
+      (is (nil? (:d (first b-rows))))
+      (is (= 50.0 (:d (second b-rows)))))))
+
 (deftest xbar-ast-parsing
   (testing "numeric xbar: :xbar node with nil unit"
     (let [node #dt/e (xbar :price 10)]
@@ -1826,6 +1914,42 @@
       (is (contains? (set (ds/column-names result)) :mktcap-q5))
       ;; 20 rows / 5 bins = 4 per bin
       (is (every? #(= 4 %) (vec (:n result)))))))
+
+(deftest qtile-from-basic
+  (testing "qtile :from with predicate expression selects reference population"
+    (core/reset-notes!)
+    ;; exchcd=1 rows: mktcap [5 15 35], sorted -> breakpoint at idx 1 = 15
+    ;; bins (right-open at 15): 5->1, 15->2, 25->2, 35->2, 45->2
+    ;; result: bin1=1 row, bin2=4 rows
+    (let [data (ds/->dataset {:mktcap [5 15 25 35 45]
+                              :exchcd [1 1 2 1 2]})
+          result (core/dt data :by [(core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+                          :agg {:n core/N})
+          rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
+      (is (= [1 4] (mapv :n rows)))))
+  (testing "qtile :from with boolean column keyword"
+    (core/reset-notes!)
+    ;; nyse?=true rows: mktcap [5 15 35] -> same breakpoint and bins as above
+    (let [data (ds/->dataset {:mktcap [5 15 25 35 45]
+                              :nyse? [true true false true false]})
+          result (core/dt data :by [(core/qtile :mktcap 2 :from :nyse?)]
+                          :agg {:n core/N})
+          rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
+      (is (= [1 4] (mapv :n rows))))))
+
+(deftest qtile-from-nil-handling
+  (testing "nils in col stay nil-keyed even with :from predicate"
+    (core/reset-notes!)
+    ;; exchcd=1 for all rows; non-nil mktcap = [10 30 50] -> breakpoint = 30
+    ;; bins: 10->1, nil->nil, 30->2, nil->nil, 50->2
+    ;; groups: nil->2, bin1->1, bin2->2
+    (let [data (ds/->dataset {:mktcap [10 nil 30 nil 50]
+                              :exchcd [1 1 1 1 1]})
+          result (core/dt data :by [(core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+                          :agg {:n core/N})
+          rows (ds/mapseq-reader result)
+          nil-row (first (filter #(nil? (:mktcap-q2 %)) rows))]
+      (is (= 2 (:n nil-row))))))
 
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"

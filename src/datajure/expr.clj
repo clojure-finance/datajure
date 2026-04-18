@@ -255,7 +255,7 @@
                   (keys win-sym->op)
                   (keys row-sym->op)
                   (keys stat-sym->op)
-                  '[if cond coalesce let cut xbar win/scan]))))
+                  '[if cond coalesce let cut xbar win/scan win/each-prior]))))
 
 (defn- suggest-op [op]
   (let [op-str (str op)
@@ -391,6 +391,12 @@
            {:node/type :scan
             :scan/op scan-op-kw
             :scan/arg (parse-form col-form env)})
+         (= op 'win/each-prior)
+         (let [[ep-sym col-form] args
+               ep-op-kw (or (sym->op ep-sym) (keyword (name ep-sym)))]
+           {:node/type :each-prior
+            :each-prior/op ep-op-kw
+            :each-prior/arg (parse-form col-form env)})
          (contains? win-sym->op op)
          (win-node (win-sym->op op) (mapv #(parse-form % env) args))
          (contains? row-sym->op op)
@@ -418,6 +424,7 @@
     :op (into #{} (mapcat col-refs) (:op/args node))
     :win (into #{} (mapcat col-refs) (:win/args node))
     :scan (col-refs (:scan/arg node))
+    :each-prior (col-refs (:each-prior/arg node))
     :cut (let [base (into (col-refs (:cut/col node)) (col-refs (:cut/n node)))]
            (if-let [from (:cut/from node)]
              (into base (col-refs from))
@@ -445,6 +452,7 @@
     :op (into #{} (mapcat win-refs) (:op/args node))
     :win (into #{(:win/op node)} (mapcat win-refs) (:win/args node))
     :scan (conj (win-refs (:scan/arg node)) :win/scan)
+    :each-prior (conj (win-refs (:each-prior/arg node)) :win/each-prior)
     :cut (let [base (into (win-refs (:cut/col node)) (win-refs (:cut/n node)))]
            (if-let [from (:cut/from node)]
              (into base (win-refs from))
@@ -582,6 +590,10 @@
                  arg-fn (compile-expr (:scan/arg node) env)]
              (fn [ds]
                (win/win-scan op-kw (arg-fn ds))))
+     :each-prior (let [op-kw (:each-prior/op node)
+                       arg-fn (compile-expr (:each-prior/arg node) env)]
+                   (fn [ds]
+                     (win/win-each-prior op-kw (arg-fn ds))))
      :cut (let [col-fn (compile-expr (:cut/col node) env)
                 n-fn (compile-expr (:cut/n node) env)
                 mask-fn (when-let [from (:cut/from node)]

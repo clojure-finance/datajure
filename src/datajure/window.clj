@@ -349,4 +349,39 @@
                   :else (let [nxt (f acc v)]
                           (recur (inc i) nxt (conj result nxt)))))))))))
 
+(def each-prior-op-table
+  "Binary operators supported by win/each-prior."
+  {:+ + :- - :* * :div / :max max :min min
+   :> > :< < :>= >= :<= <= := =})
+
+(defn win-each-prior
+  "Apply a binary operator to (f x[i] x[i-1]) for each element.
+  Returns nil for the first element (no predecessor).
+  Nil propagates: if either x[i] or x[i-1] is nil, result is nil.
+
+  op-kw must be one of: :+ :- :* :div :max :min :> :< :>= :<= :=
+
+  Generalizes win/delta (op=:-) and win/ratio (op=:div), but without
+  the double-casting of win/delta or the zero-guard of win/ratio.
+  Use win/delta or win/ratio directly when those semantics are needed.
+
+  Examples:
+    (win-each-prior :- [10.0 20.0 30.0]) -> [nil 10.0 10.0]
+    (win-each-prior :div [10.0 20.0 30.0]) -> [nil 2.0 1.5]
+    (win-each-prior :max [30.0 10.0 50.0]) -> [nil 30.0 50.0]"
+  [op-kw col]
+  (let [f (or (each-prior-op-table op-kw)
+              (throw (ex-info (str "win/each-prior: unsupported operator " op-kw
+                                   ". Supported: :+ :- :* :div :max :min :> :< :>= :<= :=")
+                              {:dt/error :each-prior-unknown-op :op op-kw})))
+        rdr (dtype/->reader col)
+        n (dtype/ecount rdr)]
+    (dtype/make-reader :object n
+                       (if (zero? idx)
+                         nil
+                         (let [cur (nth rdr idx)
+                               prev (nth rdr (dec idx))]
+                           (when (and (some? cur) (some? prev))
+                             (f cur prev)))))))
+
 
