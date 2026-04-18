@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`qtile :from` — reference-subpopulation breakpoints.** `qtile` now accepts an optional `:from` keyword argument: a `#dt/e` boolean expression or a boolean column keyword that selects a reference subpopulation for computing breakpoints. Breakpoints are computed from the filtered subset and applied to all rows — the same semantics as `#dt/e (cut :col n :from pred)`. Classic use case is NYSE-style breakpoints: `(qtile :mktcap 5 :from #dt/e (= :exchcd 1))` computes quintile boundaries from NYSE stocks and applies them to all stocks.
+  ```clojure
+  (core/dt stocks :by [(core/qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+           :agg {:n core/nrow :mean-ret #dt/e (mn :ret)})
+  ```
+
+- **`win/each-prior` — generalized adjacent-element operator.** Applies any binary operator to `f(x[i], x[i-1])` for each element. First element → nil; nil propagates if either value is nil. Supports `+`, `-`, `*`, `/`, `max`, `min`, `>`, `<`, `>=`, `<=`, `=`. Generalizes `win/delta` (op=`-`) and `win/ratio` (op=`/`) without their double-casting or zero-guard:
+  ```clojure
+  (core/dt ds :by [:permno] :within-order [(core/asc :date)]
+           :set {:pw-hi #dt/e (win/each-prior max :price)  ;; pairwise max with previous
+                 :up?   #dt/e (win/each-prior > :price)})  ;; did price increase?
+  ```
+
+- **Bounded as-of joins — `:direction` and `:tolerance`.** `join` with `:how :asof` now accepts two new options:
+  - `:direction` — `:backward` (default, last right ≤ left), `:forward` (first right ≥ left), or `:nearest` (closest by abs distance; ties prefer `:backward`).
+  - `:tolerance` — numeric max abs distance; matches beyond it produce nil. Requires a numeric asof key.
+  ```clojure
+  ;; Forward: each trade matched to next available quote
+  (join trades quotes :on [:sym :time] :how :asof :direction :forward)
+
+  ;; Nearest: closest quote in either direction
+  (join trades quotes :on [:sym :time] :how :asof :direction :nearest)
+
+  ;; Tolerance: reject stale quotes more than 5 seconds old
+  (join trades quotes :on [:sym :time] :how :asof :tolerance 5)
+  ```
+  `asof-search` gains a 4-arity directional variant; `asof-match` gains a 6-arity variant (4-arity delegates with `:backward`/`nil` defaults — fully backward-compatible).
+
+### Testing
+
+- Test count: 273 → 286 (+13 new deftests, +44 assertions). CI subset: 206 → 219. All passing.
+
 ## [2.0.7] - 2026-04-17
 
 ### Added
@@ -22,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (core/dt stocks :by [:date (core/qtile :mktcap 5)]
            :agg {:mean-ret #dt/e (mn :ret)})
   ```
-  Inspired by R's `cut` and Stata's `xtile`; named to evoke quintile/decile. Companion to `xbar` (equal-width bins) with a symmetric API. Result column name defaults to `<col>-q<n>`, overridable via `:datajure/col` metadata (the same extension point `xbar` uses). `nil` inputs form their own group (nil key). The `:from` option that `cut` supports for reference-subpopulation breakpoints is not yet available on `qtile` -- a future enhancement.
+  Inspired by R's `cut` and Stata's `xtile`; named to evoke quintile/decile. Companion to `xbar` (equal-width bins) with a symmetric API. Result column name defaults to `<col>-q<n>`, overridable via `:datajure/col` metadata (the same extension point `xbar` uses). `nil` inputs form their own group (nil key). The `:from` option for reference-subpopulation breakpoints was added post-release — see `[Unreleased]`.
 
 ### Changed
 

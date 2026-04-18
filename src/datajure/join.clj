@@ -44,14 +44,20 @@
     :how       — join type: :inner (default), :left, :right, :outer, :asof
     :validate  — cardinality check: :1:1, :1:m, :m:1, :m:m
     :report    — if true, print merge diagnostics (matched/left-only/right-only)
+    :direction — (asof only) :backward (default), :forward, or :nearest.
+                 :backward = last right where right-key <= left-key (SQL ASOF convention).
+                 :forward  = first right where right-key >= left-key.
+                 :nearest  = closest by abs distance; ties prefer :backward.
+    :tolerance — (asof only) numeric max abs distance; matches exceeding it
+                 produce nil for right columns. Requires a numeric asof key.
+                 nil (default) = unbounded.
 
   Must provide either :on or both :left-on and :right-on.
 
   As-of join (:how :asof):
-    The last column in :on (or :left-on/:right-on) is the asof column —
-    each left row is matched to the last right row where right-key <= left-key.
-    Preceding columns are exact-match keys. All left rows are preserved;
-    unmatched rows get nil for right columns."
+    The last column in :on (or :left-on/:right-on) is the asof column;
+    preceding columns are exact-match keys. All left rows are preserved;
+    unmatched or out-of-tolerance rows get nil for right columns."
   [left right & {:keys [on left-on right-on how validate report direction tolerance]
                  :or {how :inner report false direction :backward}}]
   (let [how-kw (if (string? how) (keyword how) how)
