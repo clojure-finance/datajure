@@ -194,3 +194,93 @@
       (is (= 3 (ds/row-count (join l r :on :id :how :left))))
       (is (= 3 (ds/row-count (join l r :on :id :how :right))))
       (is (= 4 (ds/row-count (join l r :on :id :how :outer)))))))
+
+(deftest asof-forward-basic-test
+  (testing ":direction :forward matches first right row where right >= left"
+    (let [left (ds/->dataset {:sym ["A" "A" "A"] :time [2 4 6]})
+          right (ds/->dataset {:sym ["A" "A" "A"] :time [1 3 5] :bid [10 20 30]})
+          result (join left right :on [:sym :time] :how :asof :direction :forward)]
+      (is (= 3 (ds/row-count result)))
+      (is (= [20 30 nil] (vec (:bid result))))))
+  (testing "forward: left earlier than all right -> match first right"
+    (let [left (ds/->dataset {:sym ["A"] :time [0]})
+          right (ds/->dataset {:sym ["A" "A"] :time [1 2] :bid [10 20]})
+          result (join left right :on [:sym :time] :how :asof :direction :forward)]
+      (is (= [10] (vec (:bid result))))))
+  (testing "forward: left later than all right -> nil"
+    (let [left (ds/->dataset {:sym ["A"] :time [9]})
+          right (ds/->dataset {:sym ["A" "A"] :time [1 5] :bid [10 20]})
+          result (join left right :on [:sym :time] :how :asof :direction :forward)]
+      (is (nil? (first (:bid result)))))))
+
+(deftest asof-nearest-basic-test
+  (testing ":direction :nearest picks the closer of backward and forward"
+    (let [left (ds/->dataset {:sym ["A" "A" "A"] :time [3 5 6]})
+          right (ds/->dataset {:sym ["A" "A" "A"] :time [1 4 7] :bid [10 20 30]})
+          result (join left right :on [:sym :time] :how :asof :direction :nearest)]
+      ;; left=3: bwd=1(dist=2) fwd=4(dist=1) -> fwd=4, bid=20
+      ;; left=5: bwd=4(dist=1) fwd=7(dist=2) -> bwd=4, bid=20
+      ;; left=6: bwd=4(dist=2) fwd=7(dist=1) -> fwd=7, bid=30
+      (is (= [20 20 30] (vec (:bid result))))))
+  (testing ":nearest tie (equidistant) prefers backward"
+    (let [left (ds/->dataset {:sym ["A"] :time [3]})
+          right (ds/->dataset {:sym ["A" "A"] :time [1 5] :bid [10 20]})
+          result (join left right :on [:sym :time] :how :asof :direction :nearest)]
+      ;; bwd=1(dist=2) fwd=5(dist=2) -> tie -> backward -> bid=10
+      (is (= [10] (vec (:bid result))))))
+  (testing ":nearest with no forward match falls back to backward"
+    (let [left (ds/->dataset {:sym ["A"] :time [9]})
+          right (ds/->dataset {:sym ["A" "A"] :time [1 5] :bid [10 20]})
+          result (join left right :on [:sym :time] :how :asof :direction :nearest)]
+      (is (= [20] (vec (:bid result))))))
+  (testing ":nearest with no backward match falls back to forward"
+    (let [left (ds/->dataset {:sym ["A"] :time [0]})
+          right (ds/->dataset {:sym ["A" "A"] :time [1 5] :bid [10 20]})
+          result (join left right :on [:sym :time] :how :asof :direction :nearest)]
+      (is (= [10] (vec (:bid result)))))))
+
+(deftest asof-tolerance-backward-test
+  (testing ":tolerance cuts off backward matches beyond max distance"
+    (let [left (ds/->dataset {:time [3 7 15]})
+          right (ds/->dataset {:time [1 5] :bid [10 20]})
+          ;; left=3:  bwd=1(dist=2) <= 3 -> bid=10
+          ;; left=7:  bwd=5(dist=2) <= 3 -> bid=20
+          ;; left=15: bwd=5(dist=10) > 3 -> nil
+          result (join left right :on [:time] :how :asof :tolerance 3)]
+      (is (= [10 20 nil] (vec (:bid result))))))
+  (testing ":tolerance=0 only matches exact values"
+    (let [left (ds/->dataset {:time [1 2 3]})
+          right (ds/->dataset {:time [1 3] :bid [10 30]})
+          result (join left right :on [:time] :how :asof :tolerance 0)]
+      (is (= [10 nil 30] (vec (:bid result)))))))
+
+(deftest asof-tolerance-forward-test
+  (testing ":tolerance with :direction :forward"
+    (let [left (ds/->dataset {:time [3 4 8]})
+          right (ds/->dataset {:time [1 5] :bid [10 20]})
+          ;; left=3: fwd=5(dist=2) <= 2 -> bid=20
+          ;; left=4: fwd=5(dist=1) <= 2 -> bid=20
+          ;; left=8: no fwd match -> nil
+          result (join left right :on [:time] :how :asof
+                       :direction :forward :tolerance 2)]
+      (is (= [20 20 nil] (vec (:bid result)))))))
+
+(deftest asof-tolerance-nearest-test
+  (testing ":tolerance with :direction :nearest"
+    (let [left (ds/->dataset {:time [3 4]})
+          right (ds/->dataset {:time [1 5] :bid [10 20]})
+          ;; left=3: nearest is bwd=1(dist=2) or fwd=5(dist=2) -> tie -> bwd=1 -> dist=2 > 1 -> nil
+          ;; left=4: nearest is fwd=5(dist=1) -> dist=1 <= 1 -> bid=20
+          result (join left right :on [:time] :how :asof
+                       :direction :nearest :tolerance 1)]
+      (is (= [nil 20] (vec (:bid result)))))))
+
+(deftest asof-direction-unknown-error-test
+  (testing "unknown :direction throws :join-unknown-direction"
+    (let [e (try
+              (join trades quotes :on [:sym :time] :how :asof :direction :sideways)
+              nil
+              (catch Exception e e))]
+      (is (some? e))
+      (is (= :join-unknown-direction (:dt/error (ex-data e))))
+      (is (= :sideways (:dt/direction (ex-data e)))))))

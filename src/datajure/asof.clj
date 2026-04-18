@@ -19,25 +19,74 @@
 
 ;;; ---- Part 1 ----------------------------------------------------------------
 
+(defn- asof-search-backward
+  "Binary search: last index in `rdr` (sorted ascending, nils last) where value <= target.
+  Returns -1 if no match."
+  ^long [rdr ^long n target]
+  (loop [lo 0 hi (dec n) result -1]
+    (if (> lo hi)
+      result
+      (let [mid (quot (+ lo hi) 2)
+            v (nth rdr mid)]
+        (cond
+          (nil? v) (recur lo (dec mid) result)
+          (<= (compare v target) 0) (recur (inc mid) hi mid)
+          :else (recur lo (dec mid) result))))))
+
+(defn- asof-search-forward
+  "Binary search: first index in `rdr` (sorted ascending, nils last) where value >= target.
+  Returns -1 if no match."
+  ^long [rdr ^long n target]
+  (loop [lo 0 hi (dec n) result -1]
+    (if (> lo hi)
+      result
+      (let [mid (quot (+ lo hi) 2)
+            v (nth rdr mid)]
+        (cond
+          (nil? v) (recur lo (dec mid) result)
+          (>= (compare v target) 0) (recur lo (dec mid) mid)
+          :else (recur (inc mid) hi result))))))
+
+(defn- asof-search-nearest
+  "Returns the index of the closest value to `target` (either direction).
+  On a tie (equidistant backward and forward match), returns the backward index."
+  ^long [rdr ^long n target]
+  (let [bi (asof-search-backward rdr n target)
+        fi (asof-search-forward rdr n target)]
+    (cond
+      (= bi -1) fi
+      (= fi -1) bi
+      :else
+      (let [bv (nth rdr bi)
+            fv (nth rdr fi)
+            bd-dist (Math/abs (- (double target) (double bv)))
+            fd-dist (Math/abs (- (double fv) (double target)))]
+        (if (<= bd-dist fd-dist) bi fi)))))
+
 (defn asof-search
-  "Binary search: find the last index in sorted `right-vals` where value <= `target`.
-  Nils in right-vals are treated as greater than any real value (they sort last),
-  so a nil at mid causes the search to go left, not right.
-  Returns -1 if no such element exists. Nil target returns -1."
-  ^long [right-vals ^long n target]
-  (if (or (zero? n) (nil? target))
-    -1
-    (let [rdr (dtype/->reader right-vals)]
-      (loop [lo 0 hi (dec n) result -1]
-        (if (> lo hi)
-          result
-          (let [mid (quot (+ lo hi) 2)
-                v (nth rdr mid)]
-            (cond
-              ;; nil sorts last => treat as "too big", search left half
-              (nil? v) (recur lo (dec mid) result)
-              (<= (compare v target) 0) (recur (inc mid) hi mid)
-              :else (recur lo (dec mid) result))))))))
+  "Binary search over sorted `right-vals` for the best match to `target`.
+  Nils in right-vals are treated as greater than any real value (they sort last).
+  Nil target always returns -1.
+
+  direction (optional, default :backward):
+    :backward — last index where right-val <= target  (default, SQL ASOF convention)
+    :forward  — first index where right-val >= target
+    :nearest  — closest index by absolute distance; ties prefer :backward
+
+  Returns -1 if no qualifying match exists."
+  (^long [right-vals ^long n target]
+   (asof-search right-vals n target :backward))
+  (^long [right-vals ^long n target direction]
+   (if (or (zero? n) (nil? target))
+     -1
+     (let [rdr (dtype/->reader right-vals)]
+       (case direction
+         :backward (asof-search-backward rdr n target)
+         :forward (asof-search-forward rdr n target)
+         :nearest (asof-search-nearest rdr n target)
+         (throw (ex-info (str "asof-search: unknown direction " direction
+                              ". Must be :backward, :forward, or :nearest.")
+                         {:dt/error :asof-unknown-direction :direction direction})))))))
 
 (defn asof-indices
   "Two-pointer merge: for each element in `left-vals`, return a long-array
@@ -117,6 +166,15 @@
      {}
      grouped)))
 
+(defn- within-tolerance?
+  "Returns true if abs(left-val - right-val) <= tolerance.
+  Always true when tolerance is nil. Requires numeric values."
+  [left-val right-val tolerance]
+  (or (nil? tolerance)
+      (and (some? left-val) (some? right-val)
+           (<= (Math/abs (- (double left-val) (double right-val)))
+               (double tolerance)))))
+
 (defn asof-match
   "Produce index pairs for an as-of join.
 
@@ -125,26 +183,34 @@
     right      — tech.v3.dataset
     left-keys  — vector of column keywords; last = asof col, rest = exact cols
     right-keys — vector of column keywords; same structure
+    direction  — :backward (default), :forward, or :nearest
+    tolerance  — numeric max abs distance; nil means unbounded. Requires a
+                 numeric asof key. Matches whose distance exceeds tolerance
+                 are treated as no-match (nil right index).
 
   Returns a lazy sequence of [left-row-idx right-row-idx-or-nil] pairs in
-  left-row order. Unmatched left rows (no exact-key group, or asof-key
-  earlier than all right asof-keys for that group) yield nil for right index."
-  [left right left-keys right-keys]
-  (let [left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
-        right-index (build-right-index right right-keys)
-        nl (ds/row-count left)]
-    (for [li (range nl)]
-      (let [exact (row-exact-key left-rdrs li)
-            av (row-asof-val left-rdrs li)
-            group (get right-index exact)]
-        (if (nil? group)
-          [li nil]
-          (let [avals (mapv first group)
-                orig-idx (mapv second group)
-                local-ri (asof-search avals (count avals) av)]
-            (if (= local-ri -1)
-              [li nil]
-              [li (nth orig-idx local-ri)])))))))
+  left-row order. Unmatched left rows yield nil for right index."
+  ([left right left-keys right-keys]
+   (asof-match left right left-keys right-keys :backward nil))
+  ([left right left-keys right-keys direction tolerance]
+   (let [left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
+         right-index (build-right-index right right-keys)
+         nl (ds/row-count left)]
+     (for [li (range nl)]
+       (let [exact (row-exact-key left-rdrs li)
+             av (row-asof-val left-rdrs li)
+             group (get right-index exact)]
+         (if (nil? group)
+           [li nil]
+           (let [avals (mapv first group)
+                 orig-idx (mapv second group)
+                 local-ri (asof-search avals (count avals) av direction)]
+             (if (= local-ri -1)
+               [li nil]
+               (let [matched-val (nth avals local-ri)]
+                 (if (within-tolerance? av matched-val tolerance)
+                   [li (nth orig-idx local-ri)]
+                   [li nil]))))))))))
 
 ;;; ---- Part 3 ----------------------------------------------------------------
 

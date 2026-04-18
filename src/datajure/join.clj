@@ -52,8 +52,8 @@
     each left row is matched to the last right row where right-key <= left-key.
     Preceding columns are exact-match keys. All left rows are preserved;
     unmatched rows get nil for right columns."
-  [left right & {:keys [on left-on right-on how validate report]
-                 :or {how :inner report false}}]
+  [left right & {:keys [on left-on right-on how validate report direction tolerance]
+                 :or {how :inner report false direction :backward}}]
   (let [how-kw (if (string? how) (keyword how) how)
         left-keys (or (normalize-keys on) (normalize-keys left-on))
         right-keys (or (normalize-keys on) (normalize-keys right-on))]
@@ -73,6 +73,10 @@
     ;; --- :asof dispatch ---
     (if (= how-kw :asof)
       (do
+        (when-not (#{:backward :forward :nearest} direction)
+          (throw (ex-info (str "Unknown :direction: " direction
+                               ". Must be :backward, :forward, or :nearest.")
+                          {:dt/error :join-unknown-direction :dt/direction direction})))
         (when validate
           (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
             (throw (ex-info (str "Unknown :validate value: " validate
@@ -87,7 +91,7 @@
                              :dt/keys right-keys}))))
         (when report
           (print-report left right left-keys right-keys))
-        (let [pairs (asof/asof-match left right left-keys right-keys)]
+        (let [pairs (asof/asof-match left right left-keys right-keys direction tolerance)]
           (asof/build-result left right pairs right-keys)))
 
       ;; --- regular join dispatch ---
