@@ -202,3 +202,151 @@
                      (core/dt :select [:id :y2]))]
       (is (= 2 (ds/row-count result)))
       (is (= [60 40] (vec (result :y2)))))))
+
+(deftest wjoin-basic-test
+  (testing "backward window [-2 0]: aggregates right rows in [left-t - 2, left-t]"
+    ;; right: times 1..8, bids 10..17
+    ;; left=2: window [0,2] -> times [1,2] -> bids [10,11] -> mean 10.5
+    ;; left=5: window [3,5] -> times [3,4,5] -> bids [12,13,14] -> mean 13.0
+    ;; left=8: window [6,8] -> times [6,7,8] -> bids [15,16,17] -> mean 16.0
+    (let [right (ds/->dataset {:time (range 1 9) :bid (map double (range 10 18))})
+          left (ds/->dataset {:time [2 5 8]})
+          result (join left right :on [:time] :how :window
+                       :window [-2 0]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      (is (= 3 (ds/row-count result)))
+      (is (= [10.5 13.0 16.0] (vec (:mean-bid result)))))))
+
+(deftest wjoin-nrow-agg-test
+  (testing "plain fn agg (nrow) counts matched rows; 0 for empty window"
+    (let [right (ds/->dataset {:time (range 1 9) :bid (map double (range 10 18))})
+          left (ds/->dataset {:time [2 5 0]})
+          ;; left=0: window [-2,0], no right times <= 0 -> empty -> nrow=0
+          result (join left right :on [:time] :how :window
+                       :window [-2 0]
+                       :agg {:n core/nrow})]
+      (is (= [2 3 0] (vec (:n result)))))))
+
+(deftest wjoin-empty-window-nil-test
+  (testing "#dt/e agg returns nil for empty window; plain fn returns natural result"
+    (let [right (ds/->dataset {:time [5 6 7] :bid [10.0 20.0 30.0]})
+          left (ds/->dataset {:time [2]}) ;; window [0,2] -> no right rows
+          result (join left right :on [:time] :how :window
+                       :window [-2 0]
+                       :agg {:mean-bid #dt/e (mn :bid) :n core/nrow})]
+      (is (nil? (first (:mean-bid result))))
+      (is (= 0 (first (:n result)))))))
+
+(deftest wjoin-no-exact-key-test
+  (testing "left exact-key not in right -> nil for all agg cols"
+    (let [right (ds/->dataset {:sym ["A"] :time [1] :bid [10.0]})
+          left (ds/->dataset {:sym ["B"] :time [1]})
+          result (join left right :on [:sym :time] :how :window
+                       :window [-1 0]
+                       :agg {:mean-bid #dt/e (mn :bid) :n core/nrow})]
+      (is (nil? (first (:mean-bid result))))
+      (is (= 0 (first (:n result)))))))
+
+(deftest wjoin-forward-window-test
+  (testing "forward window [0 3]: right rows in [left-t, left-t + 3]"
+    ;; right: times 1..5, bids 10..50
+    ;; left=2: window [2,5] -> times [2,3,4,5] -> bids [20,30,40,50] -> mean 35.0
+    (let [right (ds/->dataset {:time (range 1 6) :bid (map #(* 10.0 %) (range 1 6))})
+          left (ds/->dataset {:time [2]})
+          result (join left right :on [:time] :how :window
+                       :window [0 3]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      (is (= [35.0] (vec (:mean-bid result)))))))
+
+(deftest wjoin-multi-agg-test
+  (testing "multiple agg columns computed in one call"
+    (let [right (ds/->dataset {:time [1 2 3 4 5]
+                               :bid [10.0 20.0 30.0 40.0 50.0]
+                               :ask [11.0 21.0 31.0 41.0 51.0]})
+          left (ds/->dataset {:time [3]})
+          ;; window [-2 0] -> times [1,2,3] -> bids [10,20,30] -> mean 20; asks [11,21,31] -> mean 21
+          result (join left right :on [:time] :how :window
+                       :window [-2 0]
+                       :agg {:mean-bid #dt/e (mn :bid) :mean-ask #dt/e (mn :ask)})]
+      (is (= [20.0] (vec (:mean-bid result))))
+      (is (= [21.0] (vec (:mean-ask result)))))))
+
+(deftest wjoin-multi-key-test
+  (testing "exact-key (sym) + asof-key (time) — partitioned window"
+    (let [right (ds/->dataset {:sym ["A" "A" "A" "B" "B"]
+                               :time [1 2 3 1 2]
+                               :bid [10.0 20.0 30.0 100.0 200.0]})
+          left (ds/->dataset {:sym ["A" "B"] :time [2 2]})
+          ;; A/2: window [1,2] -> times [1,2] -> bids [10,20] -> mean 15
+          ;; B/2: window [1,2] -> times [1,2] -> bids [100,200] -> mean 150
+          result (join left right :on [:sym :time] :how :window
+                       :window [-1 0]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      (is (= 2 (ds/row-count result)))
+      (is (= [15.0 150.0] (vec (:mean-bid result)))))))
+
+(deftest wjoin-unit-minutes-test
+  (testing "[:lo :hi :minutes] converts offsets to milliseconds"
+    ;; right: epoch-ms 0, 60000 (1min), 120000 (2min)
+    ;; left: 120000 ms (2min), window [-1 0 :minutes] -> [60000, 120000]
+    ;; matched: [60000, 120000] -> bids [20, 30] -> mean 25
+    (let [right (ds/->dataset {:time [0 60000 120000] :bid [10.0 20.0 30.0]})
+          left (ds/->dataset {:time [120000]})
+          result (join left right :on [:time] :how :window
+                       :window [-1 0 :minutes]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      (is (= [25.0] (vec (:mean-bid result))))))
+  (testing "[lo unit hi] ordering also works"
+    (let [right (ds/->dataset {:time [0 60000 120000] :bid [10.0 20.0 30.0]})
+          left (ds/->dataset {:time [120000]})
+          result (join left right :on [:time] :how :window
+                       :window [-1 :minutes 0]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      (is (= [25.0] (vec (:mean-bid result)))))))
+
+(deftest wjoin-left-on-right-on-test
+  (testing ":left-on/:right-on work with window join"
+    (let [right (ds/->dataset {:t [1 2 3 4 5] :bid [10.0 20.0 30.0 40.0 50.0]})
+          left (ds/->dataset {:ts [3]})
+          result (join left right :left-on [:ts] :right-on [:t]
+                       :how :window :window [-1 0]
+                       :agg {:mean-bid #dt/e (mn :bid)})]
+      ;; window [2,3] -> t=[2,3] -> bids=[20,30] -> mean 25
+      (is (= [25.0] (vec (:mean-bid result)))))))
+
+(deftest wjoin-missing-window-error-test
+  (testing "no :window spec throws :join-missing-window"
+    (let [e (try (join (ds/->dataset {:time [1]}) (ds/->dataset {:time [1] :bid [1.0]})
+                       :on [:time] :how :window :agg {:n core/nrow})
+                 nil (catch Exception e e))]
+      (is (= :join-missing-window (:dt/error (ex-data e)))))))
+
+(deftest wjoin-missing-agg-error-test
+  (testing "no :agg throws :join-missing-agg"
+    (let [e (try (join (ds/->dataset {:time [1]}) (ds/->dataset {:time [1] :bid [1.0]})
+                       :on [:time] :how :window :window [-1 0])
+                 nil (catch Exception e e))]
+      (is (= :join-missing-agg (:dt/error (ex-data e)))))))
+
+(deftest wjoin-unknown-unit-error-test
+  (testing "unknown unit throws :join-unknown-window-unit"
+    (let [e (try (join (ds/->dataset {:time [1]}) (ds/->dataset {:time [1] :bid [1.0]})
+                       :on [:time] :how :window :window [-1 0 :nanoseconds] :agg {:n core/nrow})
+                 nil (catch Exception e e))]
+      (is (= :join-unknown-window-unit (:dt/error (ex-data e))))
+      (is (= :nanoseconds (:unit (ex-data e)))))))
+
+(deftest wjoin-pipeline-test
+  (testing "window join result threads naturally into dt"
+    (let [right (ds/->dataset {:sym ["A" "A" "A" "B" "B" "B"]
+                               :time [1 2 3 1 2 3]
+                               :bid [10.0 20.0 30.0 100.0 200.0 300.0]})
+          left (ds/->dataset {:sym ["A" "B"] :time [3 3]})
+          result (-> (join left right :on [:sym :time] :how :window
+                           :window [-2 0]
+                           :agg {:mean-bid #dt/e (mn :bid) :n core/nrow})
+                     (core/dt :order-by [(core/asc :sym)]))]
+      (is (= 2 (ds/row-count result)))
+      (is (= ["A" "B"] (vec (:sym result))))
+      (is (= [20.0 200.0] (vec (:mean-bid result))))
+      (is (= [3 3] (vec (:n result)))))))

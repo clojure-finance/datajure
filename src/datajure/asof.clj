@@ -273,3 +273,39 @@
                                  (map vector final-cols col-vecs))
             left-result (ds/select-rows left (mapv first pairs-vec))]
         (merge left-result right-result)))))
+
+(defn window-indices
+  "For each left row, find all right row indices whose asof-key falls within
+  [left-asof-key + lo-offset, left-asof-key + hi-offset] (both bounds inclusive).
+
+  Arguments:
+    left, right  — tech.v3.dataset
+    left-keys    — column keywords (last = asof col, rest = exact-match cols)
+    right-keys   — column keywords (same structure as left-keys)
+    lo-offset    — lower bound offset added to left asof-key (numeric, raw units)
+    hi-offset    — upper bound offset added to left asof-key (numeric, raw units)
+
+  Returns a sequence of [left-row-idx [matched-right-original-row-indices]] pairs.
+  Empty inner vector means no right rows fell in the window (left row still appears).
+  Left rows with nil asof-key always yield an empty inner vector."
+  [left right left-keys right-keys lo-offset hi-offset]
+  (let [left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
+        right-index (build-right-index right right-keys)
+        nl (ds/row-count left)]
+    (for [li (range nl)]
+      (let [exact (row-exact-key left-rdrs li)
+            av (row-asof-val left-rdrs li)
+            group (when (some? av) (get right-index exact))]
+        (if (nil? group)
+          [li []]
+          (let [avals (mapv first group)
+                orig-idx (mapv second group)
+                n (count avals)
+                lo-bound (+ (double av) (double lo-offset))
+                hi-bound (+ (double av) (double hi-offset))
+                lo-i (asof-search avals n lo-bound :forward)
+                hi-i (asof-search avals n hi-bound :backward)]
+            (if (or (= lo-i -1) (= hi-i -1) (> lo-i hi-i))
+              [li []]
+              [li (subvec orig-idx lo-i (inc hi-i))])))))))
+
