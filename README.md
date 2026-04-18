@@ -52,7 +52,7 @@ Concretely, if you've used:
 - **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form rather than a pipeline of a dozen verbs.
 - **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), with less verbosity and without the function-per-verb proliferation.
 - **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`, but because Clojure has a real reader tag mechanism (rather than macros pretending to parse expressions), it integrates more cleanly with the rest of the language.
-- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins are built in.
+- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `each-prior`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` are built in.
 
 Datajure's unique wedge is that `#dt/e` expressions are first-class AST values — you can store them in vars and compose them across queries. Build a shared vocabulary once, reuse it everywhere:
 
@@ -267,7 +267,7 @@ Available via `win/*` inside `#dt/e`. Work in `:set` context — with `:by` for 
         :prev   #dt/e (win/lag :price 1)})
 ```
 
-Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`.
+Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`.
 
 ### Adjacent-Element Ops
 
@@ -309,6 +309,22 @@ Generalized cumulative operation inspired by APL/q's scan (`\`). Supports `+`, `
           :cum-vol #dt/e (win/scan + :volume)       ;; = win/cumsum
           :runmax  #dt/e (win/scan max :price)})    ;; running maximum
 ```
+
+### Generalized Adjacent-Element Ops (`win/each-prior`)
+
+`win/each-prior` is the generalization of `win/delta` and `win/ratio` — applies any binary operator to `f(x[i], x[i-1])`. Supports `+`, `-`, `*`, `/`, `max`, `min`, and comparison operators. First element → nil; nil propagates.
+
+```clojure
+(dt ds :by [:permno] :within-order [(asc :date)]
+    :set {;; subtract: same result as win/delta (without double-casting)
+          :chg     #dt/e (win/each-prior - :price)
+          ;; max with previous — running pairwise high
+          :pw-hi   #dt/e (win/each-prior max :price)
+          ;; boolean: did value increase?
+          :up?     #dt/e (win/each-prior > :price)})
+```
+
+Use `win/delta` when you want the named function with its double-casting; use `win/ratio` when you need the zero-guard (nil instead of Infinity). Use `win/each-prior` when you need a different operator entirely.
 
 ## Row-wise Functions
 
@@ -389,6 +405,26 @@ The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — 
 **Result schema:** all left columns in original order, plus right non-key columns appended. Conflicting non-key column names are suffixed `:right.<n>` (same convention as regular joins).
 
 **`:validate` for `:asof`:** only the right side is checked (`:1:1` and `:m:1` require unique right keys). The left side is never checked since all left rows always appear.
+
+### Directional and Bounded As-of Joins
+
+`:direction` controls which side of the asof key is matched (default `:backward`). `:tolerance` sets a maximum allowable distance — matches beyond it produce nil.
+
+```clojure
+;; :forward — first right row where right-key >= left-key
+(join left right :on [:sym :time] :how :asof :direction :forward)
+
+;; :nearest — closest right row by absolute distance; ties prefer :backward
+(join left right :on [:sym :time] :how :asof :direction :nearest)
+
+;; :tolerance — reject matches more than 5 time units away
+(join trades quotes :on [:sym :time] :how :asof :tolerance 5)
+
+;; Combine: nearest match within a 3-unit window
+(join left right :on [:time] :how :asof :direction :nearest :tolerance 3)
+```
+
+`:tolerance` requires a numeric asof key. Matches that exceed the tolerance produce nil for right columns — same as having no match.
 
 ## Reshaping
 
@@ -483,6 +519,11 @@ Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask compute
     :agg {:n nrow :mean-ret #dt/e (mn :ret)})
 ;; Result column is auto-named :mktcap-q5
 
+;; NYSE-style breakpoints for :by — compute quintile boundaries from NYSE stocks,
+;; apply to all stocks (NYSE + AMEX + NASDAQ)
+(dt stocks :by [(qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+    :agg {:n nrow :mean-ret #dt/e (mn :ret)})
+
 ;; Per-date size quintiles combined with an exact key
 (dt stocks :by [:date (qtile :mktcap 5)]
     :agg {:mean-ret #dt/e (mn :ret)})
@@ -492,7 +533,7 @@ Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask compute
 |---|---|---|
 | Context | `:by` (grouping) | `:set` / `:where` / `:agg` (expression) |
 | Result | Integer bin key (1..n, or nil for nil input) | Column of bin integers |
-| `:from` option | Not yet | Supported (reference subpopulation) |
+| `:from` option | Supported (reference subpopulation) | Supported (reference subpopulation) |
 | Result column name | Auto `<col>-q<n>` (customise via `:datajure/col` metadata) | Whatever you name it in `:set` |
 
 Both compute the same breakpoints (equal-count bins from non-nil values). Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a column value.
@@ -732,7 +773,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-273 tests, 913 assertions (CI subset: 206 tests, 751 assertions).
+286 tests, 957 assertions (CI subset: 219 tests, 795 assertions).
 
 ## Prior Work
 
