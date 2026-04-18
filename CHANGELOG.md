@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.8] - 2026-04-18
+
 ### Added
 
 - **`qtile :from` — reference-subpopulation breakpoints.** `qtile` now accepts an optional `:from` keyword argument: a `#dt/e` boolean expression or a boolean column keyword that selects a reference subpopulation for computing breakpoints. Breakpoints are computed from the filtered subset and applied to all rows — the same semantics as `#dt/e (cut :col n :from pred)`. Classic use case is NYSE-style breakpoints: `(qtile :mktcap 5 :from #dt/e (= :exchcd 1))` computes quintile boundaries from NYSE stocks and applies them to all stocks.
@@ -37,9 +39,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
   `asof-search` gains a 4-arity directional variant; `asof-match` gains a 6-arity variant (4-arity delegates with `:backward`/`nil` defaults — fully backward-compatible).
 
+- **Window join (`:how :window`, q's `wj`).** For each left row, aggregates **all** right rows whose asof-key falls within a window around the left row's asof-key. Window spec formats: `[lo hi]`, `[lo hi unit]`, or `[lo unit hi]` where unit is `:seconds`, `:minutes`, `:hours`, `:days`, or `:weeks`. Aggregation map `:agg` accepts `#dt/e` expressions (nil for empty windows) or plain fns (receive a 0-row sub-dataset for empty windows, so `nrow` → 0). All left rows preserved.
+  ```clojure
+  ;; 5-minute VWAP window
+  (join trades quotes
+    :on [:sym :time]
+    :how :window
+    :window [-5 0 :minutes]
+    :agg {:avg-bid #dt/e (mn :bid)
+          :avg-ask #dt/e (mn :ask)
+          :n       core/nrow})
+  ```
+  `asof.clj` gains a public `window-indices` utility function for programmatic use.
+
 ### Testing
 
-- Test count: 273 → 286 (+13 new deftests, +44 assertions). CI subset: 206 → 219. All passing.
+- Test count: 273 → 299 (+26 new deftests, +113 assertions). CI subset: 200 → 257 (stat_test.clj added; dataset dep bumped to 8.007 in run-tests.sh). All passing.
 
 ## [2.0.7] - 2026-04-17
 
@@ -105,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.7...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.8...HEAD
+[2.0.8]: https://github.com/clojure-finance/datajure/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/clojure-finance/datajure/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/clojure-finance/datajure/compare/v2.0.5...v2.0.6

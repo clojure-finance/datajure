@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.7"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.8"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -841,7 +841,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-299 tests, 980 assertions (CI subset: 232 tests, 818 assertions).
+299 tests, 983 assertions (CI subset: 257 tests, 879 assertions).
 
 ## Prior Work
 

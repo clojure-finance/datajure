@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-clojure -Sdeps '{:paths ["src" "resources" "test"] :deps {org.clojure/clojure {:mvn/version "1.12.4"} techascent/tech.ml.dataset {:mvn/version "8.003"}}}' \
+clojure -Sdeps '{:paths ["src" "resources" "test"] :deps {org.clojure/clojure {:mvn/version "1.12.4"} techascent/tech.ml.dataset {:mvn/version "8.007"}}}' \
   -M -e "
 (require '[clojure.test :as t])
 (load-file \"test/datajure/core_test.clj\")
@@ -10,9 +10,10 @@ clojure -Sdeps '{:paths ["src" "resources" "test"] :deps {org.clojure/clojure {:
 (load-file \"test/datajure/reshape_test.clj\")
 (load-file \"test/datajure/join_test.clj\")
 (load-file \"test/datajure/asof_test.clj\")
+(load-file \"test/datajure/stat_test.clj\")
 (let [result (t/run-tests
                'datajure.core-test 'datajure.concise-test
                'datajure.util-test 'datajure.io-test
                'datajure.reshape-test 'datajure.join-test
-               'datajure.asof-test)]
+               'datajure.asof-test 'datajure.stat-test)]
   (System/exit (+ (:fail result) (:error result))))"
