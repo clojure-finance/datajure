@@ -55,7 +55,7 @@
                                                         (map (fn [a] [a (levenshtein col-str (name a))]))
                                                         (sort-by second)
                                                         first)]
-                                       [col (when (<= (second closest) 3) [(first closest)])])))
+                                       [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
                               unknown)]
         (throw (ex-info (str "Unknown column(s) " unknown " in " context " expression")
                         {:dt/error :unknown-column
@@ -181,13 +181,14 @@
 (defn- percentile-breakpoints
   "Compute n-1 breakpoints at the 100/n, 200/n, ..., (n-1)*100/n percentiles
   of the non-nil values in col. Returns a vector of breakpoints, or nil if
-  there are fewer than n non-nil values."
+  there are fewer than n non-nil values. Uses dfn/percentiles (Apache Commons
+  interpolation) to match the semantics of cut-bucket exactly."
   [col n]
   (let [sorted (->> col dtype/->reader (remove nil?) sort vec)
         k (count sorted)]
     (when (>= k n)
-      (vec (for [i (range 1 n)]
-             (nth sorted (int (* (/ i n) k))))))))
+      (let [pcts (mapv #(* % (/ 100.0 n)) (range 1 n))]
+        (vec (dtype/->reader (dfn/percentiles sorted pcts {:nan-strategy :remove})))))))
 
 (defn- bin-via-breakpoints
   "Given a scalar v and n-1 breakpoints (assumed sorted ascending), return the
@@ -198,7 +199,7 @@
     (loop [i 0]
       (cond
         (>= i (count breakpoints)) (inc (count breakpoints))
-        (< v (nth breakpoints i)) (inc i)
+        (<= v (nth breakpoints i)) (inc i)
         :else (recur (inc i))))))
 
 (defn- resolve-qtile-marker
@@ -426,7 +427,7 @@
      (fn [row]
        (let [v (get row col-kw)]
          (when (some? v)
-           (* width (quot v width)))))
+           (* width (Math/floorDiv (long v) (long width))))))
      {:xbar/col col-kw}))
   ([col-kw width unit]
    (let [ms-per-unit (condp = unit
@@ -442,8 +443,8 @@
          (let [v (get row col-kw)]
            (when (some? v)
              (let [epoch-ms (tech.v3.datatype.datetime/datetime->epoch :epoch-milliseconds v)
-                   epoch-units (quot epoch-ms ms-per-unit)]
-               (* width (quot epoch-units width))))))
+                   epoch-units (Math/floorDiv ^long epoch-ms ^long ms-per-unit)]
+               (* width (Math/floorDiv ^long epoch-units ^long width))))))
        {:xbar/col col-kw}))))
 
 (defn qtile
@@ -563,7 +564,7 @@
                                                         (map (fn [a] [a (levenshtein col-str (name a))]))
                                                         (sort-by second)
                                                         first)]
-                                       [col (when (<= (second closest) 3) [(first closest)])])))
+                                       [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
                               unknown)]
         (throw (ex-info (str "Unknown column(s) " unknown " in :select")
                         {:dt/error :unknown-column

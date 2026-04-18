@@ -1918,15 +1918,17 @@
 (deftest qtile-from-basic
   (testing "qtile :from with predicate expression selects reference population"
     (core/reset-notes!)
-    ;; exchcd=1 rows: mktcap [5 15 35], sorted -> breakpoint at idx 1 = 15
-    ;; bins (right-open at 15): 5->1, 15->2, 25->2, 35->2, 45->2
-    ;; result: bin1=1 row, bin2=4 rows
+    ;; exchcd=1 rows: mktcap [5 15 35] -> 50th-percentile breakpoint = 15.0
+    ;; Bin assignment uses <=: values <= breakpoint go to lower bin.
+    ;; So: 5<=15 → bin1, 15<=15 → bin1, 25>15 → bin2, 35>15 → bin2, 45>15 → bin2
+    ;; Result: bin1=2 rows (mktcap 5,15), bin2=3 rows (mktcap 25,35,45)
+    ;; This is consistent with cut-bucket (binarySearch exact match → lower bin).
     (let [data (ds/->dataset {:mktcap [5 15 25 35 45]
                               :exchcd [1 1 2 1 2]})
           result (core/dt data :by [(core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
                           :agg {:n core/N})
           rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
-      (is (= [1 4] (mapv :n rows)))))
+      (is (= [2 3] (mapv :n rows)))))
   (testing "qtile :from with boolean column keyword"
     (core/reset-notes!)
     ;; nyse?=true rows: mktcap [5 15 35] -> same breakpoint and bins as above
@@ -1935,7 +1937,7 @@
           result (core/dt data :by [(core/qtile :mktcap 2 :from :nyse?)]
                           :agg {:n core/N})
           rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
-      (is (= [1 4] (mapv :n rows))))))
+      (is (= [2 3] (mapv :n rows))))))
 
 (deftest qtile-from-nil-handling
   (testing "nils in col stay nil-keyed even with :from predicate"

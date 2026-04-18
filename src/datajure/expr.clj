@@ -124,7 +124,7 @@
 (defn count-distinct
   "Count of distinct non-nil values in a column."
   [col]
-  (count (distinct (dtype/->reader col))))
+  (count (distinct (filter some? (dtype/->reader col)))))
 
 (defn first-val
   "First value in a column."
@@ -492,13 +492,13 @@
                              (if (nil? v)
                                nil
                                (let [epoch-ms (dtype-dt/datetime->epoch :epoch-milliseconds v)
-                                     epoch-units (quot epoch-ms ms-per-unit)]
-                                 (* width (quot epoch-units width)))))))
+                                     epoch-units (Math/floorDiv ^long epoch-ms ^long ms-per-unit)]
+                                 (* width (Math/floorDiv ^long epoch-units ^long width)))))))
       (dtype/make-reader :object n
                          (let [v (nth rdr idx)]
                            (if (nil? v)
                              nil
-                             (* width (quot (long v) width))))))))
+                             (* width (Math/floorDiv (long v) (long width)))))))))
 
 (defn- cut-bucket
   "Assign each element of col to an equal-count bin in 1..n.
