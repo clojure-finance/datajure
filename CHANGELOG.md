@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cast` — long→wide reshaping.** Complement to `melt`. For each unique combination of `:id` column values, pivots the `:from` column's distinct values into new columns filled from the `:value` column. New column names derived from `:from` values (keywords pass through; strings converted via `keyword`). Supports `:agg` for duplicate cells and `:fill` for missing cells (default nil). `#dt/e` round-trips with `melt` correctly.
+  ```clojure
+  ;; Reverse a melt
+  (-> ds
+      (melt {:id [:species :year] :measure [:mass :flipper]})
+      (cast {:id [:species :year] :from :variable :value :value}))
+
+  ;; With aggregation for duplicate (id, from) cells
+  (cast ds {:id [:date :sym] :from :metric :value :val :agg dfn/mean})
+  ```
+
+### Testing
+
+- Test count: 299 → 310 (+11 new deftests, +22 assertions). CI: 268/901. All passing.
+
 ## [2.0.8] - 2026-04-18
 
 ### Added

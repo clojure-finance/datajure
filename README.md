@@ -497,12 +497,26 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 ## Reshaping
 
 ```clojure
-(require '[datajure.reshape :refer [melt]])
+(require '[datajure.reshape :refer [melt cast]])
 
+;; Wide → long
 (-> ds
     (melt {:id [:species :year] :measure [:mass :flipper :bill]})
     (dt :by [:species :variable] :agg {:avg #dt/e (mn :value)}))
+
+;; Long → wide (complement to melt)
+(cast ds {:id [:species :year] :from :variable :value :value})
+
+;; With aggregation for duplicate (id, from) cells
+(cast ds {:id [:date :sym] :from :metric :value :val :agg dfn/mean})
+
+;; Round-trip
+(-> ds
+    (melt {:id [:species :year] :measure [:mass :flipper]})
+    (cast {:id [:species :year] :from :variable :value :value}))
 ```
+
+`cast` options: `:id` (required), `:from` (required), `:value` (required), `:agg` (fn applied to a vector of values when multiple rows share the same id+from combination; default: first value), `:fill` (value for missing cells; default: nil).
 
 ## Utilities
 
@@ -791,7 +805,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 | `datajure.stat` | Statistical transforms: `stat/standardize`, `stat/demean`, `stat/winsorize` |
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
-| `datajure.reshape` | `melt` for wide→long |
+| `datajure.reshape` | `melt` for wide→long, `cast` for long→wide |
 | `datajure.join` | `join` with `:validate`, `:report`, `:how :asof` (`:direction`, `:tolerance`), and `:how :window` (`:window`, `:agg`) |
 | `datajure.asof` | As-of/window join engine: `asof-search`, `asof-indices`, `asof-match`, `build-result`, `window-indices` |
 | `datajure.nrepl` | nREPL middleware for `*dt*` auto-binding |
@@ -841,7 +855,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-299 tests, 983 assertions (CI subset: 257 tests, 879 assertions).
+310 tests, 1005 assertions (CI subset: 268 tests, 901 assertions).
 
 ## Prior Work
 
