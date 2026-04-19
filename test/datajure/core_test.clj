@@ -325,6 +325,23 @@
                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
       (is (nil? (get-in err [:dt/closest :zzzzz]))))))
 
+(deftest unknown-column-zero-col-dataset
+  (testing "validate-expr-cols on zero-column dataset throws structured error, not NPE"
+    (let [ds (ds/->dataset {})
+          e (try (core/dt ds :where #dt/e (> :mass 0)) nil
+                 (catch clojure.lang.ExceptionInfo e e)
+                 (catch NullPointerException e e))]
+      (is (instance? clojure.lang.ExceptionInfo e))
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (empty? (get-in (ex-data e) [:dt/closest :mass])))))
+  (testing "validate-select-cols on zero-column dataset throws structured error, not NPE"
+    (let [ds (ds/->dataset {})
+          e (try (core/dt ds :select :mass) nil
+                 (catch clojure.lang.ExceptionInfo e e)
+                 (catch NullPointerException e e))]
+      (is (instance? clojure.lang.ExceptionInfo e))
+      (is (= :unknown-column (:dt/error (ex-data e)))))))
+
 (deftest if-special-form
   (testing "#dt/e if — basic conditional derivation"
     (let [result (core/dt penguins :set {:heavy #dt/e (if (> :mass 4000) "heavy" "light")})]
