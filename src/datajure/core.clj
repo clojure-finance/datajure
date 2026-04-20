@@ -9,32 +9,6 @@
 
 (declare apply-order-by)
 
-(defn- levenshtein
-  "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
-  and single adjacent transpositions each cost 1. Used for typo suggestions
-  in :select and #dt/e column-name error messages."
-  [s t]
-  (let [s (vec s) t (vec t)
-        m (count s) n (count t)
-        d (make-array Long/TYPE (inc m) (inc n))]
-    (dotimes [i (inc m)] (aset-long d i 0 i))
-    (dotimes [j (inc n)] (aset-long d 0 j j))
-    (dotimes [i m]
-      (dotimes [j n]
-        (let [i+ (inc i) j+ (inc j)
-              cost (if (= (get s i) (get t j)) 0 1)
-              del (inc (aget d i j+))
-              ins (inc (aget d i+ j))
-              sub (+ (aget d i j) cost)
-              basic (min del ins sub)
-              trans (if (and (>= i 1) (>= j 1)
-                             (= (get s i) (get t (dec j)))
-                             (= (get s (dec i)) (get t j)))
-                      (+ (aget d (dec i) (dec j)) cost)
-                      Long/MAX_VALUE)]
-          (aset-long d i+ j+ (min basic trans)))))
-    (aget d m n)))
-
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
 
@@ -52,7 +26,7 @@
                               (map (fn [col]
                                      (let [col-str (name col)
                                            closest (->> avail-names
-                                                        (map (fn [a] [a (levenshtein col-str (name a))]))
+                                                        (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
                                                         (sort-by second)
                                                         first)]
                                        [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
@@ -620,7 +594,7 @@
                               (map (fn [col]
                                      (let [col-str (name col)
                                            closest (->> avail-names
-                                                        (map (fn [a] [a (levenshtein col-str (name a))]))
+                                                        (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
                                                         (sort-by second)
                                                         first)]
                                        [col (when (and closest (<= (second closest) 3)) [(first closest)])])))

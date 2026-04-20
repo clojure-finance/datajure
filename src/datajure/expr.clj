@@ -35,16 +35,6 @@
 
 (def ^:private comparison-ops #{:> :< :>= :<= := :and :or :not :in :between?})
 
-(def ^:private win-ops
-  "Valid window operation keywords."
-  #{:win/rank :win/dense-rank :win/row-number
-    :win/lag :win/lead
-    :win/cumsum :win/cummin :win/cummax :win/cummean
-    :win/rleid
-    :win/delta :win/ratio :win/differ
-    :win/mavg :win/msum :win/mdev :win/mmin :win/mmax
-    :win/ema :win/fills})
-
 (def ^:private win-sym->op
   "Maps win/* source symbols to canonical keyword op names."
   {'win/rank :win/rank
@@ -240,10 +230,14 @@
    'wavg :wavg, 'wsum :wsum
    'div0 :div0})
 
-(defn- levenshtein
+(defn damerau-levenshtein
   "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
-  and single adjacent transpositions each cost 1. Used for typo suggestions
-  in column-name and op-name error messages."
+  and single adjacent transpositions each cost 1. Used by both the #dt/e
+  op-name validator (suggest-op) and core's column-name validator
+  (validate-expr-cols/validate-select-cols) to produce typo suggestions.
+
+  Single source of truth — core.clj re-uses this via expr/damerau-levenshtein
+  rather than maintaining a duplicate implementation."
   [s t]
   (let [s (vec s) t (vec t)
         m (count s) n (count t)
@@ -280,7 +274,7 @@
 (defn- suggest-op [op]
   (let [op-str (str op)
         candidates (->> @known-ops
-                        (map (fn [k] [k (levenshtein op-str (str k))]))
+                        (map (fn [k] [k (damerau-levenshtein op-str (str k))]))
                         (filter (fn [[k d]]
                                   (and (<= d 2)
                                        (>= (count (str k)) 2))))
@@ -407,7 +401,13 @@
             :xbar/unit unit-kw})
          (= op 'win/scan)
          (let [[scan-sym col-form] args
-               scan-op-kw (keyword (name scan-sym))]
+               ;; Mirror win/each-prior normalisation: prefer the canonical op
+               ;; keyword from sym->op so scan ops are named consistently with
+               ;; the rest of the codebase (e.g. '/' -> :div, not :/). Falls
+               ;; back to (keyword (name ...)) for symbols without sym->op
+               ;; entries (max/min) so the valid scan ops (+ * max min)
+               ;; remain unchanged.
+               scan-op-kw (or (sym->op scan-sym) (keyword (name scan-sym)))]
            {:node/type :scan
             :scan/op scan-op-kw
             :scan/arg (parse-form col-form env)})

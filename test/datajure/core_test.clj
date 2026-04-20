@@ -693,28 +693,30 @@
       (is (re-find #"log" msg)))))
 
 (deftest levenshtein-damerau-correctness
+  ;; Phase 63: the two copies of Damerau-Levenshtein (core.clj and expr.clj)
+  ;; have been deduplicated into a single public expr/damerau-levenshtein.
+  ;; Tests now exercise the single source of truth.
   (testing "single-char substitution: distance 1"
-    (is (= 1 (#'core/levenshtein "cat" "bat")))
-    (is (= 1 (#'datajure.expr/levenshtein "cat" "bat"))))
+    (is (= 1 (datajure.expr/damerau-levenshtein "cat" "bat"))))
   (testing "single adjacent transposition: distance 1 (Damerau property)"
-    (is (= 1 (#'core/levenshtein "hieght" "height")))
-    (is (= 1 (#'datajure.expr/levenshtein "hieght" "height"))))
+    (is (= 1 (datajure.expr/damerau-levenshtein "hieght" "height"))))
   (testing "classic Levenshtein: kitten -> sitting is distance 3"
-    (is (= 3 (#'core/levenshtein "kitten" "sitting"))))
+    (is (= 3 (datajure.expr/damerau-levenshtein "kitten" "sitting"))))
   (testing "empty strings"
-    (is (= 0 (#'core/levenshtein "" "")))
-    (is (= 3 (#'core/levenshtein "abc" "")))
-    (is (= 3 (#'core/levenshtein "" "abc"))))
+    (is (= 0 (datajure.expr/damerau-levenshtein "" "")))
+    (is (= 3 (datajure.expr/damerau-levenshtein "abc" "")))
+    (is (= 3 (datajure.expr/damerau-levenshtein "" "abc"))))
   (testing "identical strings: distance 0"
-    (is (= 0 (#'core/levenshtein "height" "height"))))
+    (is (= 0 (datajure.expr/damerau-levenshtein "height" "height"))))
   (testing "no transposition credit for non-adjacent swaps"
     ;; "acb" -> "bca" is 2 (two subs), not 1 — not adjacent
-    (is (= 2 (#'core/levenshtein "acb" "bca"))))
+    (is (= 2 (datajure.expr/damerau-levenshtein "acb" "bca"))))
   (testing "column typo suggestion reaches :height"
     (let [ds (ds/->dataset {:species ["A"] :height [40] :mass [3500]})
           ed (try (core/dt ds :set {:bmi #dt/e (/ :mass :hieght)})
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= #{:hieght} (:dt/columns ed)))
       (is (= [:height] (get-in ed [:dt/closest :hieght]))))))
 
 (deftest win-rank-basic

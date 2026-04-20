@@ -336,6 +336,47 @@
       (is (= :join-unknown-window-unit (:dt/error (ex-data e))))
       (is (= :nanoseconds (:unit (ex-data e)))))))
 
+(deftest wjoin-invalid-window-shape-test
+  ;; Phase 63: parse-window-spec used to destructure [a b c :as wspec] and
+  ;; silently drop trailing elements. Malformed shapes now throw a structured
+  ;; :join-invalid-window error so bad specs fail fast.
+  (let [left (ds/->dataset {:time [1]})
+        right (ds/->dataset {:time [1] :bid [1.0]})
+        try-join (fn [spec]
+                   (try (join left right :on [:time] :how :window
+                              :window spec :agg {:n core/nrow})
+                        nil
+                        (catch clojure.lang.ExceptionInfo e (ex-data e))))]
+    (testing "trailing junk after valid [lo hi unit] is rejected (not silently dropped)"
+      (let [ed (try-join [-5 0 :minutes :junk])]
+        (is (= :join-invalid-window (:dt/error ed)))
+        (is (= [-5 0 :minutes :junk] (:dt/window ed)))))
+    (testing "too few elements"
+      (is (= :join-invalid-window (:dt/error (try-join []))))
+      (is (= :join-invalid-window (:dt/error (try-join [5])))))
+    (testing "four elements without a keyword in pos 2 or 3 is still a shape error"
+      (is (= :join-invalid-window (:dt/error (try-join [-5 0 10 20])))))
+    (testing "non-numeric endpoint in [lo hi]"
+      (is (= :join-invalid-window (:dt/error (try-join ["-5" 0])))))
+    (testing "non-numeric endpoint in [lo hi unit]"
+      (is (= :join-invalid-window (:dt/error (try-join ["-5" 0 :minutes])))))
+    (testing "non-numeric endpoint in [lo unit hi]"
+      (is (= :join-invalid-window (:dt/error (try-join [-5 :minutes "0"])))))
+    (testing "non-vector window spec"
+      (is (= :join-invalid-window (:dt/error (try-join :not-a-vector)))))
+    (testing "regression: valid two-element spec still works"
+      (let [result (join left right :on [:time] :how :window
+                         :window [-1 0] :agg {:n core/nrow})]
+        (is (= 1 (ds/row-count result)))))
+    (testing "regression: valid three-element [lo hi unit] still works"
+      (let [result (join left right :on [:time] :how :window
+                         :window [-1 0 :seconds] :agg {:n core/nrow})]
+        (is (= 1 (ds/row-count result)))))
+    (testing "regression: valid three-element [lo unit hi] still works"
+      (let [result (join left right :on [:time] :how :window
+                         :window [-1 :seconds 0] :agg {:n core/nrow})]
+        (is (= 1 (ds/row-count result)))))))
+
 (deftest wjoin-pipeline-test
   (testing "window join result threads naturally into dt"
     (let [right (ds/->dataset {:sym ["A" "A" "A" "B" "B" "B"]

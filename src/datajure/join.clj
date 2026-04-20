@@ -83,30 +83,58 @@
 (defn- parse-window-spec
   "Parse a window spec vector into {:lo lo-raw :hi hi-raw} in raw units.
   Accepted formats:
-    [lo hi]       — raw numeric offsets (no unit conversion)
-    [lo hi unit]  — lo and hi in the given temporal unit (e.g. :minutes)
-    [lo unit hi]  — alternative ordering (as in the spec examples)"
-  [[a b c :as wspec]]
+    [lo hi]       - raw numeric offsets (no unit conversion)
+    [lo hi unit]  - lo and hi in the given temporal unit (e.g. :minutes)
+    [lo unit hi]  - alternative ordering (as in the spec examples)
+
+  Throws :join-missing-window for nil input, :join-invalid-window for malformed
+  shapes (wrong length, non-numeric endpoints, missing/misplaced unit), and
+  :join-unknown-window-unit for unrecognised temporal units."
+  [wspec]
   (cond
     (nil? wspec)
     (throw (ex-info ":how :window requires a :window spec, e.g. [-5 0 :minutes] or [-5 0]"
                     {:dt/error :join-missing-window}))
-    (keyword? b)
-    (let [unit b
-          millis (or (window-unit-millis unit)
-                     (throw (ex-info (str "Unknown window unit: " unit
-                                          ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
-                                     {:dt/error :join-unknown-window-unit :unit unit})))]
-      {:lo (* a millis) :hi (* c millis)})
-    (keyword? c)
-    (let [unit c
-          millis (or (window-unit-millis unit)
-                     (throw (ex-info (str "Unknown window unit: " unit
-                                          ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
-                                     {:dt/error :join-unknown-window-unit :unit unit})))]
-      {:lo (* a millis) :hi (* b millis)})
+    (not (sequential? wspec))
+    (throw (ex-info (str "Window spec must be a vector, got: " (pr-str wspec))
+                    {:dt/error :join-invalid-window :dt/window wspec}))
+    (not (#{2 3} (count wspec)))
+    (throw (ex-info (str "Window spec must have 2 or 3 elements (got " (count wspec)
+                         "): " (pr-str wspec)
+                         ". Valid shapes: [lo hi], [lo hi unit], [lo unit hi].")
+                    {:dt/error :join-invalid-window :dt/window wspec}))
     :else
-    {:lo a :hi b}))
+    (let [[a b c] wspec
+          bad-endpoints (fn []
+                          (throw (ex-info (str "Window spec requires numeric endpoints, got: "
+                                               (pr-str wspec))
+                                          {:dt/error :join-invalid-window :dt/window wspec})))
+          resolve-unit (fn [unit]
+                         (or (window-unit-millis unit)
+                             (throw (ex-info (str "Unknown window unit: " unit
+                                                  ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
+                                             {:dt/error :join-unknown-window-unit :unit unit}))))]
+      (cond
+        ;; [lo hi]
+        (nil? c)
+        (if (and (number? a) (number? b))
+          {:lo a :hi b}
+          (bad-endpoints))
+        ;; [lo unit hi]
+        (keyword? b)
+        (if (and (number? a) (number? c))
+          (let [m (resolve-unit b)] {:lo (* a m) :hi (* c m)})
+          (bad-endpoints))
+        ;; [lo hi unit]
+        (keyword? c)
+        (if (and (number? a) (number? b))
+          (let [m (resolve-unit c)] {:lo (* a m) :hi (* b m)})
+          (bad-endpoints))
+        :else
+        (throw (ex-info (str "Window spec with 3 elements must have the unit as a keyword "
+                             "in position 2 or 3 (i.e. [lo unit hi] or [lo hi unit]), got: "
+                             (pr-str wspec))
+                        {:dt/error :join-invalid-window :dt/window wspec}))))))
 
 (defn- compile-agg-fn
   "Compile a window-join agg value to a fn [sub-dataset] -> scalar.

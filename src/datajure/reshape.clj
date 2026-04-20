@@ -64,7 +64,9 @@
   Arguments:
     dataset - a tech.v3.dataset
     opts    - map with keys:
-      :id    - (required) vector of column keywords to use as row identifiers
+      :id    - (required) column keyword or vector of column keywords to use
+               as row identifiers. A single keyword is normalised to a
+               one-element vector, matching melt.
       :from  - (required) column keyword whose unique values become new column names
       :value - (required) column keyword whose values fill the new columns
       :agg   - aggregation fn applied to a vector of values when multiple rows
@@ -77,6 +79,9 @@
         (melt {:id [:species :year] :measure [:mass :flipper]})
         (cast {:id [:species :year] :from :variable :value :value}))
 
+    ;; Single-keyword :id also works
+    (cast ds {:id :year :from :metric :value :val})
+
     ;; With aggregation for duplicate cells
     (cast ds {:id [:date :sym] :from :metric :value :val :agg dfn/mean})"
   [dataset {:keys [id from value agg fill]
@@ -84,7 +89,8 @@
   (when-not id (throw (ex-info "cast requires :id" {:dt/error :cast-missing-id})))
   (when-not from (throw (ex-info "cast requires :from" {:dt/error :cast-missing-from})))
   (when-not value (throw (ex-info "cast requires :value" {:dt/error :cast-missing-value})))
-  (let [id-rdrs (mapv #(dtype/->reader (ds/column dataset %)) id)
+  (let [id (if (keyword? id) [id] (vec id))
+        id-rdrs (mapv #(dtype/->reader (ds/column dataset %)) id)
         from-rdr (dtype/->reader (ds/column dataset from))
         val-rdr (dtype/->reader (ds/column dataset value))
         n (ds/row-count dataset)
