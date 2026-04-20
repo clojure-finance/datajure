@@ -1,7 +1,9 @@
 (ns datajure.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [tech.v3.dataset :as ds]
-            [datajure.core :as core]))
+            [tech.v3.datatype :as dtype]
+            [datajure.core :as core]
+            [datajure.row :as row]))
 
 (def ^:private penguins
   (ds/->dataset {:species ["Adelie" "Adelie" "Gentoo" "Gentoo" "Chinstrap"]
@@ -991,6 +993,39 @@
           result (core/dt ds :by [:grp] :set {:total #dt/e (row/sum :q1 :q2)})]
       (is (= [11.0 22.0 33.0 44.0] (vec (:total result)))))))
 
+(deftest row-fns-all-nil-returns-nil-not-nan
+  ;; Regression: row-sum/mean/min/max previously used :float64 readers
+  ;; which coerce nil to NaN. Direct-reader callers (i.e. anyone using
+  ;; datajure.row/* outside dt) saw NaN rather than nil for all-nil rows,
+  ;; contradicting the docstring. Fixed by switching to :object readers.
+  ;; Inside dt the bug was hidden because tech.v3.dataset folds NaN into
+  ;; the :float64 column's missing set; outside dt it was observable.
+  (testing "row-sum all-nil row yields nil, not NaN (direct-reader path)"
+    (let [a (dtype/->reader [nil nil 1.0])
+          b (dtype/->reader [nil nil 2.0])
+          r (row/row-sum a b)]
+      (is (nil? (nth r 0)))
+      (is (nil? (nth r 1)))
+      (is (= 3.0 (nth r 2)))))
+  (testing "row-mean all-nil row yields nil, not NaN"
+    (let [a (dtype/->reader [nil 1.0])
+          b (dtype/->reader [nil 3.0])
+          r (row/row-mean a b)]
+      (is (nil? (nth r 0)))
+      (is (= 2.0 (nth r 1)))))
+  (testing "row-min all-nil row yields nil, not NaN"
+    (let [a (dtype/->reader [nil 5.0])
+          b (dtype/->reader [nil 3.0])
+          r (row/row-min a b)]
+      (is (nil? (nth r 0)))
+      (is (= 3.0 (nth r 1)))))
+  (testing "row-max all-nil row yields nil, not NaN"
+    (let [a (dtype/->reader [nil 5.0])
+          b (dtype/->reader [nil 3.0])
+          r (row/row-max a b)]
+      (is (nil? (nth r 0)))
+      (is (= 5.0 (nth r 1))))))
+
 (deftest win-delta-ratio-differ
   (testing "win/delta: nil first, correct diffs"
     (core/reset-notes!)
@@ -1326,6 +1361,40 @@
     (let [ds (ds/->dataset {:w [1.0 nil 2.0] :v [10.0 20.0 nil]})
           result (core/dt ds :agg {:wa #dt/e (wavg :w :v)})]
       (is (= 10.0 (first (vec (:wa result))))))))
+
+(deftest wavg-wsum-unequal-lengths
+  ;; Regression: wavg/wsum iterated (range (ecount weight-col)) without
+  ;; checking the value column length. w<v silently truncated (wrong answer);
+  ;; w>v NPE'd on (nth vr i). Now both throw :unequal-column-lengths.
+  (testing "wavg with w shorter than v throws :unequal-column-lengths"
+    (let [e (try (datajure.expr/wavg [1.0 2.0] [10.0 20.0 30.0]) nil
+                 (catch clojure.lang.ExceptionInfo e e))
+          ed (ex-data e)]
+      (is (some? e))
+      (is (= :unequal-column-lengths (:dt/error ed)))
+      (is (= "wavg" (:dt/op ed)))
+      (is (= 2 (:dt/weight-length ed)))
+      (is (= 3 (:dt/value-length ed)))))
+  (testing "wavg with w longer than v throws :unequal-column-lengths (would have NPE'd)"
+    (let [e (try (datajure.expr/wavg [1.0 2.0 3.0] [10.0 20.0]) nil
+                 (catch clojure.lang.ExceptionInfo e e))
+          ed (ex-data e)]
+      (is (some? e))
+      (is (= :unequal-column-lengths (:dt/error ed)))
+      (is (= 3 (:dt/weight-length ed)))
+      (is (= 2 (:dt/value-length ed)))))
+  (testing "wsum with mismatched lengths throws :unequal-column-lengths"
+    (let [e (try (datajure.expr/wsum [1.0 2.0] [10.0 20.0 30.0]) nil
+                 (catch clojure.lang.ExceptionInfo e e))
+          ed (ex-data e)]
+      (is (= :unequal-column-lengths (:dt/error ed)))
+      (is (= "wsum" (:dt/op ed)))))
+  (testing "equal-length wavg/wsum still work"
+    (is (= 140.0 (datajure.expr/wsum [1.0 2.0 3.0] [10.0 20.0 30.0])))
+    ;; wavg = (1*10 + 2*20 + 3*30) / (1+2+3) = 140/6
+    (is (< (Math/abs (- (/ 140.0 6.0)
+                        (datajure.expr/wavg [1.0 2.0 3.0] [10.0 20.0 30.0])))
+           1e-9))))
 
 (deftest div0-basic
   (testing "div0 returns float division when denominator is non-zero"
@@ -1872,15 +1941,77 @@
       (is (= (vec (:n via-cut)) (vec (:n via-qtile)))))))
 
 (deftest qtile-combined-with-keyword
-  (testing "qtile combined with an exact key in :by"
+  ;; Phase 62: qtile + exact key produces PER-PARTITION breakpoints (the
+  ;; canonical CRSP pattern). Prior to phase 62 this used global breakpoints
+  ;; and silently mis-binned cross-sectional sorts.
+  (testing "qtile + exact key computes breakpoints per exact-key partition"
     (core/reset-notes!)
+    ;; Each species has mass [low mid high] with different scales. Per-species
+    ;; median bucketing with left-inclusive comparison must give
+    ;; 2 rows in q=1 and 1 row in q=2 for EVERY species.
     (let [data (ds/->dataset {:species [:A :A :A :B :B :B :C :C :C :D :D :D]
-                              :mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
-          result (core/dt data :by [:species (core/qtile :mass 2)] :agg {:n core/N})]
-      ;; 4 species × 2 bins, but bin counts can be uneven within each species
+                              :mass [3000 4000 5000 3500 4500 5500
+                                     3200 4200 5200 3800 4800 5800]})
+          result (core/dt data :by [:species (core/qtile :mass 2)]
+                          :agg {:n core/N})
+          by-species (group-by :species (ds/mapseq-reader result))]
       (is (= #{:species :mass-q2 :n} (set (ds/column-names result))))
-      ;; every species appears with at least one bin assignment
-      (is (= #{:A :B :C :D} (set (:species result)))))))
+      (is (= #{:A :B :C :D} (set (keys by-species))))
+      (doseq [sp [:A :B :C :D]]
+        (let [rows (by-species sp)
+              q->n (into {} (map (juxt :mass-q2 :n) rows))]
+          (is (= 2 (q->n 1)) (str "species " sp " should have 2 rows in q=1 under per-group semantics"))
+          (is (= 1 (q->n 2)) (str "species " sp " should have 1 row in q=2 under per-group semantics"))))))
+  (testing "regression: qtile alone (no exact keys) still uses GLOBAL breakpoints"
+    (core/reset-notes!)
+    (let [data (ds/->dataset {:mktcap (range 1 21)})
+          result (core/dt data :by [(core/qtile :mktcap 5)] :agg {:n core/N})]
+      (is (every? #(= 4 %) (vec (:n result))) "20 rows / 5 bins = 4 each (unchanged)"))))
+
+(deftest qtile-per-group-breakpoints
+  ;; Separate test for clarity: demonstrates the silent-wrong-answer bug that
+  ;; phase 62 fixed. Under the old global semantics, the 8 rows split 4-4
+  ;; along the global median (~75), so date=1 rows all fell into q=1 and
+  ;; date=2 rows all fell into q=2. Under phase 62 per-partition semantics,
+  ;; each date independently splits at its own median.
+  (testing "per-date median bucketing — the minimal canonical case"
+    (core/reset-notes!)
+    (let [data (ds/->dataset
+                {:date [1 1 1 1 2 2 2 2]
+                 :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
+          result (core/dt data :by [:date (core/qtile :mktcap 2)]
+                          :agg {:n core/N})
+          rows (->> (ds/mapseq-reader result)
+                    (sort-by (juxt :date :mktcap-q2)))]
+      ;; Expected under per-group: each date has two bins, each with 2 rows.
+      ;; Under old global semantics: date 1 was all q=1 (4 rows), date 2 was all q=2 (4 rows).
+      (is (= [{:date 1 :mktcap-q2 1 :n 2}
+              {:date 1 :mktcap-q2 2 :n 2}
+              {:date 2 :mktcap-q2 1 :n 2}
+              {:date 2 :mktcap-q2 2 :n 2}]
+             (mapv #(select-keys % [:date :mktcap-q2 :n]) rows)))))
+  (testing "qtile + exact key also works in :by + :set (window mode)"
+    (core/reset-notes!)
+    (let [data (ds/->dataset
+                {:date [1 1 1 1 2 2 2 2]
+                 :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
+          result (core/dt data :by [:date (core/qtile :mktcap 2)]
+                          :set {:bucket-mean #dt/e (mn :mktcap)})]
+      ;; Window mode: all 8 rows preserved; per-date q=1 rows share a
+      ;; bucket-mean, and likewise for q=2.
+      (is (= 8 (ds/row-count result)))
+      (let [by-date (group-by :date (ds/mapseq-reader result))]
+        ;; date=1: q=1 rows are mktcap ∈ {10, 15} → mean 12.5;
+        ;;        q=2 rows are mktcap ∈ {30, 40} → mean 35
+        (let [d1-q1 (filter #(= 1 (:mktcap-q2 %)) (by-date 1))
+              d1-q2 (filter #(= 2 (:mktcap-q2 %)) (by-date 1))]
+          (is (every? #(= 12.5 (:bucket-mean %)) d1-q1))
+          (is (every? #(= 35.0 (:bucket-mean %)) d1-q2)))
+        ;; date=2: q=1 → {100, 150} mean 125; q=2 → {300, 400} mean 350
+        (let [d2-q1 (filter #(= 1 (:mktcap-q2 %)) (by-date 2))
+              d2-q2 (filter #(= 2 (:mktcap-q2 %)) (by-date 2))]
+          (is (every? #(= 125.0 (:bucket-mean %)) d2-q1))
+          (is (every? #(= 350.0 (:bucket-mean %)) d2-q2)))))))
 
 (deftest qtile-nil-handling
   (testing "nil values get their own group (nil key), non-nil values bin normally"
@@ -1969,6 +2100,35 @@
           rows (ds/mapseq-reader result)
           nil-row (first (filter #(nil? (:mktcap-q2 %)) rows))]
       (is (= 2 (:n nil-row))))))
+
+(deftest qtile-from-with-exact-key
+  ;; Phase 62: the canonical Fama-French case. Per-date NYSE breakpoints
+  ;; applied to all stocks (NYSE + AMEX + NASDAQ). The `:from` mask is
+  ;; applied WITHIN each exact-key partition, so each date's NYSE
+  ;; subpopulation drives that date's breakpoints.
+  (testing "per-date NYSE-style breakpoints via :from + exact key"
+    (core/reset-notes!)
+    ;; Two dates. Per date:
+    ;;   date=1 NYSE (exchcd=1): mktcap [10 30] → median breakpoint = 20
+    ;;   date=2 NYSE:             mktcap [100 300] → median breakpoint = 200
+    ;; AMEX stocks (exchcd=2) on each date bin against THAT date's NYSE
+    ;; breakpoint. Under the old pooled-from semantics the breakpoints would
+    ;; have been shared across dates.
+    (let [data (ds/->dataset
+                {:date [1 1 1 1 2 2 2 2]
+                 :exchcd [1 1 2 2 1 1 2 2]
+                 :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
+          result (core/dt data
+                          :by [:date (core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+                          :agg {:n core/N})
+          by-date (group-by :date (ds/mapseq-reader result))]
+      ;; Per-date expected split with NYSE-based breakpoints (bp_date1=20, bp_date2=200):
+      ;;   date=1: 10(NYSE)≤20 q1, 15(AMEX)≤20 q1  → q1 n=2; 30(NYSE)>20 q2, 40(AMEX)>20 q2 → q2 n=2
+      ;;   date=2: 100(NYSE)≤200 q1, 150(AMEX)≤200 q1 → q1 n=2; 300(NYSE)>200 q2, 400(AMEX)>200 q2 → q2 n=2
+      (doseq [d [1 2]]
+        (let [q->n (into {} (map (juxt :mktcap-q2 :n) (by-date d)))]
+          (is (= 2 (q->n 1)) (str "date " d " q=1 should have 2 rows"))
+          (is (= 2 (q->n 2)) (str "date " d " q=2 should have 2 rows")))))))
 
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"

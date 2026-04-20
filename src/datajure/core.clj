@@ -192,8 +192,11 @@
 
 (defn- bin-via-breakpoints
   "Given a scalar v and n-1 breakpoints (assumed sorted ascending), return the
-  1-based bin index in [1, n]. Right-open comparison: v lands in bin i if it is
-  less than breakpoints[i-1]. Returns nil for nil input."
+  1-based bin index in [1, n]. Uses left-inclusive comparison: v lands in bin
+  i (1-based) if v is <= breakpoints[i-1]. This matches cut-bucket's
+  java.util.Arrays/binarySearch exact-match behaviour (exact hits return the
+  lower bin), so qtile and cut produce identical bins for values equal to a
+  breakpoint. Returns nil for nil input."
   [v breakpoints]
   (when (some? v)
     (loop [i 0]
@@ -271,34 +274,65 @@
                                  [col-name (item row)])))
                            resolved))))))
 
+(defn- needs-per-partition-resolution?
+  "True if :by mixes tagged markers (currently qtile) with exact keys — in
+  which case markers must be resolved against each exact-key partition
+  separately so breakpoints are per-group. Pure-marker :by (no exact keys)
+  stays global because there is nothing to partition by. Pure-exact-key
+  :by has no markers to resolve. Pure-fn :by is a user-controlled grouping
+  and opts out of the marker machinery entirely."
+  [by]
+  (and (sequential? by)
+       (some qtile-marker? by)
+       (some keyword? by)))
+
 (defn- apply-group-agg
   ([dataset by aggregations] (apply-group-agg dataset by aggregations nil))
   ([dataset by aggregations within-order]
    (if (zero? (ds/row-count dataset))
      dataset
      (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
-           group-fn (by->group-fn dataset by)
-           groups (ds/group-by dataset group-fn)]
-       (->> groups
-            (map (fn [[group-key sub-ds]]
-                   (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)
-                         wrapped-key (update-vals group-key vector)
-                         agg-result (reduce (fn [m [col-kw agg-fn]]
-                                              (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
-                                            wrapped-key
-                                            pairs)]
-                     (ds/->dataset agg-result))))
+           ;; Compound case (qtile + exact keys): first partition by exact
+           ;; keys so qtile breakpoints are computed per sub-dataset.
+           ;; Otherwise: whole dataset is the single "partition" and the
+           ;; existing single-pass group-by path runs unchanged.
+           partitions (if (needs-per-partition-resolution? by)
+                        (let [exact-keys (filterv keyword? by)]
+                          (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
+                        [dataset])]
+       (->> partitions
+            (mapcat (fn [partition-ds]
+                      (let [group-fn (by->group-fn partition-ds by)
+                            groups (ds/group-by partition-ds group-fn)]
+                        (map (fn [[group-key sub-ds]]
+                               (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)
+                                     wrapped-key (update-vals group-key vector)
+                                     agg-result (reduce (fn [m [col-kw agg-fn]]
+                                                          (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
+                                                        wrapped-key
+                                                        pairs)]
+                                 (ds/->dataset agg-result)))
+                             groups))))
             (apply ds/concat))))))
 
 (defn- apply-group-set [dataset by derivations within-order]
   (if (zero? (ds/row-count dataset))
     dataset
-    (let [group-fn (by->group-fn dataset by)
-          groups (ds/group-by dataset group-fn)]
-      (->> groups
-           (map (fn [[_group-key sub-ds]]
-                  (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)]
-                    (apply-set sorted derivations))))
+    ;; Compound case (qtile + exact keys): partition by exact keys first so
+    ;; qtile breakpoints are computed per sub-dataset. Otherwise the single
+    ;; "partition" is the whole dataset and the path is unchanged.
+    (let [partitions (if (needs-per-partition-resolution? by)
+                       (let [exact-keys (filterv keyword? by)]
+                         (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
+                       [dataset])]
+      (->> partitions
+           (mapcat (fn [partition-ds]
+                     (let [group-fn (by->group-fn partition-ds by)
+                           groups (ds/group-by partition-ds group-fn)]
+                       (map (fn [[_group-key sub-ds]]
+                              (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)]
+                                (apply-set sorted derivations)))
+                            groups))))
            (apply ds/concat)))))
 
 (defn- apply-window-set
@@ -452,30 +486,55 @@
   in col-kw into one of n equal-count bins based on its percentile rank among
   non-nil values. Inspired by R's `cut` and Stata's `xtile`.
 
-  Breakpoints are computed once from the dataset at the 100/n, 200/n, ...,
-  (n-1)*100/n percentiles. Each row is assigned to a bin in [1, n] via
-  right-open comparison. nil input values produce nil keys (their own group).
+  Breakpoints are computed at the 100/n, 200/n, ..., (n-1)*100/n percentiles
+  (via dfn/percentiles). Each row is then assigned to a bin in [1, n] via
+  left-inclusive comparison (values equal to a breakpoint go to the lower
+  bin, matching cut-bucket). nil input values produce nil keys (their own
+  group).
+
+  Breakpoint population — depends on what else is in :by:
+    * qtile alone in :by               → breakpoints from the WHOLE dataset
+    * qtile + other exact keys in :by  → breakpoints are computed PER
+                                         exact-key partition
+
+  So `:by [:date (qtile :mktcap 5)]` does what you would expect in data.table
+  or dplyr: each date's rows are binned against that date's own quintiles.
+  This is the canonical CRSP / Fama-French pattern — per-date cross-sectional
+  size quintiles.
 
   The optional :from keyword accepts a #dt/e boolean expression or a boolean
-  column keyword to select a reference subpopulation for computing breakpoints.
-  Breakpoints are computed from that subset and applied to all rows — the same
-  semantics as #dt/e (cut :col n :from pred). The classic use case is
-  NYSE-style breakpoints: compute size quintile boundaries from NYSE stocks,
-  apply to all stocks (NYSE + AMEX + NASDAQ).
+  column keyword selecting a reference subpopulation for breakpoint
+  computation. When combined with other exact keys in :by, the mask is
+  applied within each partition. Classic NYSE use case:
 
-  Companion to `xbar` (equal-width bins). Use `#dt/e (cut :col n :from pred)`
-  for the same semantics in :set / :where / :agg contexts.
+      (dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+          :agg {:mean-ret #dt/e (mn :ret)})
+
+  per-date NYSE quintile breakpoints applied to all stocks (NYSE + AMEX +
+  NASDAQ) — Fama-French size sort exactly.
+
+  Companion to `xbar` (equal-width bins). For the same semantics inside
+  #dt/e expressions (`:set` / `:where` / `:agg` contexts rather than :by),
+  use `#dt/e (cut :col n :from pred)`.
 
   Result column name defaults to `<col>-q<n>` (e.g. :mktcap-q5 for quintile
-  bins of :mktcap).
+  bins of :mktcap). Override via :datajure/col metadata on the marker.
+
+  Note on small partitions: if a partition has fewer than n non-nil values,
+  breakpoints cannot be computed and all non-nil rows in that partition
+  land in bin 1. Consider filtering out thin partitions upstream or using
+  fewer bins.
 
   Usage:
+    ;; Global quintiles across the whole dataset
     (dt stocks :by [(qtile :mktcap 5)]
         :agg {:n N :mean-ret #dt/e (mn :ret)})
 
-    (dt stocks :by [(qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
-        :agg {:n N :mean-ret #dt/e (mn :ret)})
+    ;; Per-date size quintiles — the canonical CRSP / Fama-French pattern
+    (dt stocks :by [:date (qtile :mktcap 5)]
+        :agg {:mean-ret #dt/e (mn :ret)})
 
+    ;; Per-date NYSE quintile breakpoints applied to all stocks
     (dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
         :agg {:mean-ret #dt/e (mn :ret)})"
   [col-kw n & {:keys [from]}]

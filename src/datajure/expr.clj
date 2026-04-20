@@ -137,11 +137,29 @@
   (let [r (dtype/->reader col)]
     (nth r (dec (dtype/ecount r)))))
 
+(defn- check-equal-lengths!
+  "Throw a structured ex-info if weight and value readers have different
+  lengths. Used by wavg/wsum to turn a silent-truncation / NPE bug into a
+  clear error naming the caller."
+  [op-name wr vr]
+  (let [nw (dtype/ecount wr)
+        nv (dtype/ecount vr)]
+    (when (not= nw nv)
+      (throw (ex-info (str op-name
+                           " requires weight and value columns of equal length, got "
+                           nw " and " nv ".")
+                      {:dt/error :unequal-column-lengths
+                       :dt/op op-name
+                       :dt/weight-length nw
+                       :dt/value-length nv})))))
+
 (defn wavg
-  "Weighted average. Args: weight-col value-col. Skips nil pairs."
+  "Weighted average. Args: weight-col value-col. Skips nil pairs.
+  Throws :unequal-column-lengths when w and v have different lengths."
   [w v]
   (let [wr (dtype/->reader w)
         vr (dtype/->reader v)
+        _ (check-equal-lengths! "wavg" wr vr)
         n (dtype/ecount wr)
         pairs (keep (fn [i]
                       (let [wi (nth wr i) vi (nth vr i)]
@@ -154,10 +172,12 @@
         (/ (reduce + wvs) (reduce + ws))))))
 
 (defn wsum
-  "Weighted sum. Args: weight-col value-col. Skips nil pairs."
+  "Weighted sum. Args: weight-col value-col. Skips nil pairs.
+  Throws :unequal-column-lengths when w and v have different lengths."
   [w v]
   (let [wr (dtype/->reader w)
         vr (dtype/->reader v)
+        _ (check-equal-lengths! "wsum" wr vr)
         n (dtype/ecount wr)
         wvs (keep (fn [i]
                     (let [wi (nth wr i) vi (nth vr i)]

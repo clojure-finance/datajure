@@ -41,6 +41,42 @@
     (is (= 5 (:n row)))
     (is (= 2 (:n-missing row)))))
 
+(deftest describe-all-missing-numeric
+  ;; Regression: an explicitly :float64 column of all-NaN (all-missing) used to
+  ;; return :sd = -0.0 while :mean/:min/:max/:median/percentiles correctly
+  ;; returned nil, giving an incoherent summary row. With the guard all stats
+  ;; go through the nil branch.
+  (testing "all-missing :float64 column — every stat is nil"
+    (let [col (dtype/make-container :float64 [##NaN ##NaN ##NaN])
+          ds (ds/->dataset {:name ["a" "b" "c"] :x col})
+          result (du/describe ds)
+          row (first (filter #(= :x (:column %)) (ds/mapseq-reader result)))]
+      (is (= 3 (:n row)))
+      (is (= 3 (:n-missing row)))
+      (is (= :float64 (:datatype row)))
+      (is (nil? (:mean row)))
+      (is (nil? (:sd row)) ":sd was the regression — must be nil, not -0.0")
+      (is (nil? (:min row)))
+      (is (nil? (:max row)))
+      (is (nil? (:median row)))
+      (is (nil? (:p25 row)))
+      (is (nil? (:p75 row)))))
+  (testing "empty numeric column — every stat is nil"
+    (let [col (dtype/make-container :float64 [])
+          ds (ds/->dataset {:x col})
+          result (du/describe ds)
+          row (first (ds/mapseq-reader result))]
+      (is (= 0 (:n row)))
+      (is (nil? (:mean row)))
+      (is (nil? (:sd row)))))
+  (testing "regression: non-all-missing numeric column still computes stats"
+    (let [ds (ds/->dataset {:x [1.0 2.0 3.0 4.0 5.0]})
+          row (first (ds/mapseq-reader (du/describe ds)))]
+      (is (= 3.0 (:mean row)))
+      (is (some? (:sd row)))
+      (is (= 1.0 (:min row)))
+      (is (= 5.0 (:max row))))))
+
 (deftest clean-column-names-basic
   (let [ds (ds/->dataset {"Some Ugly Name!" [1] "Revenue ($)" [100] "year" [2024]})
         result (du/clean-column-names ds)]

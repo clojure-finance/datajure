@@ -3,6 +3,7 @@
    regular joins and datajure.asof for as-of and window joins."
   (:require [tech.v3.dataset :as ds]
             [tech.v3.dataset.join :as ds-join]
+            [tech.v3.datatype.casting :as casting]
             [tech.v3.datatype.datetime :as dtype-dt]
             [datajure.asof :as asof]
             [datajure.expr :as expr]))
@@ -35,6 +36,39 @@
   "Normalize a keyword or vector of keywords to a vector."
   [k]
   (when k (if (keyword? k) [k] (vec k))))
+
+(defn- numeric-column?
+  "Returns true iff the column's :datatype is a numeric type per
+  tech.v3.datatype.casting/numeric-type?. Used to gate :tolerance support."
+  [dataset col-kw]
+  (let [dt (some-> (ds/column dataset col-kw) meta :datatype)]
+    (boolean (and dt (casting/numeric-type? dt)))))
+
+(defn- check-tolerance-compatible!
+  "Throw a structured ex-info if :tolerance is non-nil but the asof key
+  column (last of left-keys / right-keys) is not numeric. Prevents the raw
+  ClassCastException that would otherwise surface from (double dt-value)
+  inside asof/within-tolerance? for LocalDateTime and other non-numeric types."
+  [tolerance left right left-keys right-keys]
+  (when (some? tolerance)
+    (let [left-asof (peek left-keys)
+          right-asof (peek right-keys)]
+      (when-not (and (numeric-column? left left-asof)
+                     (numeric-column? right right-asof))
+        (throw (ex-info
+                (str ":tolerance on an as-of join requires a numeric asof key. "
+                     "Got left " left-asof " (datatype "
+                     (some-> (ds/column left left-asof) meta :datatype) ") "
+                     "and right " right-asof " (datatype "
+                     (some-> (ds/column right right-asof) meta :datatype) "). "
+                     "Convert the asof column to epoch-milliseconds (or another "
+                     "numeric representation) before joining, or omit :tolerance.")
+                {:dt/error :join-tolerance-non-numeric
+                 :dt/tolerance tolerance
+                 :dt/left-asof-col left-asof
+                 :dt/right-asof-col right-asof
+                 :dt/left-asof-datatype (some-> (ds/column left left-asof) meta :datatype)
+                 :dt/right-asof-datatype (some-> (ds/column right right-asof) meta :datatype)}))))))
 
 ;;; ---- Window join helpers ---------------------------------------------------
 
@@ -175,6 +209,7 @@
           (throw (ex-info (str "Unknown :direction: " direction
                                ". Must be :backward, :forward, or :nearest.")
                           {:dt/error :join-unknown-direction :dt/direction direction})))
+        (check-tolerance-compatible! tolerance left right left-keys right-keys)
         (when validate
           (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
             (throw (ex-info (str "Unknown :validate value: " validate

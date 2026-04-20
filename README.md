@@ -593,32 +593,47 @@ Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask compute
 
 ## Quantile Grouping with `qtile`
 
-`qtile` is the `:by`-friendly companion to `cut` — produces an equal-count bin assignment from a column's distribution, computed once from the dataset before grouping. Use it when you want to *group by* quantile, rather than *derive a column of* quantile bins. Inspired by R's `cut` and Stata's `xtile`; named `qtile` to evoke quintile/decile:
+`qtile` is the `:by`-friendly companion to `cut` — produces an equal-count bin assignment from a column's distribution. Use it when you want to *group by* quantile, rather than *derive a column of* quantile bins. Inspired by R's `cut` and Stata's `xtile`; named `qtile` to evoke quintile/decile:
 
 ```clojure
-;; Quintile buckets of market cap
+;; Global quintile buckets of market cap
 (dt stocks :by [(qtile :mktcap 5)]
     :agg {:n nrow :mean-ret #dt/e (mn :ret)})
 ;; Result column is auto-named :mktcap-q5
 
-;; NYSE-style breakpoints for :by — compute quintile boundaries from NYSE stocks,
-;; apply to all stocks (NYSE + AMEX + NASDAQ)
-(dt stocks :by [(qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
-    :agg {:n nrow :mean-ret #dt/e (mn :ret)})
-
-;; Per-date size quintiles combined with an exact key
+;; Per-date size quintiles — the canonical CRSP / Fama-French pattern.
+;; Each date gets its own breakpoints.
 (dt stocks :by [:date (qtile :mktcap 5)]
     :agg {:mean-ret #dt/e (mn :ret)})
+
+;; Per-date NYSE-style breakpoints applied to all stocks — Fama-French size sort.
+;; For each date, breakpoints are computed from that date's NYSE stocks only,
+;; then applied to all stocks (NYSE + AMEX + NASDAQ) on that date.
+(dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+    :agg {:mean-ret #dt/e (mn :ret)})
 ```
+
+**Breakpoint population depends on what else is in `:by`:**
+
+| `:by` shape | Breakpoints |
+|---|---|
+| `qtile` alone | Global — computed once from the whole dataset |
+| `qtile` + exact keys | Per-partition — computed within each exact-key combination (the data.table / dplyr default) |
+| `qtile :from <mask>` | Reference-subpopulation — the mask selects rows for breakpoint computation, applied in whichever population (global or per-partition) the rest of `:by` implies |
+
+For the same bucketing semantics inside `#dt/e` expressions (`:set` / `:where` / `:agg`) rather than `:by`, use `#dt/e (cut :col n)`.
 
 | | `qtile` | `#dt/e (cut ...)` |
 |---|---|---|
 | Context | `:by` (grouping) | `:set` / `:where` / `:agg` (expression) |
 | Result | Integer bin key (1..n, or nil for nil input) | Column of bin integers |
+| Per-partition via | Exact keys in same `:by` | `:by` + `:set` window mode |
 | `:from` option | Supported (reference subpopulation) | Supported (reference subpopulation) |
 | Result column name | Auto `<col>-q<n>` (customise via `:datajure/col` metadata) | Whatever you name it in `:set` |
 
-Both compute the same breakpoints (equal-count bins from non-nil values). Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a column value.
+Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a column value you want to keep alongside the original rows.
+
+**Note on small partitions.** If a partition has fewer than `n` non-nil values, breakpoints cannot be computed and all non-nil rows in that partition land in bin 1. Filter out thin partitions upstream or use fewer bins.
 
 ## Computed `:by` — Custom Grouping Functions
 

@@ -13,8 +13,13 @@
         dt (dtype/elemwise-datatype col)
         n (dtype/ecount col)
         n-missing (dtype/ecount (ds/missing col))
-        numeric? (casting/numeric-type? dt)]
-    (if numeric?
+        numeric? (casting/numeric-type? dt)
+        ;; Skip dfn stats if the column has no observable values (all-missing or
+        ;; empty). Otherwise dfn/standard-deviation on an all-NaN :float64 column
+        ;; returns -0.0 even though mean/min/max correctly return nil, yielding
+        ;; an incoherent summary row.
+        all-missing? (or (zero? n) (= n-missing n))]
+    (if (and numeric? (not all-missing?))
       (let [pcts (dfn/percentiles col [25 50 75])]
         {:column col-kw
          :datatype dt

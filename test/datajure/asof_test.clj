@@ -284,3 +284,57 @@
       (is (some? e))
       (is (= :join-unknown-direction (:dt/error (ex-data e))))
       (is (= :sideways (:dt/direction (ex-data e)))))))
+
+(deftest asof-tolerance-non-numeric-error-test
+  ;; Regression: :tolerance on a non-numeric asof key (e.g. LocalDateTime)
+  ;; used to surface as a raw java.lang.ClassCastException from
+  ;; (double dt-value) inside asof/within-tolerance?. Now fails fast with
+  ;; a structured ex-info naming both sides.
+  (testing ":tolerance on LocalDateTime asof key throws :join-tolerance-non-numeric"
+    (let [left (ds/->dataset {:sym ["A"]
+                              :time [(java.time.LocalDateTime/of 2024 1 1 10 0)]})
+          right (ds/->dataset {:sym ["A"]
+                               :time [(java.time.LocalDateTime/of 2024 1 1 9 59)]
+                               :bid [100.0]})
+          e (try (join left right :on [:sym :time] :how :asof :tolerance 60)
+                 nil
+                 (catch clojure.lang.ExceptionInfo e e))
+          ed (ex-data e)]
+      (is (some? e))
+      (is (= :join-tolerance-non-numeric (:dt/error ed)))
+      (is (= 60 (:dt/tolerance ed)))
+      (is (= :time (:dt/left-asof-col ed)))
+      (is (= :time (:dt/right-asof-col ed)))
+      (is (= :local-date-time (:dt/left-asof-datatype ed)))
+      ;; Error message is actionable — mentions epoch-milliseconds as the fix.
+      (is (re-find #"epoch-milliseconds" (.getMessage e)))))
+  (testing ":tolerance with asymmetric datetime keys also caught"
+    (let [left (ds/->dataset {:sym ["A"]
+                              :trade-time [(java.time.LocalDateTime/of 2024 1 1 10 0)]})
+          right (ds/->dataset {:sym ["A"]
+                               :quote-time [(java.time.LocalDateTime/of 2024 1 1 9 59)]
+                               :bid [100.0]})
+          ed (try (join left right :left-on [:sym :trade-time] :right-on [:sym :quote-time]
+                        :how :asof :tolerance 60)
+                  nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :join-tolerance-non-numeric (:dt/error ed)))
+      (is (= :trade-time (:dt/left-asof-col ed)))
+      (is (= :quote-time (:dt/right-asof-col ed)))))
+  (testing ":tolerance without a datetime column still works (no regression)"
+    (let [left (ds/->dataset {:time [100.0 500.0]})
+          right (ds/->dataset {:time [50.0 300.0] :bid [10.0 20.0]})
+          result (join left right :on [:time] :how :asof :tolerance 100)]
+      (is (= 2 (ds/row-count result)))
+      (is (= 10.0 (nth (vec (:bid result)) 0)))
+      ;; 500−300=200 > tolerance 100 → nil
+      (is (nil? (nth (vec (:bid result)) 1)))))
+  (testing "datetime asof without :tolerance still works (no regression)"
+    (let [left (ds/->dataset {:sym ["A"]
+                              :time [(java.time.LocalDateTime/of 2024 1 1 10 0)]})
+          right (ds/->dataset {:sym ["A"]
+                               :time [(java.time.LocalDateTime/of 2024 1 1 9 59)]
+                               :bid [100.0]})
+          result (join left right :on [:sym :time] :how :asof)]
+      (is (= 1 (ds/row-count result)))
+      (is (= 100.0 (first (vec (:bid result))))))))
