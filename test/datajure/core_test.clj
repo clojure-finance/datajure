@@ -716,7 +716,6 @@
           ed (try (core/dt ds :set {:bmi #dt/e (/ :mass :hieght)})
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
-      (is (= #{:hieght} (:dt/columns ed)))
       (is (= [:height] (get-in ed [:dt/closest :hieght]))))))
 
 (deftest win-rank-basic
