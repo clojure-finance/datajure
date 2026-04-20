@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-04-20
+
+A post-alpha audit pass reconciling the library with data.table-style semantics, plus a handful of correctness fixes uncovered by REPL verification of the DSL's per-partition execution paths.
+
+### Changed
+
+- **`qtile` now uses per-partition breakpoints when combined with exact keys in `:by`.** Previously `:by [:date (qtile :mktcap 5)]` computed breakpoints once from the whole dataset (and silently produced wrong answers for per-date cross-sectional sorts — the canonical CRSP / Fama-French size sort). It now partitions by the exact keys first, then resolves `qtile` against each sub-dataset, matching data.table / dplyr / q:
+  ```clojure
+  ;; Per-date size quintiles — now works the obvious way
+  (core/dt stocks :by [:date (core/qtile :mktcap 5)]
+           :agg {:mean-ret #dt/e (mn :ret)})
+
+  ;; Per-date NYSE-style breakpoints applied to all stocks (Fama-French size sort)
+  (core/dt stocks :by [:date (core/qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+           :agg {:mean-ret #dt/e (mn :ret)})
+  ```
+  An audit of every other DSL feature (`stat/*`, aggregations inside composite `#dt/e`, `cut :from`, `win/*`, `row/*`, `xbar`, `join :asof`/`:window`) confirmed `qtile` was the only outlier — every other feature already ran per-partition by virtue of living inside `apply-group-*`. Pure-`qtile` `:by` (no exact keys) still resolves globally since there is nothing to partition by.
+
 ### Added
 
-- **`cast` — long→wide reshaping.** Complement to `melt`. For each unique combination of `:id` column values, pivots the `:from` column's distinct values into new columns filled from the `:value` column. New column names derived from `:from` values (keywords pass through; strings converted via `keyword`). Supports `:agg` for duplicate cells and `:fill` for missing cells (default nil). `#dt/e` round-trips with `melt` correctly.
+- **`cast` — long→wide reshaping.** Complement to `melt`. For each unique combination of `:id` column values, pivots the `:from` column's distinct values into new columns filled from the `:value` column. New column names derived from `:from` values (keywords pass through; strings converted via `keyword`). Supports `:agg` for duplicate cells and `:fill` for missing cells (default nil). `melt` / `cast` round-trip correctly.
   ```clojure
   ;; Reverse a melt
   (-> ds
@@ -20,9 +38,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (cast ds {:id [:date :sym] :from :metric :value :val :agg dfn/mean})
   ```
 
+- **`cast` accepts a single-keyword `:id`.** Normalised to a one-element vector, matching `melt`. Previously a single-keyword `:id` errored with `"Don't know how to create ISeq from: clojure.lang.Keyword"`.
+
+### Fixed
+
+- **`row/sum`, `row/mean`, `row/min`, `row/max` on all-nil rows.** The four row-wise aggregators declared `:float64` readers but claimed in their docstrings to return `nil` when every input is nil. Primitive float readers cannot hold `nil` — the value was silently coerced to `NaN`, contradicting the docstring. Readers are now `:object`, so all-nil rows honestly return `nil`. `row-min` / `row-max` also cast non-nil results to `double` to preserve the always-numeric-result convention.
+
+- **`wavg` / `wsum` with mismatched column lengths.** Previously silently truncated (when the weight column was shorter) or NPE'd (when the value column was shorter). Now throws a structured `:unequal-column-lengths` `ex-info` with `:dt/op`, `:dt/weight-length`, and `:dt/value-length` in `ex-data`.
+
+- **`join :asof :tolerance` on datetime asof keys.** Previously produced a raw `java.lang.ClassCastException` from an unguarded `(double dt-value)` coercion inside `within-tolerance?`. Now validates numerically-compatible asof key types upfront and throws a structured `:join-tolerance-non-numeric` `ex-info` with actionable guidance (convert to epoch-milliseconds). Symmetric and asymmetric join key shapes (`:on` vs `:left-on`/`:right-on`) both report the correct column names in `ex-data`.
+
+- **`describe` on all-missing numeric columns.** When every value in a numeric column was missing, `dfn/standard-deviation` returned `-0.0` while `mean`, `min`, `max`, `median`, and percentiles correctly returned `nil`, producing an incoherent summary row. `describe-column` now routes all-missing numeric columns through the nil-filled branch (same as non-numeric columns).
+
+- **`parse-window-spec` now strict-validates window spec shape.** Previously the implementation destructured `[a b c :as wspec]` and silently dropped any trailing elements. Malformed specs now throw a structured `:join-invalid-window` `ex-info` — trailing junk, wrong arity, non-numeric endpoints, non-vector specs, and misplaced unit keywords are all rejected upfront. Valid `[lo hi]`, `[lo hi unit]`, and `[lo unit hi]` shapes behave exactly as before.
+
+- **`count-distinct` now excludes `nil`.** The fn included `nil` in its distinct count, contradicting its docstring ("non-nil values"). Fixed by filtering `some?` before `distinct`.
+
+- **`qtile` and `cut` now use the same breakpoint algorithm.** `qtile`'s `percentile-breakpoints` previously used a floor-index approximation that produced different breakpoints than `cut-bucket` (which uses `dfn/percentiles`). The two now share `dfn/percentiles`, so `qtile :mktcap 5` and `#dt/e (cut :mktcap 5)` produce identical bins for the same population.
+
+- **Breakpoint-at-exact-value semantics unified across `qtile` and `cut`.** `bin-via-breakpoints` now uses `<=` (values equal to a breakpoint go to the lower bin), matching `cut-bucket`'s `java.util.Arrays/binarySearch` exact-match behaviour. The previously passing `qtile-from-basic` test's assertion was wrong; corrected to reflect actual semantics.
+
+- **`xbar` / `xbar-bucket` now use `Math/floorDiv`.** Previously used `quot`, which truncates toward zero — so negative values bucketed incorrectly relative to q's `xbar` semantics. E.g. `(xbar -3 5)` now returns `-5` rather than `0`.
+
+- **`validate-expr-cols` and `validate-select-cols` NPE on zero-column datasets.** Both helpers computed `(->> avail-names (map ...) (sort-by second) first)`, which returned `nil` when `avail-names` was empty. `(second nil)` yielded `nil`, and `(<= nil 3)` threw `NullPointerException`. Guarded with `(and closest ...)` in the suggestion-emission branch.
+
+### Developer experience
+
+- **`win/scan` op normalisation mirrors `win/each-prior`.** The parser now prefers `sym->op` for the canonical keyword, so invalid scan ops like `/` resolve to `:div` (consistent with the rest of the codebase) rather than a keyword literally spelled with a slash. Valid scan ops (`+`, `*`, `max`, `min`) are unchanged in both AST and runtime.
+
+### Internal
+
+- **Damerau-Levenshtein deduplication.** The edit-distance implementation used by typo suggestions was duplicated byte-for-byte in `datajure.core` and `datajure.expr`. Extracted to the public `datajure.expr/damerau-levenshtein` as the single source of truth; both `validate-expr-cols` / `validate-select-cols` and `suggest-op` now call it.
+
+- **Dead `win-ops` set removed** from `datajure.expr` (unused, and stale — missing `win/scan` and `win/each-prior`).
+
 ### Testing
 
-- Test count: 299 → 310 (+11 new deftests, +22 assertions). CI: 268/901. All passing.
+- Test count: 310 → 318 (+8 new deftests, +89 assertions). CI subset: 268/901 → 276/989. All passing.
+- New deftests: `row-fns-all-nil-returns-nil-not-nan`, `wavg-wsum-unequal-lengths`, `asof-tolerance-non-numeric-error-test`, `describe-all-missing-numeric`, `wjoin-invalid-window-shape-test`, `qtile-per-group-breakpoints`, `qtile-from-with-exact-key`. The existing `qtile-combined-with-keyword` test was strengthened from a column-names-only check to an assertion of per-group bin counts (would fail loudly against the old global-breakpoint implementation).
 
 ## [2.0.8] - 2026-04-18
 
@@ -137,7 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.8...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.9...HEAD
+[2.0.9]: https://github.com/clojure-finance/datajure/compare/v2.0.8...v2.0.9
 [2.0.8]: https://github.com/clojure-finance/datajure/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/clojure-finance/datajure/compare/v2.0.6...v2.0.7
 [2.0.6]: https://github.com/clojure-finance/datajure/compare/v2.0.5...v2.0.6

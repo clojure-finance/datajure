@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.8"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.9"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
