@@ -363,7 +363,7 @@ Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`.
 
 ## Joins
 
-Standalone function with cardinality validation and merge diagnostics. Supports regular joins (`:inner`, `:left`, `:right`, `:outer`) and as-of joins (`:asof`).
+Standalone function with cardinality validation and merge diagnostics. Supports regular joins (`:inner`, `:left`, `:right`, `:outer`), as-of joins (`:asof`, with `:direction` and `:tolerance`), and window joins (`:window`, aggregates over matched sub-datasets).
 
 ```clojure
 (require '[datajure.join :refer [join]])
@@ -870,7 +870,7 @@ clj -A:nrepl -e "
     'datajure.clay-test 'datajure.stat-test)"
 ```
 
-310 tests, 1005 assertions (CI subset: 268 tests, 901 assertions).
+318 tests, 1093 assertions (CI subset: 276 tests, 989 assertions).
 
 ## Prior Work
 
