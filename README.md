@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.9"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.10"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -539,12 +539,19 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 (require '[datajure.io :as dio])
 
 (def ds (dio/read "data.csv"))
+(def ds (dio/read "data.json"))       ;; native, no extra dep
+(def ds (dio/read "data.jsonl"))      ;; JSON Lines (also .ndjson)
 (def ds (dio/read "data.parquet"))    ;; needs tech.v3.libs.parquet
 (def ds (dio/read "data.tsv.gz"))     ;; gzip auto-detected
 (dio/write ds "output.csv")
+(dio/write ds "output.jsonl")
+
+;; Stream a large file in row batches (Parquet by row-group; JSON Lines by :batch-size)
+(doseq [chunk (dio/read-seq "huge.jsonl" {:batch-size 50000})]
+  (process chunk))
 ```
 
-Supported: CSV, TSV, Parquet, Arrow, Excel, Nippy. Gzipped variants auto-detected.
+Supported: CSV, TSV, JSON, JSON Lines (`.jsonl`/`.ndjson`), Nippy (native), Parquet, Arrow, Excel (optional deps). Gzipped native-format variants auto-detected. `read-seq` streams Parquet (row groups) and JSON Lines (`:batch-size` row batches).
 
 ## Bucketing with `xbar`
 
@@ -869,8 +876,6 @@ clj -A:nrepl -e "
     'datajure.asof-test 'datajure.nrepl-test 'datajure.clerk-test
     'datajure.clay-test 'datajure.stat-test)"
 ```
-
-318 tests, 1093 assertions (CI subset: 276 tests, 989 assertions).
 
 ## Prior Work
 

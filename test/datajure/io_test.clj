@@ -55,6 +55,99 @@
         (is (= #{:species :mass :year} (set (ds/column-names result))))
         (.delete (File. path))))))
 
+(deftest json-round-trip
+  (testing "write and read JSON"
+    (let [path (tmp "datajure-test.json")]
+      (dio/write test-ds path)
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))
+        (is (= #{:species :mass :year} (set (ds/column-names result))))
+        (.delete (File. path))))))
+
+(deftest json-gz-round-trip
+  (testing "write and read gzipped JSON"
+    (let [path (tmp "datajure-test.json.gz")]
+      (dio/write test-ds path)
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))
+        (is (= #{:species :mass :year} (set (ds/column-names result))))
+        (.delete (File. path))))))
+
+(deftest jsonl-round-trip
+  (testing "write and read JSON Lines"
+    (let [path (tmp "datajure-test.jsonl")]
+      (dio/write test-ds path)
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))
+        (is (= #{:species :mass :year} (set (ds/column-names result))))
+        (.delete (File. path))))))
+
+(deftest jsonl-gz-round-trip
+  (testing "write and read gzipped JSON Lines"
+    (let [path (tmp "datajure-test.jsonl.gz")]
+      (dio/write test-ds path)
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))
+        (is (= #{:species :mass :year} (set (ds/column-names result))))
+        (.delete (File. path))))))
+
+(deftest ndjson-extension-alias
+  (testing ".ndjson is treated as JSON Lines"
+    (let [path (tmp "datajure-test.ndjson")]
+      (dio/write test-ds path)
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))
+        (is (= #{:species :mass :year} (set (ds/column-names result))))
+        (.delete (File. path))))))
+
+(deftest jsonl-read-seq-streams-in-batches
+  (testing "read-seq on JSONL yields multiple chunks sized by :batch-size, in order"
+    (let [big  (ds/->dataset {:i (vec (range 10)) :v (mapv #(str "v" %) (range 10))})
+          path (tmp "datajure-test-stream.jsonl")]
+      (dio/write big path)
+      (let [chunks (dio/read-seq path {:batch-size 4})]   ;; 10 rows / 4 -> [4 4 2]
+        (is (= 3 (count chunks)))
+        (is (= [4 4 2] (mapv ds/row-count chunks)))
+        (is (= 10 (reduce + (map ds/row-count chunks))))
+        (is (= (vec (range 10)) (vec (mapcat #(seq (% :i)) chunks))))
+        ;; reader is released after full realization: a fresh read still works
+        (is (= 10 (ds/row-count (dio/read path)))))
+      (.delete (File. path)))))
+
+(deftest jsonl-read-seq-default-single-chunk
+  (testing "small JSONL fits in one chunk under the default batch size"
+    (let [path (tmp "datajure-test-stream1.jsonl")]
+      (dio/write test-ds path)
+      (is (= 1 (count (dio/read-seq path))))
+      (.delete (File. path)))))
+
+(deftest jsonl-sparse-rows-and-blank-lines
+  (testing "missing keys become nil; blank lines are skipped"
+    (let [path (tmp "datajure-test-sparse.jsonl")]
+      (spit path "{\"a\":1,\"b\":\"x\"}\n\n{\"a\":2}\n{\"a\":3,\"b\":\"z\"}\n")
+      (let [result (dio/read path)]
+        (is (= 3 (ds/row-count result)))            ;; blank line skipped
+        (is (= ["x" nil "z"] (vec (result :b)))))    ;; missing :b -> nil
+      (.delete (File. path)))))
+
+(deftest json-read-seq
+  (testing "read-seq on JSON yields a one-element seq of the whole dataset"
+    (let [path (tmp "datajure-test-seq.json")]
+      (dio/write test-ds path)
+      (let [chunks (dio/read-seq path)]
+        (is (= 1 (count chunks)))
+        (is (= 3 (ds/row-count (first chunks))))
+        (is (= #{:species :mass :year} (set (ds/column-names (first chunks)))))
+        (.delete (File. path))))))
+
+(deftest read-seq-unsupported-format
+  (testing "read-seq on a non-Parquet/non-JSON format throws :unsupported-format"
+    (let [e (try (dio/read-seq "data.csv") nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? e))
+      (is (= :unsupported-format (-> e ex-data :dt/error)))
+      (is (= :csv (-> e ex-data :dt/ext))))))
+
 (deftest keyword-columns-by-default
   (testing "read returns keyword column names by default"
     (let [path (tmp "datajure-test-kw.csv")]
@@ -73,15 +166,15 @@
 
 (deftest unsupported-format-read
   (testing "unsupported extension throws :unsupported-format"
-    (let [e (try (dio/read "data.json") nil
+    (let [e (try (dio/read "data.xml") nil
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (some? e))
       (is (= :unsupported-format (-> e ex-data :dt/error)))
-      (is (= :json (-> e ex-data :dt/ext))))))
+      (is (= :xml (-> e ex-data :dt/ext))))))
 
 (deftest unsupported-format-write
   (testing "unsupported extension on write throws :unsupported-format"
-    (let [e (try (dio/write test-ds "output.json") nil
+    (let [e (try (dio/write test-ds "output.xml") nil
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (some? e))
       (is (= :unsupported-format (-> e ex-data :dt/error))))))

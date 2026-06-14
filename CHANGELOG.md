@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.10] - 2026-06-14
+
+### Added
+
+- **JSON I/O in `datajure.io`.** `.json` (and `.json.gz`) is now a natively supported format for `read` and `write`, alongside CSV/TSV/Nippy — no optional dependency required (`tech.v3.dataset` parses/emits JSON via charred). Files are read/written as a JSON array of row objects; column names round-trip as keywords like every other format.
+  ```clojure
+  (dio/read "data.json")
+  (dio/write ds "output.json")
+  (dio/read "data.json.gz")   ;; gzip auto-detected
+  ```
+  `read-seq` also accepts `.json`: since a JSON array is a single document with no chunk boundaries, it is read whole and yielded as a **one-element** lazy sequence (API uniformity across formats — no streaming/memory benefit; use Parquet or JSON Lines for true out-of-core reads).
+
+- **JSON Lines I/O (`.jsonl` / `.ndjson`) in `datajure.io`.** Newline-delimited JSON — one object per line — for `read`, `write`, and `read-seq` (and `.gz` variants). Unlike a JSON array, JSON Lines is genuinely chunk-able, so `read-seq` **streams** it in batches of `:batch-size` rows (default 100000), suitable for files larger than memory. Parsing/encoding uses charred (the same library tech.v3.dataset uses), now declared as an explicit dependency. Missing keys read back as `nil`; blank lines are skipped.
+  ```clojure
+  (dio/read  "events.jsonl")
+  (dio/write ds "events.jsonl")
+  (doseq [chunk (dio/read-seq "huge.jsonl" {:batch-size 50000})]   ;; streamed
+    (process chunk))
+  ```
+
 ## [2.0.9] - 2026-04-20
 
 A post-alpha audit pass reconciling the library with data.table-style semantics, plus a handful of correctness fixes uncovered by REPL verification of the DSL's per-partition execution paths.
@@ -190,7 +210,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.9...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.10...HEAD
+[2.0.10]: https://github.com/clojure-finance/datajure/compare/v2.0.9...v2.0.10
 [2.0.9]: https://github.com/clojure-finance/datajure/compare/v2.0.8...v2.0.9
 [2.0.8]: https://github.com/clojure-finance/datajure/compare/v2.0.7...v2.0.8
 [2.0.7]: https://github.com/clojure-finance/datajure/compare/v2.0.6...v2.0.7
