@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.11] - 2026-06-14
+
 ### Added
 
 - **Max/min aggregation inside `#dt/e` (`mx` / `mi`).** `#dt/e` previously had no max/min op at all, so the canonical OHLC example `:hi #dt/e (mx :price)` threw `Unknown op` at read time (uncaught because the OHLC tests only asserted open/close, never hi/lo). `mx`/`mi` aggregate a column's maximum/minimum, skipping nil and returning nil for an all-missing column.
@@ -231,7 +233,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.10...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.11...HEAD
+[2.0.11]: https://github.com/clojure-finance/datajure/compare/v2.0.10...v2.0.11
 [2.0.10]: https://github.com/clojure-finance/datajure/compare/v2.0.9...v2.0.10
 [2.0.9]: https://github.com/clojure-finance/datajure/compare/v2.0.8...v2.0.9
 [2.0.8]: https://github.com/clojure-finance/datajure/compare/v2.0.7...v2.0.8
