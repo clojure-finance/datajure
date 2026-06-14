@@ -345,6 +345,21 @@
              :dt/expected 2
              :dt/got n-args}))))
 
+(defn- check-arith-nil-literal!
+  "Arithmetic ops require non-nil operands. A literal nil — e.g. `(+ :x nil)` —
+  is rejected at read time with a clear error: nil is ambiguous in arithmetic
+  (is `(+ 3 nil)` 3? nil? NaN?), so the user declares intent explicitly via
+  `coalesce` or `div0`. Predicates keep their unambiguous nil-literal → false
+  rule, so this check is scoped to arithmetic only."
+  [op-kw op-sym args]
+  (when (and (#{:+ :- :* :div :sq :log} op-kw) (some nil? args))
+    (throw (ex-info
+            (str "Arithmetic op `" op-sym "` received a literal nil. Arithmetic "
+                 "requires non-nil operands — use `coalesce` to supply a value, "
+                 "or `div0` for nil-safe division.")
+            {:dt/error :arith-nil-literal
+             :dt/op op-sym}))))
+
 ;; ---------------------------------------------------------------------------
 ;; AST node constructors
 ;; ---------------------------------------------------------------------------
@@ -470,6 +485,7 @@
          :else
          (let [op-kw (->op-kw op)]
            (check-op-arity! op-kw op (count args))
+           (check-arith-nil-literal! op-kw op args)
            (op-node op-kw (mapv #(parse-form % env) args)))))
      :else (lit-node form))))
 

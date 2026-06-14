@@ -1457,6 +1457,26 @@
     (is (some? (read-string "#dt/e (wavg :w :v)")))
     (is (some? (read-string "#dt/e (wsum :w :v)")))))
 
+(deftest arith-nil-literal-error
+  (testing "arithmetic with a literal nil throws a clear :arith-nil-literal error"
+    (let [ed (try (read-string "#dt/e (+ :x nil)") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :arith-nil-literal (:dt/error ed)))
+      (is (= '+ (:dt/op ed))))
+    (let [msg (try (read-string "#dt/e (/ :x nil)") nil
+                   (catch clojure.lang.ExceptionInfo e (.getMessage e)))]
+      (is (re-find #"requires non-nil operands" msg))
+      (is (re-find #"coalesce" msg))
+      (is (re-find #"div0" msg)))
+    ;; caught through nesting too
+    (let [ed (try (read-string "#dt/e (+ :a (* :b nil))") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :arith-nil-literal (:dt/error ed)))))
+  (testing "predicates and nil-handling tools are unaffected by the check"
+    (is (some? (read-string "#dt/e (> :x nil)")))        ; comparison: nil-literal -> false, still compiles
+    (is (some? (read-string "#dt/e (coalesce :x nil)")))  ; coalesce is a nil tool
+    (is (some? (read-string "#dt/e (+ :x 1)")))))         ; normal arithmetic unaffected
+
 (deftest wavg-wsum-unequal-lengths
   ;; Regression: wavg/wsum iterated (range (ecount weight-col)) without
   ;; checking the value column length. w<v silently truncated (wrong answer);

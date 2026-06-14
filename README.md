@@ -165,8 +165,8 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 
 | Situation                                             | Behaviour                |
 |-------------------------------------------------------|--------------------------|
-| Comparison op with a nil *literal* in `#dt/e`         | evaluates to `false`     |
-| Arithmetic op with a nil *literal* in `#dt/e`         | returns `nil`            |
+| Comparison op with a nil *literal* in `#dt/e`         | evaluates to `false` (nil is unambiguous in a predicate) |
+| Arithmetic op with a nil *literal* in `#dt/e`         | clear read-time error — use `coalesce`/`div0` to handle nils explicitly |
 | Column-level nils (nil values within a column)        | depends on the `dfn` op  |
 | Aggregation helpers (`mn`/`sm`/`md`/`sd`/`nrow`/...)  | skip nil; `nil` if all missing (never `0`/`-Inf`/`NaN`) |
 | `win/fills :col`                                      | forward-fill nils        |

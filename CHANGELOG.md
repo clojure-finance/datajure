@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`wavg`/`wsum` wrong-arity error is now structured.** Calling `#dt/e (wavg :x)` (or `wsum`, or the `wa`/`ws` aliases) with other than two arguments now throws a structured `:wrong-arity` `ex-info` at read time — *"`wavg` takes exactly two arguments (weight column, value column). Got 1."* — instead of a raw `clojure.lang.ArityException`.
 
+- **Clear error for a literal nil in arithmetic.** `#dt/e (+ :x nil)` (and `-` / `*` / `/` / `sq` / `log`) now throws a structured `:arith-nil-literal` error at read time — *"Arithmetic op `+` received a literal nil … use `coalesce` … or `div0` …"* — instead of a cryptic `"Item type null has no iterator"` from deep in the dataset layer. Arithmetic requires non-nil operands (nil is ambiguous there); predicates keep their nil-literal → `false` rule, and `coalesce`/`div0` remain the tools for handling nils. (Earlier docs claimed arithmetic-with-a-nil-literal returned nil; it never did — it threw.)
+
 ## [2.0.10] - 2026-06-14
 
 ### Added
