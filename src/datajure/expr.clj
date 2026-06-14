@@ -175,6 +175,20 @@
                   (range n))]
     (if (empty? wvs) nil (reduce + wvs))))
 
+(defn col-max
+  "Column maximum, skipping nil/missing; nil for an all-missing column.
+  `dfn/reduce-max` corrupts the reduction when the column has missing values
+  (a missing slot poisons the running max), so we filter first and use
+  `clojure.core/max`. Backs both the #dt/e `:mx` op and `core/max*`."
+  [col]
+  (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply max vs))))
+
+(defn col-min
+  "Column minimum, skipping nil/missing; nil for an all-missing column.
+  See [[col-max]] for why `dfn/reduce-min` isn't used. Backs `:mi` and `core/min*`."
+  [col]
+  (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply min vs))))
+
 (def ^:private op-table
   {:+ dfn/+
    :- dfn/-
@@ -208,11 +222,8 @@
    :sm dfn/sum
    :md dfn/median
    :sd dfn/standard-deviation
-   ;; max/min aggregation. NB: dfn/reduce-max mis-handles missing values
-   ;; (a missing slot corrupts the running reduction), so filter nil first
-   ;; and use clojure.core/max|min — skips nil, nil for all-missing.
-   :mx (fn [col] (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply max vs))))
-   :mi (fn [col] (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply min vs))))
+   :mx col-max
+   :mi col-min
    :in (fn [col s]
          (dtype/make-reader :boolean (dtype/ecount col)
                             (boolean (contains? s (nth col idx)))))

@@ -2182,12 +2182,13 @@
   (testing "variance returns a number"
     (let [col [3750.0 3800.0 5000.0]]
       (is (number? (core/variance col)))))
-  (testing "max* returns column maximum, skips nil"
-    (let [col [3750.0 nil 3800.0 5000.0]]
-      (is (= 5000.0 (core/max* col)))))
-  (testing "min* returns column minimum, skips nil"
-    (let [col [3750.0 nil 3800.0 5000.0]]
+  (testing "max*/min* skip nil with the extremum BEFORE the nil (regression: dfn/reduce-max corrupts on missing)"
+    (let [col [5000.0 3750.0 nil 4000.0]]   ;; max 5000 and min 3750 both precede the nil
+      (is (= 5000.0 (core/max* col)))
       (is (= 3750.0 (core/min* col)))))
+  (testing "max*/min* return nil for an all-nil column"
+    (is (nil? (core/max* [nil nil])))
+    (is (nil? (core/min* [nil nil]))))
   (testing "count* counts non-nil values"
     (let [col [3750.0 nil 3800.0 nil 5000.0]]
       (is (= 3 (core/count* col)))))

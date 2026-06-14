@@ -370,14 +370,17 @@
   dfn/variance)
 
 (def max*
-  "Column maximum. Full-name alias for `dfn/reduce-max`.
-  Asterisk-suffixed to avoid shadowing `clojure.core/max`."
-  dfn/reduce-max)
+  "Column maximum, skipping nil/missing; nil for an all-missing column.
+  Asterisk-suffixed to avoid shadowing `clojure.core/max`.
+  Delegates to `expr/col-max` — `dfn/reduce-max` returns a wrong value when
+  the column has missing entries (a missing slot corrupts the reduction)."
+  expr/col-max)
 
 (def min*
-  "Column minimum. Full-name alias for `dfn/reduce-min`.
-  Asterisk-suffixed to avoid shadowing `clojure.core/min`."
-  dfn/reduce-min)
+  "Column minimum, skipping nil/missing; nil for an all-missing column.
+  Asterisk-suffixed to avoid shadowing `clojure.core/min`.
+  Delegates to `expr/col-min` (see `max*` for the `dfn/reduce-min` caveat)."
+  expr/col-min)
 
 (defn count*
   "Count of non-nil values in a column.
