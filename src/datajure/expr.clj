@@ -208,6 +208,11 @@
    :sm dfn/sum
    :md dfn/median
    :sd dfn/standard-deviation
+   ;; max/min aggregation. NB: dfn/reduce-max mis-handles missing values
+   ;; (a missing slot corrupts the running reduction), so filter nil first
+   ;; and use clojure.core/max|min — skips nil, nil for all-missing.
+   :mx (fn [col] (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply max vs))))
+   :mi (fn [col] (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply min vs))))
    :in (fn [col s]
          (dtype/make-reader :boolean (dtype/ecount col)
                             (boolean (contains? s (nth col idx)))))
@@ -224,7 +229,7 @@
    'sq :sq, 'log :log
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
-   'mn :mn, 'sm :sm, 'md :md, 'sd :sd
+   'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi
    'in :in, 'between? :between?, 'count-distinct :nuniq
    'first-val :first-val, 'last-val :last-val
    'wavg :wavg, 'wsum :wsum

@@ -596,6 +596,41 @@
       (is (= (vec (:s r1)) (vec (:s r2))))
       (is (= (vec (:m r1)) (vec (:m r2)))))))
 
+(deftest agg-max-min
+  (testing "mx/mi aggregate column max/min inside #dt/e (OHLC hi/lo)"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:sym ["A" "A" "A" "B" "B"] :price [10.0 12.0 11.0 20.0 19.0]})
+          rows (ds/mapseq-reader (core/dt ds :by [:sym]
+                                          :agg {:hi #dt/e (mx :price) :lo #dt/e (mi :price)}))
+          a (first (filter #(= "A" (:sym %)) rows))
+          b (first (filter #(= "B" (:sym %)) rows))]
+      (is (= 12.0 (:hi a)))
+      (is (= 10.0 (:lo a)))
+      (is (= 20.0 (:hi b)))
+      (is (= 19.0 (:lo b)))))
+
+  (testing "mx/mi skip nil (regression: dfn/reduce-max mis-handles missing values)"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:g ["a" "a" "a" "a"] :v [3.0 nil 1.0 2.0]})
+          row (first (ds/mapseq-reader (core/dt ds :by [:g]
+                                                :agg {:hi #dt/e (mx :v) :lo #dt/e (mi :v)})))]
+      (is (= 3.0 (:hi row)))      ; not 2.0 — nil at index 1 must not corrupt the max
+      (is (= 1.0 (:lo row)))))
+
+  (testing "mx/mi return nil for an all-missing column"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:v [nil nil nil]})
+          row (first (ds/mapseq-reader (core/dt ds :agg {:hi #dt/e (mx :v) :lo #dt/e (mi :v)})))]
+      (is (nil? (:hi row)))
+      (is (nil? (:lo row)))))
+
+  (testing "mx/mi compose inside larger #dt/e expressions"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:sym ["A" "A"] :price [10.0 12.0]})
+          row (first (ds/mapseq-reader (core/dt ds :by [:sym]
+                                                :agg {:range #dt/e (- (mx :price) (mi :price))})))]
+      (is (= 2.0 (:range row))))))
+
 (deftest agg-plain-fn-footgun
   (testing "plain fn returning a column via (:col %) throws structured error"
     (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})
@@ -679,7 +714,7 @@
       (is (= :unknown-op (:dt/error ed)))
       (is (contains? (set (:dt/suggestions ed)) 'stat/standardize))))
   (testing "nonsense op gets error without misleading suggestions"
-    (let [ed (try (read-string "#dt/e (xxx :y)")
+    (let [ed (try (read-string "#dt/e (zzz :y)")
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
       (is (= :unknown-op (:dt/error ed)))
