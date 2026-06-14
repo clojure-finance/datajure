@@ -179,7 +179,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 (dt ds :where #dt/e (> :mass 4000))                  ;; nil-literal → false
 (dt ds :set {:mass #dt/e (coalesce :mass 0)})         ;; nil → 0
 (dt ds :set {:pe   #dt/e (div0 :price :earnings)})    ;; zero denom → nil
-(dt ds :set {:x (pass-nil #(parse-int (:x-str %)))})  ;; wrap plain fn
+(dt ds :set {:x (pass-nil #(parse-int (:x-str %)) :x-str)})  ;; nil if :x-str is nil
 ```
 
 ### Special forms
