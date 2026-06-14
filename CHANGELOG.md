@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Max/min aggregation inside `#dt/e` (`mx` / `mi`).** `#dt/e` previously had no max/min op at all, so the canonical OHLC example `:hi #dt/e (mx :price)` threw `Unknown op` at read time (uncaught because the OHLC tests only asserted open/close, never hi/lo). `mx`/`mi` aggregate a column's maximum/minimum, skipping nil and returning nil for an all-missing column.
+  ```clojure
+  (dt trades :by [:sym] :within-order [(asc :time)]
+      :agg {:open #dt/e (first-val :price) :close #dt/e (last-val :price)
+            :hi   #dt/e (mx :price)        :lo    #dt/e (mi :price)})
+  ```
+
+- **Full-name and concise aggregation names now work inside `#dt/e`.** Every `datajure.core` / `datajure.concise` aggregation helper is accepted as a `#dt/e` op, in both spellings — so `#dt/e (max* :price)`, `#dt/e (sum :size)`, `#dt/e (count* :revenue)`, `#dt/e (nuniq :id)` etc. all work, not just the concise `mn`/`sm`/`md`/`sd`. New ops `:variance` and `:ct` (non-nil count, also backing `core/count*`).
+
+### Fixed
+
+- **`core/max*` and `core/min*` returned wrong values on columns with missing data.** They aliased `dfn/reduce-max` / `dfn/reduce-min`, which corrupt the reduction when a missing value precedes the extremum (e.g. `max*` of `[5000 3750 nil 4000]` returned `4000`, not `5000`). They now filter nils first via the shared `expr/col-max` / `expr/col-min`, skipping missing and returning `nil` for an all-missing column; the `#dt/e` `mx`/`mi` ops use the same correct path.
+
 ## [2.0.10] - 2026-06-14
 
 ### Added
