@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`core/max*` and `core/min*` returned wrong values on columns with missing data.** They aliased `dfn/reduce-max` / `dfn/reduce-min`, which corrupt the reduction when a missing value precedes the extremum (e.g. `max*` of `[5000 3750 nil 4000]` returned `4000`, not `5000`). They now filter nils first via the shared `expr/col-max` / `expr/col-min`, skipping missing and returning `nil` for an all-missing column; the `#dt/e` `mx`/`mi` ops use the same correct path.
 
+### Developer experience
+
+- **`wavg`/`wsum` wrong-arity error is now structured.** Calling `#dt/e (wavg :x)` (or `wsum`, or the `wa`/`ws` aliases) with other than two arguments now throws a structured `:wrong-arity` `ex-info` at read time — *"`wavg` takes exactly two arguments (weight column, value column). Got 1."* — instead of a raw `clojure.lang.ArityException`.
+
 ## [2.0.10] - 2026-06-14
 
 ### Added

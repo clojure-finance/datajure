@@ -1437,6 +1437,26 @@
           result (core/dt ds :agg {:wa #dt/e (wavg :w :v)})]
       (is (= 10.0 (first (vec (:wa result))))))))
 
+(deftest wavg-wsum-arity-error
+  (testing "wavg/wsum with wrong arity throw a structured :wrong-arity error at read time"
+    (let [ed (try (read-string "#dt/e (wavg :v)") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :wrong-arity (:dt/error ed)))
+      (is (= 2 (:dt/expected ed)))
+      (is (= 1 (:dt/got ed))))
+    (let [msg (try (read-string "#dt/e (wsum :a :b :c)") nil
+                   (catch clojure.lang.ExceptionInfo e (.getMessage e)))]
+      (is (re-find #"takes exactly two arguments \(weight column, value column\)" msg))
+      (is (re-find #"Got 3" msg))))
+  (testing "concise wa/ws aliases are arity-checked too"
+    (let [ed (try (read-string "#dt/e (wa :v)") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :wrong-arity (:dt/error ed)))
+      (is (= 'wa (:dt/op ed)))))   ; message names the symbol the user wrote
+  (testing "correct 2-arg wavg/wsum still parse cleanly"
+    (is (some? (read-string "#dt/e (wavg :w :v)")))
+    (is (some? (read-string "#dt/e (wsum :w :v)")))))
+
 (deftest wavg-wsum-unequal-lengths
   ;; Regression: wavg/wsum iterated (range (ecount weight-col)) without
   ;; checking the value column length. w<v silently truncated (wrong answer);

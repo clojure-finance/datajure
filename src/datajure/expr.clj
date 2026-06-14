@@ -331,6 +331,20 @@
                  :dt/op-type (type op)
                  :dt/suggestions suggestions})))))
 
+(defn- check-op-arity!
+  "Read-time arity check for the fixed-arity helper ops the spec documents a
+  friendly error for. `wavg`/`wsum` (and their `wa`/`ws` aliases) take exactly
+  two arguments — a weight column and a value column."
+  [op-kw op-sym n-args]
+  (when (and (#{:wavg :wsum} op-kw) (not= 2 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly two arguments (weight column, value column). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity
+             :dt/op op-sym
+             :dt/expected 2
+             :dt/got n-args}))))
+
 ;; ---------------------------------------------------------------------------
 ;; AST node constructors
 ;; ---------------------------------------------------------------------------
@@ -454,7 +468,9 @@
          (contains? stat-sym->op op)
          (stat-node (stat-sym->op op) (mapv #(parse-form % env) args))
          :else
-         (op-node (->op-kw op) (mapv #(parse-form % env) args))))
+         (let [op-kw (->op-kw op)]
+           (check-op-arity! op-kw op (count args))
+           (op-node op-kw (mapv #(parse-form % env) args)))))
      :else (lit-node form))))
 
 ;; ---------------------------------------------------------------------------
