@@ -631,6 +631,45 @@
                                                 :agg {:range #dt/e (- (mx :price) (mi :price))})))]
       (is (= 2.0 (:range row))))))
 
+(deftest dt-e-full-name-agg-aliases
+  (testing "full-name aggregations work inside #dt/e and skip nil"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:g ["a" "a" "a" "a"] :v [10.0 nil 20.0 30.0]})
+          row (first (ds/mapseq-reader
+                      (core/dt ds :by [:g]
+                               :agg {:mean #dt/e (mean :v)   :sum #dt/e (sum :v)
+                                     :med  #dt/e (median :v) :sdv #dt/e (stddev :v)
+                                     :var  #dt/e (variance :v)
+                                     :hi   #dt/e (max* :v)   :lo  #dt/e (min* :v)
+                                     :ct   #dt/e (count* :v)})))]
+      (is (= 20.0 (:mean row)))   ; (10+20+30)/3, nil skipped
+      (is (= 60.0 (:sum row)))
+      (is (= 20.0 (:med row)))
+      (is (= 30.0 (:hi row)))
+      (is (= 10.0 (:lo row)))
+      (is (= 3 (:ct row)))        ; non-nil count
+      (is (number? (:sdv row)))
+      (is (number? (:var row)))))
+
+  (testing "full name and concise alias compile to the same op"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:v [1.0 2.0 3.0 4.0]})
+          one (fn [sym->ast] (first ((core/dt ds :agg {:m sym->ast}) :m)))]
+      (is (= (one #dt/e (mean :v)) (one #dt/e (mn :v))))
+      (is (= (one #dt/e (sum :v))  (one #dt/e (sm :v))))
+      (is (= (one #dt/e (max* :v)) (one #dt/e (mx :v))))
+      (is (= (one #dt/e (min* :v)) (one #dt/e (mi :v))))))
+
+  (testing "concise aliases for the remaining agg ops also work in #dt/e"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:w [1.0 2.0 1.0] :v [10.0 20.0 30.0]})
+          one (fn [sym->ast] (first ((core/dt ds :agg {:m sym->ast}) :m)))]
+      (is (= (one #dt/e (nuniq :v)) (one #dt/e (count-distinct :v))))
+      (is (= (one #dt/e (fst :v))   (one #dt/e (first-val :v))))
+      (is (= (one #dt/e (lst :v))   (one #dt/e (last-val :v))))
+      (is (= (one #dt/e (wa :w :v)) (one #dt/e (wavg :w :v))))
+      (is (= (one #dt/e (ws :w :v)) (one #dt/e (wsum :w :v)))))))
+
 (deftest agg-plain-fn-footgun
   (testing "plain fn returning a column via (:col %) throws structured error"
     (let [ds (ds/->dataset {:species ["A" "A" "B"] :mass [10 20 30]})

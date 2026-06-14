@@ -189,6 +189,11 @@
   [col]
   (let [vs (remove nil? (dtype/->reader col))] (when (seq vs) (apply min vs))))
 
+(defn count-non-nil
+  "Count of non-nil values in a column. Backs the #dt/e `:ct` op and `core/count*`."
+  [col]
+  (count (remove nil? (dtype/->reader col))))
+
 (def ^:private op-table
   {:+ dfn/+
    :- dfn/-
@@ -224,6 +229,8 @@
    :sd dfn/standard-deviation
    :mx col-max
    :mi col-min
+   :variance dfn/variance
+   :ct count-non-nil
    :in (fn [col s]
          (dtype/make-reader :boolean (dtype/ecount col)
                             (boolean (contains? s (nth col idx)))))
@@ -241,6 +248,13 @@
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
    'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi
+   ;; full-name aliases for the aggregation ops (datajure.core names), so both
+   ;; (mn :x) and (mean :x) work inside #dt/e
+   'mean :mn, 'sum :sm, 'median :md, 'stddev :sd, 'variance :variance
+   'max* :mx, 'min* :mi, 'count* :ct, 'ct :ct
+   ;; concise aliases for the remaining aggregation ops, so the full datajure.concise
+   ;; vocabulary works inside #dt/e (e.g. both (count-distinct :x) and (nuniq :x))
+   'nuniq :nuniq, 'fst :first-val, 'lst :last-val, 'wa :wavg, 'ws :wsum
    'in :in, 'between? :between?, 'count-distinct :nuniq
    'first-val :first-val, 'last-val :last-val
    'wavg :wavg, 'wsum :wsum

@@ -382,12 +382,12 @@
   Delegates to `expr/col-min` (see `max*` for the `dfn/reduce-min` caveat)."
   expr/col-min)
 
-(defn count*
+(def count*
   "Count of non-nil values in a column.
   Asterisk-suffixed to avoid shadowing `clojure.core/count`.
-  Distinct from N (total rows) and count-distinct (unique non-nil values)."
-  [col]
-  (count (remove nil? (dtype/->reader col))))
+  Distinct from N (total rows) and count-distinct (unique non-nil values).
+  Delegates to `expr/count-non-nil` (shared with the #dt/e `:ct` op)."
+  expr/count-non-nil)
 
 (defn pass-nil
   "Wraps a row-level fn to return nil if any of the specified guard columns
