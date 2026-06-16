@@ -1581,7 +1581,11 @@
   (testing "the #dt/e op and core/div0 agree (shared guard = single source of truth)"
     (let [ds (ds/->dataset {:x [10.0 20.0] :y [2.0 0.0]})]
       (is (= (vec ((core/dt ds :set {:r #dt/e (div0 :x :y)}) :r))
-             (vec ((core/dt ds :set {:r (fn [row] (core/div0 (:x row) (:y row)))}) :r)))))))
+             (vec ((core/dt ds :set {:r (fn [row] (core/div0 (:x row) (:y row)))}) :r))))))
+  (testing "#dt/e div0 with scalar operands returns a scalar, so it broadcasts in composed exprs"
+    (let [ds (ds/->dataset {:x [1.0 2.0 3.0]})]
+      (is (= [1.5 2.5 3.5] (vec ((core/dt ds :set {:z #dt/e (+ :x (div0 1 2))}) :z))))
+      (is (= [0.5 0.5 0.5] (vec ((core/dt ds :set {:z #dt/e (div0 1 2)}) :z)))))))
 
 (deftest div0-scalar-denominator
   (testing "div0 works with scalar (literal) denominator"

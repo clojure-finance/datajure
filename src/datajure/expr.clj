@@ -209,17 +209,19 @@
    :* dfn/*
    :div (fn [a b] (dfn// (dfn/double a) (dfn/double b)))
    :div0 (fn [a b]
-           ;; element-wise nil-safe division via the shared scalar `div0`.
-           ;; nil results become NaN in the :float64 reader, which the dataset
-           ;; treats as missing → reads back as nil (existing behavior).
+           ;; nil-safe division via the shared scalar `div0`. When both operands are
+           ;; scalars, return a scalar (like the other arithmetic ops) so it
+           ;; broadcasts in composed exprs e.g. (+ :x (div0 1 2)); otherwise build a
+           ;; :float64 column element-wise (nil → NaN, which the dataset treats as
+           ;; missing → reads back as nil).
            (let [a-reader? (dtype/reader? a)
-                 b-reader? (dtype/reader? b)
-                 n (cond a-reader? (dtype/ecount a)
-                         b-reader? (dtype/ecount b)
-                         :else 1)]
-             (dtype/make-reader :float64 n
-                                (div0 (if a-reader? (nth a idx) a)
-                                      (if b-reader? (nth b idx) b)))))
+                 b-reader? (dtype/reader? b)]
+             (if (or a-reader? b-reader?)
+               (let [n (if a-reader? (dtype/ecount a) (dtype/ecount b))]
+                 (dtype/make-reader :float64 n
+                                    (div0 (if a-reader? (nth a idx) a)
+                                          (if b-reader? (nth b idx) b))))
+               (div0 a b))))
    :sq dfn/sq
    :log dfn/log
    :> dfn/>
