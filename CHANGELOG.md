@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.12] - 2026-06-16
+
 ### Added
 
 - **`core/div0` — nil-safe division as a callable function.** `div0` was an `#dt/e`-only op, so plain-fn contexts (`:set`/`:agg` with `#(...)`, computed `:by`) couldn't reach it and had to roll their own zero-guard. It's now also a public scalar fn: `(div0 num den)` → `nil` when either is nil or the denominator is zero, else `num`/`den` as a double; non-numeric inputs throw normally. The `#dt/e` `div0` op delegates to the same fn (single source of truth via `expr/div0`).
@@ -256,7 +258,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.11...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.12...HEAD
+[2.0.12]: https://github.com/clojure-finance/datajure/compare/v2.0.11...v2.0.12
 [2.0.11]: https://github.com/clojure-finance/datajure/compare/v2.0.10...v2.0.11
 [2.0.10]: https://github.com/clojure-finance/datajure/compare/v2.0.9...v2.0.10
 [2.0.9]: https://github.com/clojure-finance/datajure/compare/v2.0.8...v2.0.9
