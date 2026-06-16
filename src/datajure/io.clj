@@ -119,6 +119,26 @@
       (.write w ^String (charred/write-json-str row))
       (.write w "\n"))))
 
+(def ^:private text-column-filter-keys
+  "Column allow/block-list options that CSV/TSV (charred) match against RAW
+  header strings, before `:key-fn` is applied."
+  [:column-allowlist :column-blocklist :column-whitelist :column-blacklist])
+
+(defn- normalize-text-column-filters
+  "For CSV/TSV, tech.ml.dataset/charred matches column allow/block lists against
+  the raw header strings *before* `:key-fn` runs. datajure forces `:key-fn
+  keyword`, so a keyword allowlist (the natural datajure form) would silently
+  match nothing → a 0-column dataset. Convert keyword entries in those options to
+  their raw names so both `[:a :b]` and `[\"a\" \"b\"]` work. Scoped to CSV/TSV
+  only — Parquet/Arrow match after `:key-fn`, so they're read untouched."
+  [opts]
+  (reduce (fn [o k]
+            (if-let [xs (get o k)]
+              (assoc o k (mapv #(if (keyword? %) (name %) %) xs))
+              o))
+          opts
+          text-column-filter-keys))
+
 (defn read
   "Read a dataset from a file. Dispatches on file extension.
 
@@ -126,7 +146,9 @@
   Optional deps required: .parquet .xlsx .xls .arrow .feather.
 
   Options are passed through to the underlying tech.v3.dataset reader.
-  Columns are returned as keywords by default (:key-fn keyword).
+  Columns are returned as keywords by default (:key-fn keyword). For CSV/TSV,
+  keyword entries in :column-allowlist / :column-blocklist are accepted (and
+  normalised to raw header names) so they work despite the keyword key-fn.
 
   Examples:
     (read \"data.csv\")
@@ -134,13 +156,15 @@
     (read \"data.jsonl\")        ;; JSON Lines — one object per line
     (read \"data.parquet\")
     (read \"data.tsv.gz\")
-    (read \"data.csv\" {:separator \\tab})"
+    (read \"data.csv\" {:separator \\tab})
+    (read \"data.csv\" {:column-allowlist [:a :b]})  ;; keyword allowlist OK for CSV/TSV"
   ([path] (read path {}))
   ([path options]
    (let [ext (file-ext path)
          opts (merge {:key-fn keyword} options)]
      (case ext
-       (:csv :tsv :json :nippy nil) (ds-io/->dataset path opts)
+       (:csv :tsv) (ds-io/->dataset path (normalize-text-column-filters opts))
+       (:json :nippy nil) (ds-io/->dataset path opts)
        (:jsonl :ndjson) (read-jsonl path opts)
        :parquet (do (require-parquet!) (ds-io/->dataset path opts))
        :xlsx (do (require-excel! "xlsx") (ds-io/->dataset path opts))

@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dio/read` accepts keyword `:column-allowlist` / `:column-blocklist` for CSV/TSV.** charred matches these against the raw header strings *before* `:key-fn` is applied, so a keyword allowlist — the natural form, since datajure keyword-izes columns — silently matched nothing and returned a **0-column dataset**. `dio/read` now normalises keyword entries to their raw names for CSV/TSV, so `{:column-allowlist [:a :b]}` and `{:column-allowlist ["a" "b"]}` both work. Scoped to CSV/TSV; Parquet/Arrow match after `:key-fn`, so they're left untouched.
+
 - **`#dt/e (div0 …)` with scalar operands now returns a scalar.** It always built a length-1 column, so a composed expression like `#dt/e (+ :x (div0 1 2))` produced `[1.5 nil nil]` instead of `[1.5 2.5 3.5]` (the length-1 reader only covered row 0). It now returns a scalar when both operands are scalars — consistent with the other arithmetic ops — so it broadcasts correctly. Column operands are unchanged.
 
 - **`and`/`or` in `#dt/e` are now variadic.** They compiled directly to `dfn/and`/`dfn/or`, which are binary-only, so `#dt/e (and p1 p2 p3)` threw `Wrong number of args (3)`. They now fold over `dfn/and`/`dfn/or`, accepting any number of predicates: `#dt/e (and (> :a 1) (> :b 2) (< :c 3))`. (`not` remains unary; zero-arity `(and)`/`(or)` is rejected at read time with a `:wrong-arity` error, since it's meaningless in a vectorized mask.)

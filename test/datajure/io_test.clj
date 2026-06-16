@@ -21,6 +21,29 @@
         (is (= #{:species :mass :year} (set (ds/column-names result))))
         (.delete (File. path))))))
 
+(deftest csv-column-filter-accepts-keywords
+  ;; CSV/TSV (charred) match allow/block lists against raw header strings before
+  ;; :key-fn, so a keyword allowlist used to silently yield 0 columns. dio/read
+  ;; normalises keyword entries to raw names for text formats.
+  (testing "keyword :column-allowlist works (the natural datajure form)"
+    (let [path (tmp "datajure-test-allow.csv")]
+      (dio/write test-ds path)
+      (is (= #{:species :mass}
+             (set (ds/column-names (dio/read path {:column-allowlist [:species :mass]})))))
+      (.delete (File. path))))
+  (testing "keyword :column-blocklist works"
+    (let [path (tmp "datajure-test-block.csv")]
+      (dio/write test-ds path)
+      (is (= #{:species :mass}
+             (set (ds/column-names (dio/read path {:column-blocklist [:year]})))))
+      (.delete (File. path))))
+  (testing "string :column-allowlist still works"
+    (let [path (tmp "datajure-test-allow-str.csv")]
+      (dio/write test-ds path)
+      (is (= #{:species :mass}
+             (set (ds/column-names (dio/read path {:column-allowlist ["species" "mass"]})))))
+      (.delete (File. path)))))
+
 (deftest csv-gz-round-trip
   (testing "write and read gzipped CSV"
     (let [path (tmp "datajure-test.csv.gz")]

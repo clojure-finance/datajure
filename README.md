@@ -556,6 +556,13 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 
 Supported: CSV, TSV, JSON, JSON Lines (`.jsonl`/`.ndjson`), Nippy (native), Parquet, Arrow, Excel (optional deps). Gzipped native-format variants auto-detected. `read-seq` streams Parquet (row groups) and JSON Lines (`:batch-size` row batches).
 
+Columns are read as keywords by default. For CSV/TSV, `:column-allowlist`/`:column-blocklist` accept keyword **or** string names — `(dio/read "data.csv" {:column-allowlist [:a :b]})` works:
+
+```clojure
+(dio/read "data.csv" {:column-allowlist [:a :b]})   ;; only columns a, b
+(dio/read "data.csv" {:column-blocklist [:id]})      ;; everything except id
+```
+
 ## Bucketing with `xbar`
 
 Floor-division bucketing inspired by q's `xbar`. Primary use case is computed `:by` for time-series bar generation:
