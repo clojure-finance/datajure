@@ -220,8 +220,9 @@
    :>= dfn/>=
    :<= dfn/<=
    := dfn/eq
-   :and dfn/and
-   :or dfn/or
+   ;; dfn/and and dfn/or are binary-only, so fold to support (and a b c ...)
+   :and (fn [& args] (reduce dfn/and args))
+   :or (fn [& args] (reduce dfn/or args))
    :not dfn/not
    :mn dfn/mean
    :sm dfn/sum

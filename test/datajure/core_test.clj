@@ -64,6 +64,25 @@
       (is (= 3 (ds/row-count result)))
       (is (every? #{"Gentoo" "Adelie"} (vec (result :species)))))))
 
+(deftest variadic-and-or
+  ;; dfn/and and dfn/or are binary-only; #dt/e folds so (and a b c ...) and
+  ;; (or a b c ...) take any number of predicates.
+  (let [d (ds/->dataset {:a [1 5 5 5] :b [9 5 1 5] :c [9 5 9 5]})]
+    (testing "and/or with 3+ arguments filter correctly"
+      (is (= 2 (ds/row-count (core/dt d :where #dt/e (and (> :a 2) (> :b 2) (> :c 2))))))
+      (is (= 2 (ds/row-count (core/dt d :where #dt/e (and (> :a 2) (> :b 2) (> :c 2) (< :a 100))))))
+      (is (= 4 (ds/row-count (core/dt d :where #dt/e (or (> :a 4) (> :b 8) (> :c 8)))))))
+    (testing "variadic and as a boolean column in :set"
+      (is (= [true true true true]
+             (vec ((core/dt d :set {:f #dt/e (and (> :a 0) (> :b 0) (> :c 0))}) :f)))))
+    (testing "single-arg and/or is the identity of its predicate"
+      (is (= 3 (ds/row-count (core/dt d :where #dt/e (and (> :a 4)))))))
+    (testing "3-arg or nested inside a 3-arg and"
+      (is (= 1 (ds/row-count
+                (core/dt d :where #dt/e (and (or (> :a 10) (> :b 8) (> :c 100))
+                                             (> :b 2)
+                                             (> :c 2)))))))))
+
 (deftest group-agg-basic
   (testing ":by + :agg produces correct group summaries"
     (let [result (core/dt penguins :by [:species] :agg {:n core/N :avg #dt/e (mn :mass)})]

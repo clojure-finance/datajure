@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`and`/`or` in `#dt/e` are now variadic.** They compiled directly to `dfn/and`/`dfn/or`, which are binary-only, so `#dt/e (and p1 p2 p3)` threw `Wrong number of args (3)`. They now fold over `dfn/and`/`dfn/or`, accepting any number of predicates: `#dt/e (and (> :a 1) (> :b 2) (< :c 3))`. (`not` remains unary.)
+
 ## [2.0.11] - 2026-06-14
 
 ### Added
