@@ -6,7 +6,7 @@
             [clojure.set :as set]
             [datajure.expr :as expr]))
 
-(declare apply-order-by)
+(declare apply-order-by validate-select-cols)
 
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
@@ -143,7 +143,7 @@
 (defn- apply-agg
   ([dataset aggregations] (apply-agg dataset aggregations nil))
   ([dataset aggregations within-order]
-   (let [sorted (if within-order (apply-order-by dataset within-order) dataset)
+   (let [sorted (if within-order (apply-order-by dataset within-order :within-order) dataset)
          pairs (if (map? aggregations) (seq aggregations) aggregations)
          result (reduce (fn [m [col-kw agg-fn]]
                           (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
@@ -278,7 +278,7 @@
                       (let [group-fn (by->group-fn partition-ds by)
                             groups (ds/group-by partition-ds group-fn)]
                         (map (fn [[group-key sub-ds]]
-                               (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)
+                               (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)
                                      wrapped-key (update-vals group-key vector)
                                      agg-result (reduce (fn [m [col-kw agg-fn]]
                                                           (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
@@ -303,7 +303,7 @@
                      (let [group-fn (by->group-fn partition-ds by)
                            groups (ds/group-by partition-ds group-fn)]
                        (map (fn [[_group-key sub-ds]]
-                              (let [sorted (if within-order (apply-order-by sub-ds within-order) sub-ds)]
+                              (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
                                 (apply-set sorted derivations)))
                             groups))))
            (apply ds/concat)))))
@@ -312,7 +312,7 @@
   "Window mode without :by — entire dataset is one partition.
   Optionally sorts by :within-order before applying derivations."
   [dataset derivations within-order]
-  (let [sorted (if within-order (apply-order-by dataset within-order) dataset)]
+  (let [sorted (if within-order (apply-order-by dataset within-order :within-order) dataset)]
     (apply-set sorted derivations)))
 
 (def ^:private shown-notes (atom #{}))
@@ -578,14 +578,34 @@
 (defn- normalise-order-spec [s]
   (if (keyword? s) {:order :asc :col s} s))
 
+(defn- validate-order-specs
+  "Validates :order-by / :within-order specs and returns them normalised. Each
+  spec must be a bare column keyword or a map {:order :asc|:desc :col <col>}, and
+  every referenced column must exist (structured :unknown-column error with
+  suggestions, same as :select). Throws :invalid-order-spec on a malformed spec."
+  [dataset specs context]
+  (let [normalised (mapv normalise-order-spec specs)]
+    (doseq [s normalised]
+      (when-not (and (map? s) (contains? s :col))
+        (throw (ex-info (str "Invalid " context " spec: " (pr-str s)
+                             " — expected a column keyword or (asc col)/(desc col).")
+                        {:dt/error :invalid-order-spec :dt/context context :dt/spec s})))
+      (when-not (#{:asc :desc} (:order s))
+        (throw (ex-info (str "Invalid " context " order: " (pr-str (:order s))
+                             " in " (pr-str s) " — expected :asc or :desc.")
+                        {:dt/error :invalid-order-spec :dt/context context :dt/spec s}))))
+    (validate-select-cols dataset (map :col normalised) context)
+    normalised))
+
 (defn- apply-order-by
   "Sort `dataset` by `specs` (per-key :asc/:desc). Reads only the sort-key columns
   and stable-sorts an index permutation with `clojure.core/compare` (nils first,
   mixed asc/desc), then gathers via `ds/select-rows`. Avoids tech's row-map
   `sort-by` path, which materialises a full row object per row even though only
-  the key columns are compared — catastrophic for wide datasets."
-  [dataset specs]
-  (let [normalised (mapv normalise-order-spec specs)
+  the key columns are compared — catastrophic for wide datasets. `context` labels
+  validation errors (:order-by or :within-order)."
+  [dataset specs context]
+  (let [normalised (validate-order-specs dataset specs context)
         n          (ds/row-count dataset)]
     (if (or (< n 2) (empty? normalised))
       dataset
@@ -604,28 +624,30 @@
         (ds/select-rows dataset (sort cmp (range n)))))))
 
 (defn- validate-select-cols
-  "Checks that all requested column keywords exist in the dataset.
-  Throws ex-info with Levenshtein suggestions on unknown columns."
-  [dataset requested]
-  (let [available (set (ds/column-names dataset))
-        unknown (set/difference (set requested) available)]
-    (when (seq unknown)
-      (let [avail-names (vec (sort available))
-            suggestions (into {}
-                              (map (fn [col]
-                                     (let [col-str (name col)
-                                           closest (->> avail-names
-                                                        (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
-                                                        (sort-by second)
-                                                        first)]
-                                       [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
-                              unknown)]
-        (throw (ex-info (str "Unknown column(s) " unknown " in :select")
-                        {:dt/error :unknown-column
-                         :dt/columns unknown
-                         :dt/context :select
-                         :dt/available avail-names
-                         :dt/closest suggestions}))))))
+  "Checks that all requested columns exist in the dataset. Throws ex-info with
+  Levenshtein suggestions on unknown columns. `context` (default :select) labels
+  the error so the same check serves :select, :order-by, and :within-order."
+  ([dataset requested] (validate-select-cols dataset requested :select))
+  ([dataset requested context]
+   (let [available (set (ds/column-names dataset))
+         unknown (set/difference (set requested) available)]
+     (when (seq unknown)
+       (let [avail-names (vec (sort available))
+             suggestions (into {}
+                               (map (fn [col]
+                                      (let [col-str (name col)
+                                            closest (->> avail-names
+                                                         (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
+                                                         (sort-by second)
+                                                         first)]
+                                        [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
+                               unknown)]
+         (throw (ex-info (str "Unknown column(s) " unknown " in " context)
+                         {:dt/error :unknown-column
+                          :dt/columns unknown
+                          :dt/context context
+                          :dt/available avail-names
+                          :dt/closest suggestions})))))))
 
 (defn- apply-select [dataset selector]
   (let [all-cols (ds/column-names dataset)
@@ -742,4 +764,4 @@
       (and agg by) (apply-group-agg by agg within-order)
       (and agg (not by)) (apply-agg agg within-order)
       select (apply-select select)
-      order-by (apply-order-by order-by))))
+      order-by (apply-order-by order-by :order-by))))

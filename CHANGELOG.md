@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`#dt/e (div0 …)` with scalar operands now returns a scalar.** It always built a length-1 column, so a composed expression like `#dt/e (+ :x (div0 1 2))` produced `[1.5 nil nil]` instead of `[1.5 2.5 3.5]` (the length-1 reader only covered row 0). It now returns a scalar when both operands are scalars — consistent with the other arithmetic ops — so it broadcasts correctly. Column operands are unchanged.
 
+- **`:order-by` / `:within-order` now validate their columns.** An unknown sort column previously surfaced a raw tech.ml.dataset `Column not found` exception; it now throws datajure's structured `:dt/error :unknown-column` (with `:dt/context :order-by`/`:within-order` and Damerau-Levenshtein suggestions), the same as `:select`. `:order-by` is validated against the post-transform dataset, so sorting by a `:set`-derived column works and sorting by a `:select`-dropped column errors. A malformed spec (missing `:col`, or `:order` that isn't `:asc`/`:desc`) throws `:dt/error :invalid-order-spec`.
+
 - **`and`/`or` in `#dt/e` are now variadic.** They compiled directly to `dfn/and`/`dfn/or`, which are binary-only, so `#dt/e (and p1 p2 p3)` threw `Wrong number of args (3)`. They now fold over `dfn/and`/`dfn/or`, accepting any number of predicates: `#dt/e (and (> :a 1) (> :b 2) (< :c 3))`. (`not` remains unary; zero-arity `(and)`/`(or)` is rejected at read time with a `:wrong-arity` error, since it's meaningless in a vectorized mask.)
 
 ### Changed

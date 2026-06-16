@@ -186,6 +186,48 @@
     (testing "ascending date order with a missing value sorting first"
       (is (= [2 1 3 0] (vec ((core/dt d :order-by [(core/asc :date)]) :id)))))))
 
+(deftest order-by-unknown-column-errors
+  (testing ":order-by with an unknown column throws structured :unknown-column with suggestion"
+    (let [e (try (core/dt penguins :order-by [(core/asc :maas)]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? e))
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (= :order-by (:dt/context (ex-data e))))
+      (is (= #{:maas} (:dt/columns (ex-data e))))
+      (is (= [:mass] (get (:dt/closest (ex-data e)) :maas)))))
+  (testing "bare-keyword :order-by validates the column too"
+    (let [e (try (core/dt penguins :order-by [:nope]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (= :order-by (:dt/context (ex-data e))))))
+  (testing ":order-by validates against the post-transform dataset"
+    ;; a :set-derived column is sortable; an unselected column is not
+    (is (ds/dataset? (core/dt penguins :set [[:m2 #dt/e (+ :mass 1)]]
+                              :order-by [(core/asc :m2)])))
+    (let [e (try (core/dt penguins :select [:species] :order-by [(core/asc :mass)]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (= :order-by (:dt/context (ex-data e)))))))
+
+(deftest within-order-unknown-column-errors
+  (testing ":within-order with an unknown column throws :unknown-column tagged :within-order"
+    (let [e (try (core/dt penguins :by [:species] :set {:x #dt/e (mn :mass)}
+                          :within-order [(core/asc :maas)]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-column (:dt/error (ex-data e))))
+      (is (= :within-order (:dt/context (ex-data e)))))))
+
+(deftest order-by-invalid-spec-errors
+  (testing "a malformed order map throws :invalid-order-spec"
+    (let [e (try (core/dt penguins :order-by [{:col :mass :order :up}]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :invalid-order-spec (:dt/error (ex-data e))))
+      (is (= :order-by (:dt/context (ex-data e))))))
+  (testing "a spec with no :col throws :invalid-order-spec"
+    (let [e (try (core/dt penguins :order-by [{:order :asc}]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :invalid-order-spec (:dt/error (ex-data e)))))))
+
 (deftest select-vector
   (testing ":select with vector of keywords"
     (is (= [:species :mass] (vec (ds/column-names (core/dt penguins :select [:species :mass])))))))
