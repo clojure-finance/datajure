@@ -179,8 +179,11 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 (dt ds :where #dt/e (> :mass 4000))                  ;; nil-literal → false
 (dt ds :set {:mass #dt/e (coalesce :mass 0)})         ;; nil → 0
 (dt ds :set {:pe   #dt/e (div0 :price :earnings)})    ;; zero denom → nil
+(dt ds :set {:pe   #(div0 (:price %) (:earnings %))})  ;; div0 is also a plain fn
 (dt ds :set {:x (pass-nil #(parse-int (:x-str %)) :x-str)})  ;; nil if :x-str is nil
 ```
+
+`div0` is callable both inside `#dt/e` and as a plain function (`core/div0 num den` → `nil` on a nil/zero denominator, else `num/den` as a double), so it works in plain-fn `:set`/`:agg` and computed `:by` too — no need to roll your own zero-guard.
 
 ### Special forms
 
@@ -819,7 +822,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |

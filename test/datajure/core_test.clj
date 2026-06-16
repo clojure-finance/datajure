@@ -1564,6 +1564,25 @@
       (is (nil? (nth r 2)))
       (is (nil? (nth r 3))))))
 
+(deftest core-div0-scalar
+  (testing "core/div0 is a callable scalar fn — nil on nil/zero denom, else double division"
+    (is (= 0.5 (core/div0 1 2)))
+    (is (= 2.5 (core/div0 10.0 4.0)))
+    (is (nil? (core/div0 1 0)))
+    (is (nil? (core/div0 1 0.0)))
+    (is (nil? (core/div0 1 nil)))
+    (is (nil? (core/div0 nil 2))))
+  (testing "core/div0 throws on non-numeric input (guards data absence, not programmer errors)"
+    (is (thrown? ClassCastException (core/div0 1 "x"))))
+  (testing "core/div0 works in a plain-fn :set — the context where the #dt/e op isn't reachable"
+    (let [ds (ds/->dataset {:x [10.0 20.0 30.0] :y [2.0 0.0 5.0]})
+          r (vec ((core/dt ds :set {:r (fn [row] (core/div0 (:x row) (:y row)))}) :r))]
+      (is (= [5.0 nil 6.0] r))))
+  (testing "the #dt/e op and core/div0 agree (shared guard = single source of truth)"
+    (let [ds (ds/->dataset {:x [10.0 20.0] :y [2.0 0.0]})]
+      (is (= (vec ((core/dt ds :set {:r #dt/e (div0 :x :y)}) :r))
+             (vec ((core/dt ds :set {:r (fn [row] (core/div0 (:x row) (:y row)))}) :r)))))))
+
 (deftest div0-scalar-denominator
   (testing "div0 works with scalar (literal) denominator"
     (let [ds (ds/->dataset {:a [0.0 10.0 nil 30.0]})

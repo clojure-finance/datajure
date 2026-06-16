@@ -194,25 +194,32 @@
   [col]
   (count (remove nil? (dtype/->reader col))))
 
+(defn div0
+  "Nil-safe scalar division: returns nil when the numerator or denominator is nil,
+  or the denominator is zero; otherwise `num` / `den` as a double. Non-numeric
+  inputs throw normally — this guards data absence, not programmer errors.
+  Backs both the #dt/e `:div0` op and `core/div0`."
+  [num den]
+  (when (and (some? num) (some? den) (not (zero? den)))
+    (/ (double num) (double den))))
+
 (def ^:private op-table
   {:+ dfn/+
    :- dfn/-
    :* dfn/*
    :div (fn [a b] (dfn// (dfn/double a) (dfn/double b)))
    :div0 (fn [a b]
-           (let [av (dfn/double a)
-                 bv (dfn/double b)
-                 a-reader? (dtype/reader? av)
-                 b-reader? (dtype/reader? bv)
-                 n (cond a-reader? (dtype/ecount av)
-                         b-reader? (dtype/ecount bv)
+           ;; element-wise nil-safe division via the shared scalar `div0`.
+           ;; nil results become NaN in the :float64 reader, which the dataset
+           ;; treats as missing → reads back as nil (existing behavior).
+           (let [a-reader? (dtype/reader? a)
+                 b-reader? (dtype/reader? b)
+                 n (cond a-reader? (dtype/ecount a)
+                         b-reader? (dtype/ecount b)
                          :else 1)]
              (dtype/make-reader :float64 n
-                                (let [ai (if a-reader? (nth av idx) av)
-                                      bi (if b-reader? (nth bv idx) bv)]
-                                  (if (or (nil? bi) (zero? bi))
-                                    nil
-                                    (if (nil? ai) nil (/ ai bi)))))))
+                                (div0 (if a-reader? (nth a idx) a)
+                                      (if b-reader? (nth b idx) b)))))
    :sq dfn/sq
    :log dfn/log
    :> dfn/>

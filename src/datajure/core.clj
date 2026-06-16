@@ -389,6 +389,14 @@
   Delegates to `expr/count-non-nil` (shared with the #dt/e `:ct` op)."
   expr/count-non-nil)
 
+(def div0
+  "Nil-safe division of two scalars: nil when either is nil or the denominator
+  is zero, else `num`/`den` as a double. Use in plain-fn contexts (`:set`/`:agg`
+  with `#(...)`, computed `:by`) where the #dt/e `div0` op isn't available; the
+  op delegates to this same fn. Non-numeric inputs throw normally.
+  Examples: (div0 1 2) => 0.5; (div0 1 0) => nil; (div0 1 nil) => nil."
+  expr/div0)
+
 (defn pass-nil
   "Wraps a row-level fn to return nil if any of the specified guard columns
   are nil/missing in the row. Prevents crashes when plain fns encounter

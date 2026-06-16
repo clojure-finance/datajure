@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`core/div0` — nil-safe division as a callable function.** `div0` was an `#dt/e`-only op, so plain-fn contexts (`:set`/`:agg` with `#(...)`, computed `:by`) couldn't reach it and had to roll their own zero-guard. It's now also a public scalar fn: `(div0 num den)` → `nil` when either is nil or the denominator is zero, else `num`/`den` as a double; non-numeric inputs throw normally. The `#dt/e` `div0` op delegates to the same fn (single source of truth via `expr/div0`).
+  ```clojure
+  (div0 1 2)   ;; => 0.5
+  (div0 1 0)   ;; => nil
+  (dt ds :set {:pe #(div0 (:price %) (:earnings %))})  ;; plain-fn :set
+  ```
+
 ### Fixed
 
 - **`and`/`or` in `#dt/e` are now variadic.** They compiled directly to `dfn/and`/`dfn/or`, which are binary-only, so `#dt/e (and p1 p2 p3)` threw `Wrong number of args (3)`. They now fold over `dfn/and`/`dfn/or`, accepting any number of predicates: `#dt/e (and (> :a 1) (> :b 2) (< :c 3))`. (`not` remains unary.)
