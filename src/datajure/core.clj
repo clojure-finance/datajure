@@ -4,8 +4,7 @@
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.casting :as casting]
             [clojure.set :as set]
-            [datajure.expr :as expr])
-  (:import [java.util Comparator]))
+            [datajure.expr :as expr]))
 
 (declare apply-order-by)
 
@@ -579,19 +578,30 @@
 (defn- normalise-order-spec [s]
   (if (keyword? s) {:order :asc :col s} s))
 
-(defn- specs->comparator [specs]
-  (reify Comparator
-    (compare [_ row-a row-b]
-      (reduce (fn [_ {:keys [order col]}]
-                (let [c (clojure.core/compare (get row-a col) (get row-b col))
-                      result (if (= order :desc) (- c) c)]
-                  (if (not= result 0) (reduced result) 0)))
-              0
-              specs))))
-
-(defn- apply-order-by [dataset specs]
-  (let [normalised (map normalise-order-spec specs)]
-    (ds/sort-by dataset identity (specs->comparator normalised))))
+(defn- apply-order-by
+  "Sort `dataset` by `specs` (per-key :asc/:desc). Reads only the sort-key columns
+  and stable-sorts an index permutation with `clojure.core/compare` (nils first,
+  mixed asc/desc), then gathers via `ds/select-rows`. Avoids tech's row-map
+  `sort-by` path, which materialises a full row object per row even though only
+  the key columns are compared — catastrophic for wide datasets."
+  [dataset specs]
+  (let [normalised (mapv normalise-order-spec specs)
+        n          (ds/row-count dataset)]
+    (if (or (< n 2) (empty? normalised))
+      dataset
+      (let [key-vals (mapv (fn [{:keys [col]}] (vec (ds/column dataset col))) normalised)
+            descs    (mapv #(= :desc (:order %)) normalised)
+            nk       (count normalised)
+            cmp      (fn [ia ib]
+                       (let [i (int ia) j (int ib)]
+                         (loop [k 0]
+                           (if (< k nk)
+                             (let [raw (clojure.core/compare (nth (key-vals k) i)
+                                                             (nth (key-vals k) j))
+                                   c   (if (nth descs k) (- raw) raw)]
+                               (if (zero? c) (recur (inc k)) c))
+                             0))))]
+        (ds/select-rows dataset (sort cmp (range n)))))))
 
 (defn- validate-select-cols
   "Checks that all requested column keywords exist in the dataset.

@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`and`/`or` in `#dt/e` are now variadic.** They compiled directly to `dfn/and`/`dfn/or`, which are binary-only, so `#dt/e (and p1 p2 p3)` threw `Wrong number of args (3)`. They now fold over `dfn/and`/`dfn/or`, accepting any number of predicates: `#dt/e (and (> :a 1) (> :b 2) (< :c 3))`. (`not` remains unary; zero-arity `(and)`/`(or)` is rejected at read time with a `:wrong-arity` error, since it's meaningless in a vectorized mask.)
 
+### Changed
+
+- **`:order-by` / `:within-order` are dramatically faster on wide datasets.** Sorting routed through tech.ml.dataset's `(sort-by dataset identity comparator)`, whose `identity` key-fn forces a full row object to be materialised for *every* row — all columns — even though only the sort keys are compared. On a 2.1M-row × 91-column dataset, sorting by two keys took **~326 s**; it now takes **~1.6 s** (~200×). The sort now reads only the key columns, stable-sorts an index permutation with `clojure.core/compare` (nils first, mixed `:asc`/`:desc`), and gathers via `ds/select-rows`. Ordering semantics are unchanged — including nil placement, tie stability, and decoded-value comparison for packed columns like dates.
+
 ## [2.0.11] - 2026-06-14
 
 ### Added

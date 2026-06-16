@@ -163,6 +163,29 @@
       (is (= [2007 2007 2007 2008 2008] (vec (result :year))))
       (is (= [5000 3750 3500 4800 3800] (vec (result :mass)))))))
 
+(deftest order-by-nils-and-stability
+  ;; Index-permutation sort must reproduce clojure.core/compare semantics:
+  ;; nils sort first ascending / last descending, and ties keep original order.
+  (let [d (ds/->dataset {:k [1 1 2 nil 2] :id [0 1 2 3 4]})]
+    (testing "nils first ascending"
+      (is (= [3 0 1 2 4] (vec ((core/dt d :order-by [(core/asc :k)]) :id)))))
+    (testing "nils last descending"
+      (is (= [2 4 0 1 3] (vec ((core/dt d :order-by [(core/desc :k)]) :id))))))
+  (testing "equal keys preserve original row order (stable sort)"
+    (let [d (ds/->dataset {:k [1 1 2 1] :id [0 1 2 3]})]
+      (is (= [0 1 3 2] (vec ((core/dt d :order-by [(core/asc :k)]) :id)))))))
+
+(deftest order-by-packed-date-column
+  ;; Date columns are stored packed; the sort must compare decoded values
+  ;; (and treat missing as nil), not raw packed longs.
+  (let [d (ds/->dataset {:date [(java.time.LocalDate/of 2020 1 3)
+                                (java.time.LocalDate/of 2020 1 1)
+                                nil
+                                (java.time.LocalDate/of 2020 1 2)]
+                         :id   [0 1 2 3]})]
+    (testing "ascending date order with a missing value sorting first"
+      (is (= [2 1 3 0] (vec ((core/dt d :order-by [(core/asc :date)]) :id)))))))
+
 (deftest select-vector
   (testing ":select with vector of keywords"
     (is (= [:species :mass] (vec (ds/column-names (core/dt penguins :select [:species :mass])))))))
