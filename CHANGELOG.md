@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.13] - 2026-06-16
+
 ### Added
 
 - **`:take` — row limit in `dt`.** Positive `n` keeps the first `n` rows (head), negative keeps the last `|n|` (tail), `0` yields no rows, and `|n|` beyond the row count returns all rows. It runs last, after `:order-by`, so the everyday "last 20 by date" is one query: `(dt ds :order-by [(asc :date)] :take -20)` — no more dropping out to `(ds/tail 20 …)`. (The signed convention follows q's `#`.) A non-integer `:take` throws `:dt/error :invalid-take`.
@@ -266,7 +268,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.12...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.0.13...HEAD
+[2.0.13]: https://github.com/clojure-finance/datajure/compare/v2.0.12...v2.0.13
 [2.0.12]: https://github.com/clojure-finance/datajure/compare/v2.0.11...v2.0.12
 [2.0.11]: https://github.com/clojure-finance/datajure/compare/v2.0.10...v2.0.11
 [2.0.10]: https://github.com/clojure-finance/datajure/compare/v2.0.9...v2.0.10
