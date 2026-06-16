@@ -228,6 +228,24 @@
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (= :invalid-order-spec (:dt/error (ex-data e)))))))
 
+(deftest take-row-limit
+  (let [d (ds/->dataset {:i [0 1 2 3 4] :v [10 40 20 50 30]})]
+    (testing "positive :take keeps the first n rows (head)"
+      (is (= [0 1] (vec ((core/dt d :take 2) :i)))))
+    (testing "negative :take keeps the last |n| rows (tail)"
+      (is (= [3 4] (vec ((core/dt d :take -2) :i)))))
+    (testing ":take 0 yields no rows"
+      (is (= 0 (ds/row-count (core/dt d :take 0)))))
+    (testing "|n| beyond the row count returns all rows"
+      (is (= [0 1 2 3 4] (vec ((core/dt d :take 99) :i))))
+      (is (= [0 1 2 3 4] (vec ((core/dt d :take -99) :i)))))
+    (testing ":take runs after :order-by — \"last 2 by v\""
+      (is (= [40 50] (vec ((core/dt d :order-by [(core/asc :v)] :take -2) :v)))))
+    (testing "non-integer :take throws :invalid-take"
+      (let [e (try (core/dt d :take 2.5) nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :invalid-take (:dt/error (ex-data e))))))))
+
 (deftest select-vector
   (testing ":select with vector of keywords"
     (is (= [:species :mass] (vec (ds/column-names (core/dt penguins :select [:species :mass])))))))

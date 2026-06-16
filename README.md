@@ -130,7 +130,7 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
 
 ## `dt` Dispatch Modes
 
-`dt` runs a single fixed evaluation order: `:where` → `:set`-or-`:agg` → `:select` → `:order-by`. What the middle step does depends on which other keywords are present:
+`dt` runs a single fixed evaluation order: `:where` → `:set`-or-`:agg` → `:select` → `:order-by` → `:take`. What the middle step does depends on which other keywords are present:
 
 | `:by`  | `:set`  | `:agg`  | `:within-order` | Mode                                                    |
 |--------|---------|---------|-----------------|---------------------------------------------------------|
@@ -556,11 +556,12 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 
 Supported: CSV, TSV, JSON, JSON Lines (`.jsonl`/`.ndjson`), Nippy (native), Parquet, Arrow, Excel (optional deps). Gzipped native-format variants auto-detected. `read-seq` streams Parquet (row groups) and JSON Lines (`:batch-size` row batches).
 
-Columns are read as keywords by default. For CSV/TSV, `:column-allowlist`/`:column-blocklist` accept keyword **or** string names — `(dio/read "data.csv" {:column-allowlist [:a :b]})` works:
+Columns are read as keywords by default. `:column-allowlist`/`:column-blocklist` accept keyword **or** string names on every format — CSV/TSV match raw headers before `:key-fn`, Parquet/Arrow match after, and `dio/read` normalises either way so you don't have to care:
 
 ```clojure
-(dio/read "data.csv" {:column-allowlist [:a :b]})   ;; only columns a, b
-(dio/read "data.csv" {:column-blocklist [:id]})      ;; everything except id
+(dio/read "data.csv"     {:column-allowlist [:a :b]})   ;; only columns a, b
+(dio/read "data.csv"     {:column-blocklist [:id]})      ;; everything except id
+(dio/read "data.parquet" {:column-allowlist [:a :b]})   ;; same, keyword or string
 ```
 
 ## Bucketing with `xbar`
@@ -808,6 +809,7 @@ Structured `ex-info` with suggestions. All errors carry a `:dt/error` key in `ex
 2. `:set` or `:agg` — derive or aggregate (mutually exclusive; see dispatch modes above)
 3. `:select` — keep listed columns
 4. `:order-by` — sort final output
+5. `:take` — row limit (positive = head, negative = tail); e.g. `:order-by [(asc :date)] :take -20` = last 20 by date
 
 ## Architecture
 

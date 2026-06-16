@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`:take` — row limit in `dt`.** Positive `n` keeps the first `n` rows (head), negative keeps the last `|n|` (tail), `0` yields no rows, and `|n|` beyond the row count returns all rows. It runs last, after `:order-by`, so the everyday "last 20 by date" is one query: `(dt ds :order-by [(asc :date)] :take -20)` — no more dropping out to `(ds/tail 20 …)`. (The signed convention follows q's `#`.) A non-integer `:take` throws `:dt/error :invalid-take`.
+
+### Fixed
+
+- **`dio/read` accepts string `:column-allowlist` / `:column-blocklist` for Parquet/Arrow.** Parquet/Arrow apply `:key-fn` to column names *before* matching the allow/block list, so under datajure's keyword `:key-fn` a **string** entry silently matched nothing → a 0-column dataset (the mirror image of the CSV/TSV bug fixed in 2.0.12). `dio/read` now normalises string entries to keywords for Parquet/Arrow, so `{:column-allowlist [:a :b]}` and `{:column-allowlist ["a" "b"]}` both work on every format. (Parquet reading itself was already supported; this closes the allowlist asymmetry.)
+
 ## [2.0.12] - 2026-06-16
 
 ### Added

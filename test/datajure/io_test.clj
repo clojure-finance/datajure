@@ -44,6 +44,22 @@
              (set (ds/column-names (dio/read path {:column-allowlist ["species" "mass"]})))))
       (.delete (File. path)))))
 
+(deftest parquet-keyword-column-filter-normalization
+  ;; Parquet/Arrow apply :key-fn to column names BEFORE matching allow/block
+  ;; lists, so a string entry silently matches nothing under datajure's keyword
+  ;; key-fn. dio/read normalises string entries to keywords (mirror of the
+  ;; CSV/TSV keyword->string fix). Tested at the normaliser since parquet read
+  ;; needs an optional dep not present in the CI suite.
+  (let [norm #'dio/normalize-keyword-column-filters]
+    (testing "string entries become keywords; keyword entries are left as-is"
+      (is (= {:column-allowlist [:species :mass]}
+             (norm {:column-allowlist ["species" :mass]}))))
+    (testing "covers all four allow/block-list option keys"
+      (is (= {:column-blocklist [:year] :column-whitelist [:a] :column-blacklist [:b]}
+             (norm {:column-blocklist ["year"] :column-whitelist [:a] :column-blacklist ["b"]}))))
+    (testing "options without column filters pass through untouched"
+      (is (= {:key-fn keyword} (norm {:key-fn keyword}))))))
+
 (deftest csv-gz-round-trip
   (testing "write and read gzipped CSV"
     (let [path (tmp "datajure-test.csv.gz")]

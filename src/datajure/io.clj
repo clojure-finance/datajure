@@ -119,9 +119,10 @@
       (.write w ^String (charred/write-json-str row))
       (.write w "\n"))))
 
-(def ^:private text-column-filter-keys
-  "Column allow/block-list options that CSV/TSV (charred) match against RAW
-  header strings, before `:key-fn` is applied."
+(def ^:private column-filter-keys
+  "Column allow/block-list option keys. Which form (string vs keyword) matches
+  depends on whether the format filters before or after `:key-fn` — see the two
+  normalisers below."
   [:column-allowlist :column-blocklist :column-whitelist :column-blacklist])
 
 (defn- normalize-text-column-filters
@@ -130,14 +131,28 @@
   keyword`, so a keyword allowlist (the natural datajure form) would silently
   match nothing → a 0-column dataset. Convert keyword entries in those options to
   their raw names so both `[:a :b]` and `[\"a\" \"b\"]` work. Scoped to CSV/TSV
-  only — Parquet/Arrow match after `:key-fn`, so they're read untouched."
+  only — Parquet/Arrow match after `:key-fn` (see normalize-keyword-column-filters)."
   [opts]
   (reduce (fn [o k]
             (if-let [xs (get o k)]
               (assoc o k (mapv #(if (keyword? %) (name %) %) xs))
               o))
           opts
-          text-column-filter-keys))
+          column-filter-keys))
+
+(defn- normalize-keyword-column-filters
+  "For Parquet/Arrow, tech.ml.dataset applies `:key-fn` to the column names
+  *before* matching allow/block lists, so a string entry won't match the
+  keyworded names (datajure forces `:key-fn keyword`) → a silent 0-column
+  dataset. Convert string entries in those options to keywords so both `[:a :b]`
+  and `[\"a\" \"b\"]` work — the mirror image of normalize-text-column-filters."
+  [opts]
+  (reduce (fn [o k]
+            (if-let [xs (get o k)]
+              (assoc o k (mapv #(if (string? %) (keyword %) %) xs))
+              o))
+          opts
+          column-filter-keys))
 
 (defn read
   "Read a dataset from a file. Dispatches on file extension.
@@ -146,9 +161,10 @@
   Optional deps required: .parquet .xlsx .xls .arrow .feather.
 
   Options are passed through to the underlying tech.v3.dataset reader.
-  Columns are returned as keywords by default (:key-fn keyword). For CSV/TSV,
-  keyword entries in :column-allowlist / :column-blocklist are accepted (and
-  normalised to raw header names) so they work despite the keyword key-fn.
+  Columns are returned as keywords by default (:key-fn keyword). :column-allowlist
+  / :column-blocklist accept either keywords or strings regardless of format:
+  CSV/TSV match raw headers before :key-fn (keywords are normalised to names),
+  while Parquet/Arrow match after :key-fn (strings are normalised to keywords).
 
   Examples:
     (read \"data.csv\")
@@ -166,12 +182,12 @@
        (:csv :tsv) (ds-io/->dataset path (normalize-text-column-filters opts))
        (:json :nippy nil) (ds-io/->dataset path opts)
        (:jsonl :ndjson) (read-jsonl path opts)
-       :parquet (do (require-parquet!) (ds-io/->dataset path opts))
+       :parquet (do (require-parquet!) (ds-io/->dataset path (normalize-keyword-column-filters opts)))
        :xlsx (do (require-excel! "xlsx") (ds-io/->dataset path opts))
        :xls (do (require-excel! "xls") (ds-io/->dataset path opts))
        (:arrow :feather) (do (require-arrow!)
                              (let [arrow-ns (the-ns 'tech.v3.libs.arrow)]
-                               ((ns-resolve arrow-ns 'stream->dataset) path opts)))
+                               ((ns-resolve arrow-ns 'stream->dataset) path (normalize-keyword-column-filters opts))))
        (throw (ex-info (str "Unsupported file extension: " (name ext)
                             ". Supported: csv, tsv, json, jsonl, ndjson, nippy, parquet, xlsx, xls, arrow, feather.")
                        {:dt/error :unsupported-format :dt/ext ext}))))))

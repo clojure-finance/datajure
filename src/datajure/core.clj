@@ -623,6 +623,15 @@
                              0))))]
         (ds/select-rows dataset (sort cmp (range n)))))))
 
+(defn- apply-take
+  "Row limit. Positive `n` keeps the first `n` rows (head); negative keeps the
+  last `|n|` (tail); `0` yields an empty dataset. `|n|` larger than the row count
+  returns all rows. Runs last, after :order-by."
+  [dataset n]
+  (if (neg? n)
+    (ds/tail dataset (- n))
+    (ds/head dataset n)))
+
 (defn- validate-select-cols
   "Checks that all requested columns exist in the dataset. Throws ex-info with
   Levenshtein suggestions on unknown columns. `context` (default :select) labels
@@ -707,7 +716,7 @@
       (throw (ex-info "Invalid :select argument" {:selector selector})))))
 
 (defn dt
-  "Query a dataset. Supported keywords: :where, :set, :agg, :by, :select, :order-by, :within-order.
+  "Query a dataset. Supported keywords: :where, :set, :agg, :by, :select, :order-by, :within-order, :take.
 
   :where         - filter rows. Accepts #dt/e expression or plain fn of row map.
   :set           - derive/update columns. Accepts map or vector-of-pairs.
@@ -725,11 +734,19 @@
   :select        - keep columns. Accepts: vector of kws, single kw, [:not kw ...],
                    regex, predicate fn, or map {old-kw new-kw} for rename-on-select.
   :order-by      - sort rows. Accepts a vector of (asc :col)/(desc :col) specs,
-                   or bare keywords (default asc). Evaluated after all other steps."
-  [dataset & {:keys [where set agg by select order-by within-order]}]
+                   or bare keywords (default asc). Evaluated before :take.
+  :take          - row limit (integer). Positive n keeps the first n rows (head),
+                   negative keeps the last |n| (tail), 0 yields no rows. |n| beyond
+                   the row count returns all rows. Evaluated last, after :order-by —
+                   e.g. :order-by [(asc :date)] :take -20 is \"the last 20 by date\"."
+  [dataset & {:keys [where set agg by select order-by within-order take]}]
   (when (and set agg)
     (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
                     {:dt/error :set-agg-conflict})))
+  (when (and (some? take) (not (integer? take)))
+    (throw (ex-info (str ":take requires an integer (got " (pr-str take)
+                         "). Positive = first n rows, negative = last n.")
+                    {:dt/error :invalid-take :dt/value take})))
   (when (and within-order (not set) (not agg))
     (throw (ex-info ":within-order requires :set or :agg."
                     {:dt/error :within-order-invalid})))
@@ -764,4 +781,5 @@
       (and agg by) (apply-group-agg by agg within-order)
       (and agg (not by)) (apply-agg agg within-order)
       select (apply-select select)
-      order-by (apply-order-by order-by :order-by))))
+      order-by (apply-order-by order-by :order-by)
+      (some? take) (apply-take take))))
