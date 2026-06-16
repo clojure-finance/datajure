@@ -342,18 +342,21 @@
                  :dt/suggestions suggestions})))))
 
 (defn- check-op-arity!
-  "Read-time arity check for the fixed-arity helper ops the spec documents a
-  friendly error for. `wavg`/`wsum` (and their `wa`/`ws` aliases) take exactly
-  two arguments — a weight column and a value column."
+  "Read-time arity checks for ops with a friendly documented error. `wavg`/`wsum`
+  (and their `wa`/`ws` aliases) take exactly two arguments; `and`/`or` are variadic
+  but need at least one predicate (zero-arity is meaningless in a vectorized mask)."
   [op-kw op-sym n-args]
-  (when (and (#{:wavg :wsum} op-kw) (not= 2 n-args))
+  (cond
+    (and (#{:wavg :wsum} op-kw) (not= 2 n-args))
     (throw (ex-info
             (str "`" op-sym "` takes exactly two arguments (weight column, value column). Got "
                  n-args ".")
-            {:dt/error :wrong-arity
-             :dt/op op-sym
-             :dt/expected 2
-             :dt/got n-args}))))
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
+    (and (#{:and :or} op-kw) (zero? n-args))
+    (throw (ex-info
+            (str "`" op-sym "` requires at least one argument in #dt/e. Got 0.")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected :at-least-1 :dt/got n-args}))))
 
 (defn- check-arith-nil-literal!
   "Arithmetic ops require non-nil operands. A literal nil — e.g. `(+ :x nil)` —

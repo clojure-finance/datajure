@@ -76,12 +76,18 @@
       (is (= [true true true true]
              (vec ((core/dt d :set {:f #dt/e (and (> :a 0) (> :b 0) (> :c 0))}) :f)))))
     (testing "single-arg and/or is the identity of its predicate"
-      (is (= 3 (ds/row-count (core/dt d :where #dt/e (and (> :a 4)))))))
+      (is (= 3 (ds/row-count (core/dt d :where #dt/e (and (> :a 4))))))
+      (is (= 3 (ds/row-count (core/dt d :where #dt/e (or (> :a 4)))))))
     (testing "3-arg or nested inside a 3-arg and"
       (is (= 1 (ds/row-count
                 (core/dt d :where #dt/e (and (or (> :a 10) (> :b 8) (> :c 100))
                                              (> :b 2)
-                                             (> :c 2)))))))))
+                                             (> :c 2)))))))
+    (testing "zero-arity and/or is rejected at read time with :wrong-arity"
+      (let [and0 (try (read-string "#dt/e (and)") nil (catch clojure.lang.ExceptionInfo e (ex-data e)))
+            or0  (try (read-string "#dt/e (or)")  nil (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :wrong-arity (:dt/error and0)))
+        (is (= :wrong-arity (:dt/error or0)))))))
 
 (deftest group-agg-basic
   (testing ":by + :agg produces correct group summaries"
