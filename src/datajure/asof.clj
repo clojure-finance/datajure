@@ -6,16 +6,20 @@
     asof-indices — two-pointer merge over pre-sorted, pre-grouped vectors;
                    public utility, not used internally by asof-match.
 
-  Part 2 — asof-match: full key-handling layer. Groups right rows by exact
-  keys, sorts within each group, runs asof-search (binary search) per left
-  row. Returns a lazy sequence of [left-row-idx right-row-idx-or-nil] pairs.
+  Part 2 — asof-match: full key-handling layer. Builds (or accepts a prebuilt)
+  `:asof` index from datajure.index, then runs asof-search (binary search) per
+  left row. Returns a lazy sequence of [left-row-idx right-row-idx-or-nil] pairs.
 
   Part 3 — build-result: assembles a tech.v3.dataset from the index pairs.
   Left columns always present in original order; right non-key columns
   appended (nil-filled for unmatched rows). Conflicting non-key column
-  names suffixed :right.<n>."
+  names suffixed :right.<n>.
+
+  The right-side index construction lives in datajure.index (the `:asof` kind);
+  this namespace owns the search (asof-search) and result assembly."
   (:require [tech.v3.datatype :as dtype]
-            [tech.v3.dataset :as ds]))
+            [tech.v3.dataset :as ds]
+            [datajure.index :as idx]))
 
 ;;; ---- Part 1 ----------------------------------------------------------------
 
@@ -129,52 +133,37 @@
 
 ;;; ---- Part 2 ----------------------------------------------------------------
 
-(defn- row-exact-key
-  "Extract the exact-key tuple (all key columns except the last) from row `i`.
-  Returns [] when there is only one key column (pure asof, no exact grouping)."
-  [readers ^long i]
-  (let [n (dec (count readers))]
-    (loop [j 0 acc (transient [])]
-      (if (= j n)
-        (persistent! acc)
-        (recur (inc j) (conj! acc (nth (nth readers j) i)))))))
+(defn- validate-asof-index!
+  "Throw a structured ex-info if a user-supplied `:right-index` does not match
+  this join's `right` dataset and `right-keys`. The index stores positional row
+  ids into its source dataset, so it must be an :asof index built from exactly
+  this `right` (identical?) on exactly these keys."
+  [right-index right right-keys]
+  (when (some? right-index)
+    (when-not (idx/index? right-index)
+      (throw (ex-info "asof :right-index must be a datajure index from (index-by … {:kind :asof})."
+                      {:dt/error :asof-index-required :dt/value right-index})))
+    (when-not (= :asof (idx/kind right-index))
+      (throw (ex-info (str "asof :right-index must be of :kind :asof, got "
+                           (idx/kind right-index) ".")
+                      {:dt/error :asof-index-wrong-kind :dt/kind (idx/kind right-index)})))
+    (when-not (identical? (idx/source-dataset right-index) right)
+      (throw (ex-info (str "asof :right-index was built from a different dataset than "
+                           "`right`; its row indices would be invalid.")
+                      {:dt/error :asof-index-dataset-mismatch})))
+    (when-not (= (idx/key-columns right-index) right-keys)
+      (throw (ex-info (str "asof :right-index key columns " (idx/key-columns right-index)
+                           " do not match right-keys " right-keys ".")
+                      {:dt/error :asof-index-keys-mismatch
+                       :dt/index-keys (idx/key-columns right-index)
+                       :dt/right-keys right-keys})))))
 
-(defn- row-asof-val
-  "Extract the asof-key value (last key column) from row `i`."
-  [readers ^long i]
-  (nth (peek readers) i))
-
-(defn- build-right-index
-  "Return a map from exact-key-tuple -> a per-group struct
-  {:reader <reader over the asof-vals, sorted ascending, nils last>
-   :orig   <vector of original row indices, parallel to :reader>
-   :n      <count>}.
-  Right dataset need not be pre-sorted — sorting happens here. The asof-vals and
-  original indices are split apart ONCE per group (and the reader wrapped once),
-  so per-left-row probing in asof-match/window-indices does no re-splitting —
-  the inner loop drops from O(group-size) to O(log group-size) work per left row."
-  [dataset key-cols]
-  (let [readers (mapv #(dtype/->reader (ds/column dataset %)) key-cols)
-        n (ds/row-count dataset)
-        grouped (reduce
-                 (fn [acc i]
-                   (update acc
-                           (row-exact-key readers i)
-                           (fnil conj [])
-                           [(row-asof-val readers i) i]))
-                 {}
-                 (range n))
-        asof-cmp (fn [a b]
-                   (cond (nil? a) 1 (nil? b) -1 :else (compare a b)))]
-    (reduce-kv
-     (fn [m k pairs]
-       (let [sorted (sort-by first asof-cmp pairs)
-             avals (mapv first sorted)]
-         (assoc m k {:reader (dtype/->reader avals)
-                     :orig (mapv second sorted)
-                     :n (count avals)})))
-     {}
-     grouped)))
+(defn- resolve-asof-groups
+  "Return the exact-key -> {:reader :orig :n} table to search against: from a
+  validated prebuilt `right-index`, or freshly built from `right`/`right-keys`."
+  [right right-keys right-index]
+  (validate-asof-index! right-index right right-keys)
+  (idx/asof-groups (or right-index (idx/asof-index right right-keys))))
 
 (defn- within-tolerance?
   "Returns true if abs(left-val - right-val) <= tolerance.
@@ -193,23 +182,29 @@
     right      — tech.v3.dataset
     left-keys  — vector of column keywords; last = asof col, rest = exact cols
     right-keys — vector of column keywords; same structure
-    direction  — :backward (default), :forward, or :nearest
-    tolerance  — numeric max abs distance; nil means unbounded. Requires a
-                 numeric asof key. Matches whose distance exceeds tolerance
-                 are treated as no-match (nil right index).
+    opts       — map of:
+      :direction   — :backward (default), :forward, or :nearest
+      :tolerance   — numeric max abs distance; nil = unbounded. Requires a numeric
+                     asof key. Matches exceeding it become no-match (nil right idx).
+      :right-index — (optional) a prebuilt :asof index over `right`/`right-keys`
+                     (from datajure.index); reused instead of rebuilding. Validated
+                     against `right` (identical?) and `right-keys`.
 
   Returns a lazy sequence of [left-row-idx right-row-idx-or-nil] pairs in
-  left-row order. Unmatched left rows yield nil for right index."
+  left-row order. Unmatched left rows yield nil for right index.
+
+  A positional (… direction tolerance) arity is kept for back-compatibility."
   ([left right left-keys right-keys]
-   (asof-match left right left-keys right-keys :backward nil))
-  ([left right left-keys right-keys direction tolerance]
-   (let [left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
-         right-index (build-right-index right right-keys)
+   (asof-match left right left-keys right-keys {}))
+  ([left right left-keys right-keys opts]
+   (let [{:keys [direction tolerance right-index] :or {direction :backward}} opts
+         left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
+         groups (resolve-asof-groups right right-keys right-index)
          nl (ds/row-count left)]
      (for [li (range nl)]
-       (let [exact (row-exact-key left-rdrs li)
-             av (row-asof-val left-rdrs li)
-             group (get right-index exact)]
+       (let [exact (idx/row-exact-key left-rdrs li)
+             av (idx/row-asof-val left-rdrs li)
+             group (get groups exact)]
          (if (nil? group)
            [li nil]
            (let [{:keys [reader orig n]} group
@@ -219,7 +214,10 @@
                (let [matched-val (nth reader local-ri)]
                  (if (within-tolerance? av matched-val tolerance)
                    [li (nth orig local-ri)]
-                   [li nil]))))))))))
+                   [li nil])))))))))
+  ([left right left-keys right-keys direction tolerance]
+   (asof-match left right left-keys right-keys
+               {:direction direction :tolerance tolerance})))
 
 ;;; ---- Part 3 ----------------------------------------------------------------
 
@@ -294,25 +292,32 @@
     lo-offset    — lower bound offset added to left asof-key (numeric, raw units)
     hi-offset    — upper bound offset added to left asof-key (numeric, raw units)
 
+  An opts-map arity `{:lo :hi :right-index}` is also accepted; `:right-index` is
+  an optional prebuilt :asof index over `right`/`right-keys` (validated, reused
+  instead of rebuilt).
+
   Returns a sequence of [left-row-idx [matched-right-original-row-indices]] pairs.
   Empty inner vector means no right rows fell in the window (left row still appears).
   Left rows with nil asof-key always yield an empty inner vector."
-  [left right left-keys right-keys lo-offset hi-offset]
-  (let [left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
-        right-index (build-right-index right right-keys)
-        nl (ds/row-count left)]
-    (for [li (range nl)]
-      (let [exact (row-exact-key left-rdrs li)
-            av (row-asof-val left-rdrs li)
-            group (when (some? av) (get right-index exact))]
-        (if (nil? group)
-          [li []]
-          (let [{:keys [reader orig n]} group
-                lo-bound (+ (double av) (double lo-offset))
-                hi-bound (+ (double av) (double hi-offset))
-                lo-i (asof-search reader n lo-bound :forward)
-                hi-i (asof-search reader n hi-bound :backward)]
-            (if (or (= lo-i -1) (= hi-i -1) (> lo-i hi-i))
-              [li []]
-              [li (subvec orig lo-i (inc hi-i))])))))))
+  ([left right left-keys right-keys lo-offset hi-offset]
+   (window-indices left right left-keys right-keys {:lo lo-offset :hi hi-offset}))
+  ([left right left-keys right-keys opts]
+   (let [{:keys [lo hi right-index]} opts
+         left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
+         groups (resolve-asof-groups right right-keys right-index)
+         nl (ds/row-count left)]
+     (for [li (range nl)]
+       (let [exact (idx/row-exact-key left-rdrs li)
+             av (idx/row-asof-val left-rdrs li)
+             group (when (some? av) (get groups exact))]
+         (if (nil? group)
+           [li []]
+           (let [{:keys [reader orig n]} group
+                 lo-bound (+ (double av) (double lo))
+                 hi-bound (+ (double av) (double hi))
+                 lo-i (asof-search reader n lo-bound :forward)
+                 hi-i (asof-search reader n hi-bound :backward)]
+             (if (or (= lo-i -1) (= hi-i -1) (> lo-i hi-i))
+               [li []]
+               [li (subvec orig lo-i (inc hi-i))]))))))))
 

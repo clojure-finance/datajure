@@ -2,7 +2,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [tech.v3.dataset :as ds]
             [datajure.join :refer [join]]
-            [datajure.core :as core]))
+            [datajure.core :as core]
+            [datajure.index :as idx]))
 
 ;;; ---- fixtures --------------------------------------------------------------
 
@@ -367,3 +368,52 @@
       (is (= expected (vec (result :bid))))
       (is (some nil? expected))                           ; below-first rows unmatched
       (is (some #(= 7960 %) expected)))))                 ; right-edge match (10×796)
+
+;;; ---- B2a: prebuilt :asof index (datajure.index) ----------------------------
+
+(deftest asof-prebuilt-right-index-test
+  (testing "a prebuilt :asof index gives results identical to an inline build"
+    (let [idx-r  (idx/asof-index quotes [:sym :time])
+          inline (join trades quotes :on [:sym :time] :how :asof)
+          reused (join trades quotes :on [:sym :time] :how :asof :right-index idx-r)]
+      (is (= (ds/column-names inline) (ds/column-names reused)))
+      (is (= (vec (inline :bid)) (vec (reused :bid))))))
+  (testing "the same index serves repeated joins against different left tables"
+    (let [idx-r (idx/asof-index quotes [:sym :time])
+          left2 (ds/->dataset {:sym ["A" "B"] :time [2 5]})
+          r1 (join trades quotes :on [:sym :time] :how :asof :right-index idx-r)
+          r2 (join left2  quotes :on [:sym :time] :how :asof :right-index idx-r)]
+      (is (= 4 (ds/row-count r1)))
+      (is (= 2 (ds/row-count r2)))
+      ;; A@2 → last A-quote ≤2 = bid 11; B@5 → last B-quote ≤5 = bid 20
+      (is (= [11 20] (vec (r2 :bid))))))
+  (testing "window join also accepts a prebuilt :asof index"
+    (let [left  (ds/->dataset {:sym ["A"] :time [5]})
+          right (ds/->dataset {:sym ["A" "A" "A"] :time [1 4 6] :bid [10 20 30]})
+          idx-r (idx/asof-index right [:sym :time])
+          inline (join left right :on [:sym :time] :how :window :window [-3 0] :agg {:n core/nrow})
+          reused (join left right :on [:sym :time] :how :window :window [-3 0] :agg {:n core/nrow}
+                       :right-index idx-r)]
+      (is (= (vec (inline :n)) (vec (reused :n)))))))
+
+(deftest asof-right-index-validation-test
+  (testing "a non-index :right-index throws :asof-index-required"
+    (is (= :asof-index-required
+           (:dt/error (try (join trades quotes :on [:sym :time] :how :asof :right-index {:not :idx})
+                           nil (catch clojure.lang.ExceptionInfo e (ex-data e)))))))
+  (testing "a :hash index throws :asof-index-wrong-kind"
+    (let [h (idx/index-by quotes [:sym :time])]            ; :hash
+      (is (= :asof-index-wrong-kind
+             (:dt/error (try (join trades quotes :on [:sym :time] :how :asof :right-index h)
+                             nil (catch clojure.lang.ExceptionInfo e (ex-data e))))))))
+  (testing "an index built from a different dataset throws :asof-index-dataset-mismatch"
+    (let [other     (ds/->dataset {:sym ["A"] :time [1] :bid [99]})
+          idx-other (idx/asof-index other [:sym :time])]
+      (is (= :asof-index-dataset-mismatch
+             (:dt/error (try (join trades quotes :on [:sym :time] :how :asof :right-index idx-other)
+                             nil (catch clojure.lang.ExceptionInfo e (ex-data e))))))))
+  (testing "an index on different key columns throws :asof-index-keys-mismatch"
+    (let [idx-wrongkeys (idx/asof-index quotes [:time])]   ; join uses [:sym :time]
+      (is (= :asof-index-keys-mismatch
+             (:dt/error (try (join trades quotes :on [:sym :time] :how :asof :right-index idx-wrongkeys)
+                             nil (catch clojure.lang.ExceptionInfo e (ex-data e)))))))))

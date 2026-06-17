@@ -111,3 +111,36 @@
       (is (= 2 (ds/row-count last2)))
       (is (= [2021 2022] (vec (last2 :year))))            ; two most recent years
       (is (= [100 120] (vec (last2 :sales)))))))
+
+;;; ---- :asof kind ------------------------------------------------------------
+
+(deftest hash-kind-default-test
+  (testing "the default kind is :hash"
+    (is (= :hash (idx/kind (idx/index-by panel :tic))))
+    (is (= :hash (idx/kind (idx/index-by panel :tic {:kind :hash}))))))
+
+(deftest asof-kind-index-test
+  (testing "index-by {:kind :asof} / asof-index build an :asof index with accessors"
+    (let [right (ds/->dataset {:sym ["A" "A" "B"] :t [1 3 2] :bid [10 11 20]})
+          ai    (idx/index-by right [:sym :t] {:kind :asof})]
+      (is (idx/index? ai))
+      (is (= :asof (idx/kind ai)))
+      (is (= [:sym :t] (idx/key-columns ai)))
+      (is (identical? right (idx/source-dataset ai)))
+      (is (= :asof (idx/kind (idx/asof-index right [:sym :t])))))))
+
+(deftest asof-index-not-lookable-test
+  (testing "lookup / lookup-indices reject an :asof index (consume it via as-of joins)"
+    (let [ai (idx/asof-index panel [:tic :year])]
+      (is (= :asof-index-not-lookable
+             (:dt/error (try (idx/lookup ai ["AAPL" 2021]) nil
+                             (catch clojure.lang.ExceptionInfo e (ex-data e))))))
+      (is (= :asof-index-not-lookable
+             (:dt/error (try (idx/lookup-indices ai ["AAPL" 2021]) nil
+                             (catch clojure.lang.ExceptionInfo e (ex-data e)))))))))
+
+(deftest invalid-index-kind-test
+  (testing "unknown :kind throws :invalid-index-kind"
+    (is (= :invalid-index-kind
+           (:dt/error (try (idx/index-by panel :tic {:kind :sorted}) nil
+                           (catch clojure.lang.ExceptionInfo e (ex-data e))))))))

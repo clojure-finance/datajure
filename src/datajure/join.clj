@@ -155,11 +155,12 @@
   falls within [left-asof-key + lo, left-asof-key + hi] (inclusive).
   lo and hi are already in raw (possibly converted) units.
   Returns a dataset with all left columns plus one column per :agg entry."
-  [left right left-keys right-keys lo hi agg-map]
+  [left right left-keys right-keys lo hi agg-map right-index]
   (when (nil? agg-map)
     (throw (ex-info ":how :window requires an :agg map"
                     {:dt/error :join-missing-agg})))
-  (let [pairs (vec (asof/window-indices left right left-keys right-keys lo hi))
+  (let [pairs (vec (asof/window-indices left right left-keys right-keys
+                                        {:lo lo :hi hi :right-index right-index}))
         agg-keys (vec (keys agg-map))
         compiled-fns (mapv compile-agg-fn (vals agg-map))
         sub-datasets (mapv (fn [[_li matched-idxs]]
@@ -211,7 +212,8 @@
     keys. For each left row, ALL right rows within the window are collected and
     aggregated via :agg. All left rows are preserved; empty windows produce nil
     (or 0 for plain-fn count aggs) for each agg column."
-  [left right & {:keys [on left-on right-on how validate report direction tolerance window agg]
+  [left right & {:keys [on left-on right-on how validate report direction tolerance window agg
+                        right-index]
                  :or {how :inner report false direction :backward}}]
   (let [how-kw (if (string? how) (keyword how) how)
         left-keys (or (normalize-keys on) (normalize-keys left-on))
@@ -252,13 +254,15 @@
                              :dt/keys right-keys}))))
         (when report
           (print-report left right left-keys right-keys))
-        (let [pairs (asof/asof-match left right left-keys right-keys direction tolerance)]
+        (let [pairs (asof/asof-match left right left-keys right-keys
+                                     {:direction direction :tolerance tolerance
+                                      :right-index right-index})]
           (asof/build-result left right pairs right-keys)))
 
       ;; --- :window dispatch ---
       (= how-kw :window)
       (let [{:keys [lo hi]} (parse-window-spec window)]
-        (apply-window-join left right left-keys right-keys lo hi agg))
+        (apply-window-join left right left-keys right-keys lo hi agg right-index))
 
       ;; --- regular join dispatch ---
       :else
