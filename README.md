@@ -536,6 +536,29 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 
 `clean-column-names` preserves non-ASCII characters (CJK, accented Latin, Cyrillic, Greek) — `"市值 (HKD millions)!"` becomes `:市值-hkd-millions`.
 
+## Keyed Lookups
+
+Repeated point-lookups into a big panel — "give me one firm's rows" on every UI tab switch — shouldn't rescan the whole dataset. Build an index once, then look up in O(1):
+
+```clojure
+(require '[datajure.index :as idx])
+
+(def by-tic (idx/index-by panel :tic))      ;; build once; key on one or many columns
+(idx/lookup by-tic "AAPL")                   ;; => sub-dataset of AAPL's rows, original order
+
+;; multi-column keys use a tuple
+(def by-firm-date (idx/index-by panel [:gvkey :datadate]))
+(idx/lookup by-firm-date [1690 (java.time.LocalDate/parse "2020-03-31")])
+
+;; compose with dt — the everyday "last 20 quarters for one firm"
+(-> (idx/lookup by-tic "AAPL")
+    (dt :order-by [(asc :datadate)] :take -20))
+
+(idx/lookup-indices by-tic "AAPL")           ;; raw row indices, to gather yourself
+```
+
+An index is an immutable value that holds a reference to the dataset it was built from, so a lookup can never be applied to a mismatched table — this is data.table's `setindex()` (a secondary index), never a mutating `setkey()`. A key maps to many rows by default; an absent key yields an empty dataset.
+
 ## File I/O
 
 ```clojure

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`datajure.index` — keyed lookup index for repeated point-lookups.** Build an index once over one or more key columns, then resolve a key to its rows in O(1) instead of scanning: `(def by-tic (idx/index-by panel :tic))` then `(idx/lookup by-tic "AAPL")` → sub-dataset in original row order. Multi-column keys use a tuple; an absent key yields an empty dataset; `lookup-indices` returns the raw row indices for gathering from a row-aligned projection yourself. The index is an immutable value holding a reference to its source dataset, so a lookup can't be applied to a mismatched table — data.table's `setindex()`, never a mutating `setkey()`. Adds `index?` / `key-columns`; structured errors `:unknown-column` / `:invalid-key-cols` / `:invalid-lookup-key` / `:not-an-index`.
+
+### Changed
+
+- **As-of / window joins: O(left × group-size) → O(left × log group-size) per left row.** `datajure.asof`'s right-side index now splits each group's as-of values and original row indices (and wraps the column reader) once per group, instead of rebuilding them on every left row. `asof-match` / `window-indices` now do only a map lookup plus a binary search per probe. Pure internal change — same results, same public API. Verified depth-independent: 200k left rows hold ~140 ms as the matched group's depth grows 100→1600.
+
 ## [2.0.13] - 2026-06-16
 
 ### Added
