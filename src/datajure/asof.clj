@@ -145,9 +145,14 @@
   (nth (peek readers) i))
 
 (defn- build-right-index
-  "Return a map from exact-key-tuple -> sorted vector of [asof-val original-row-idx].
-  Sorted ascending by asof-val; nils placed last.
-  Right dataset need not be pre-sorted — sorting happens here."
+  "Return a map from exact-key-tuple -> a per-group struct
+  {:reader <reader over the asof-vals, sorted ascending, nils last>
+   :orig   <vector of original row indices, parallel to :reader>
+   :n      <count>}.
+  Right dataset need not be pre-sorted — sorting happens here. The asof-vals and
+  original indices are split apart ONCE per group (and the reader wrapped once),
+  so per-left-row probing in asof-match/window-indices does no re-splitting —
+  the inner loop drops from O(group-size) to O(log group-size) work per left row."
   [dataset key-cols]
   (let [readers (mapv #(dtype/->reader (ds/column dataset %)) key-cols)
         n (ds/row-count dataset)
@@ -162,7 +167,12 @@
         asof-cmp (fn [a b]
                    (cond (nil? a) 1 (nil? b) -1 :else (compare a b)))]
     (reduce-kv
-     (fn [m k pairs] (assoc m k (sort-by first asof-cmp pairs)))
+     (fn [m k pairs]
+       (let [sorted (sort-by first asof-cmp pairs)
+             avals (mapv first sorted)]
+         (assoc m k {:reader (dtype/->reader avals)
+                     :orig (mapv second sorted)
+                     :n (count avals)})))
      {}
      grouped)))
 
@@ -202,14 +212,13 @@
              group (get right-index exact)]
          (if (nil? group)
            [li nil]
-           (let [avals (mapv first group)
-                 orig-idx (mapv second group)
-                 local-ri (asof-search avals (count avals) av direction)]
+           (let [{:keys [reader orig n]} group
+                 local-ri (asof-search reader n av direction)]
              (if (= local-ri -1)
                [li nil]
-               (let [matched-val (nth avals local-ri)]
+               (let [matched-val (nth reader local-ri)]
                  (if (within-tolerance? av matched-val tolerance)
-                   [li (nth orig-idx local-ri)]
+                   [li (nth orig local-ri)]
                    [li nil]))))))))))
 
 ;;; ---- Part 3 ----------------------------------------------------------------
@@ -298,14 +307,12 @@
             group (when (some? av) (get right-index exact))]
         (if (nil? group)
           [li []]
-          (let [avals (mapv first group)
-                orig-idx (mapv second group)
-                n (count avals)
+          (let [{:keys [reader orig n]} group
                 lo-bound (+ (double av) (double lo-offset))
                 hi-bound (+ (double av) (double hi-offset))
-                lo-i (asof-search avals n lo-bound :forward)
-                hi-i (asof-search avals n hi-bound :backward)]
+                lo-i (asof-search reader n lo-bound :forward)
+                hi-i (asof-search reader n hi-bound :backward)]
             (if (or (= lo-i -1) (= hi-i -1) (> lo-i hi-i))
               [li []]
-              [li (subvec orig-idx lo-i (inc hi-i))])))))))
+              [li (subvec orig lo-i (inc hi-i))])))))))
 

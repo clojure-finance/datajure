@@ -338,3 +338,32 @@
           result (join left right :on [:sym :time] :how :asof)]
       (is (= 1 (ds/row-count result)))
       (is (= 100.0 (first (vec (:bid result))))))))
+
+(deftest asof-deep-group-many-left-rows-test
+  ;; Regression for the B1 rewrite: build-right-index splits asof-vals/orig and
+  ;; wraps the reader ONCE per group instead of rebuilding them per left row.
+  ;; With many left rows sharing one exact key against a deep right group — the
+  ;; exact shape that made the old inner loop O(left × group) — the result must
+  ;; still equal a brute-force backward as-of, in left-row order. Guards the
+  ;; struct-based index and the rewritten asof-match inner loop.
+  (testing "5000 left rows, one exact key, 200-deep right group → matches brute force"
+    (let [k 200
+          rtimes (vec (range 0 (* 4 k) 4))                 ; 0 4 8 … sorted ascending
+          right (ds/->dataset {:sym (vec (repeat k "A"))
+                               :time rtimes
+                               :bid (mapv #(* 10 %) rtimes)})
+          nl 5000
+          ;; deterministic spread: some below the first rtime (→ nil), many above
+          ;; the last (→ right edge), the rest interior.
+          ltimes (mapv (fn [i] (- (mod (* i 37) (* 4 k 2)) 3)) (range nl))
+          left (ds/->dataset {:sym (vec (repeat nl "A")) :time ltimes})
+          result (join left right :on [:sym :time] :how :asof)
+          expected (mapv (fn [lt]
+                           (when-let [m (last (filter #(<= % lt) rtimes))]
+                             (* 10 m)))
+                         ltimes)]
+      (is (= nl (ds/row-count result)))
+      (is (= ltimes (vec (result :time))))               ; left order preserved
+      (is (= expected (vec (result :bid))))
+      (is (some nil? expected))                           ; below-first rows unmatched
+      (is (some #(= 7960 %) expected)))))                 ; right-edge match (10×796)
