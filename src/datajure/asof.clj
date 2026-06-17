@@ -13,11 +13,12 @@
   Part 3 — build-result: assembles a tech.v3.dataset from the index pairs.
   Left columns always present in original order; right non-key columns
   appended (nil-filled for unmatched rows). Conflicting non-key column
-  names suffixed :right.<n>.
+  names prefixed with `right.` (e.g. :v -> :right.v).
 
   The right-side index construction lives in datajure.index (the `:asof` kind);
   this namespace owns the search (asof-search) and result assembly."
   (:require [tech.v3.datatype :as dtype]
+            [tech.v3.datatype.datetime :as dtype-dt]
             [tech.v3.dataset :as ds]
             [datajure.index :as idx]))
 
@@ -165,13 +166,23 @@
   (validate-asof-index! right-index right right-keys)
   (idx/asof-groups (or right-index (idx/asof-index right right-keys))))
 
+(defn- ->tol-num
+  "Coerce an asof value to the numeric space :tolerance is compared in: epoch
+  milliseconds for temporal (java.time) values, a double otherwise."
+  ^double [v]
+  (if (instance? java.time.temporal.Temporal v)
+    (double (dtype-dt/datetime->epoch :epoch-milliseconds v))
+    (double v)))
+
 (defn- within-tolerance?
-  "Returns true if abs(left-val - right-val) <= tolerance.
-  Always true when tolerance is nil. Requires numeric values."
+  "Returns true if abs(left-val - right-val) <= tolerance. Always true when
+  tolerance is nil. For temporal asof values the difference is taken in epoch
+  milliseconds, so `tolerance` must likewise be in milliseconds (the join layer
+  converts a [n unit] spec); for numeric values it is the raw difference."
   [left-val right-val tolerance]
   (or (nil? tolerance)
       (and (some? left-val) (some? right-val)
-           (<= (Math/abs (- (double left-val) (double right-val)))
+           (<= (Math/abs (- (->tol-num left-val) (->tol-num right-val)))
                (double tolerance)))))
 
 (defn asof-row-indices
@@ -306,7 +317,7 @@
   Returns a dataset with:
     - all left columns in original order
     - right non-key columns appended (nil-filled for unmatched rows)
-    - conflicting non-key column names suffixed with :right.<n>"
+    - conflicting non-key column names prefixed with `right.` (e.g. :v -> :right.v)"
   [left right pairs right-keys]
   (let [pv (vec pairs)
         nl (count pv)

@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.0.13"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.1.0"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -252,7 +252,7 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
 (dt ds :where (into [:and] (for [[c lo hi] thresholds] [:between? c lo hi])))
 ```
 
-Supported ops: `> < >= <= = and or not in between? + - * / sq log` (use a set for `:in`). Aggregations, window/row/stat ops, and `if`/`cond`/`let`/`cut`/`xbar` stay `#dt/e`-only.
+Supported ops: `> < >= <= = and or not in between? + - * / sq log div0` (use a set for `:in`). Aggregations, window/row/stat ops, and `if`/`cond`/`let`/`cut`/`xbar` stay `#dt/e`-only.
 
 ## `:select` — Polymorphic Column Selection
 
@@ -442,9 +442,14 @@ The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — 
 
 ;; Combine: nearest match within a 3-unit window
 (join left right :on [:time] :how :asof :direction :nearest :tolerance 3)
+
+;; Temporal asof key — :tolerance is a [n unit] duration (point-in-time staleness cap).
+;; Match each daily date to the most recent report by rdq, but no older than 90 days.
+(join crsp compustat :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+      :how :asof :tolerance [90 :days])
 ```
 
-`:tolerance` requires a numeric asof key. Matches that exceed the tolerance produce nil for right columns — same as having no match.
+`:tolerance` is a plain number for a **numeric** asof key, or a `[n unit]` spec (`:seconds`/`:minutes`/`:hours`/`:days`/`:weeks`) for a **temporal** (date/time) one. Matches that exceed the tolerance produce nil for right columns — same as having no match.
 
 ## Window Joins
 

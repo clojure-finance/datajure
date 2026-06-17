@@ -286,12 +286,12 @@
       (is (= :join-unknown-direction (:dt/error (ex-data e))))
       (is (= :sideways (:dt/direction (ex-data e)))))))
 
-(deftest asof-tolerance-non-numeric-error-test
-  ;; Regression: :tolerance on a non-numeric asof key (e.g. LocalDateTime)
-  ;; used to surface as a raw java.lang.ClassCastException from
-  ;; (double dt-value) inside asof/within-tolerance?. Now fails fast with
-  ;; a structured ex-info naming both sides.
-  (testing ":tolerance on LocalDateTime asof key throws :join-tolerance-non-numeric"
+(deftest asof-tolerance-form-validation-test
+  ;; A temporal asof key now SUPPORTS :tolerance (as a [n unit] spec). A plain
+  ;; number on a temporal key is the wrong form → :join-tolerance-invalid; a
+  ;; genuinely non-numeric / non-temporal key (e.g. string) → still
+  ;; :join-tolerance-non-numeric.
+  (testing "plain number on a temporal asof key → :join-tolerance-invalid ([n unit] expected)"
     (let [left (ds/->dataset {:sym ["A"]
                               :time [(java.time.LocalDateTime/of 2024 1 1 10 0)]})
           right (ds/->dataset {:sym ["A"]
@@ -302,27 +302,19 @@
                  (catch clojure.lang.ExceptionInfo e e))
           ed (ex-data e)]
       (is (some? e))
-      (is (= :join-tolerance-non-numeric (:dt/error ed)))
+      (is (= :join-tolerance-invalid (:dt/error ed)))
       (is (= 60 (:dt/tolerance ed)))
       (is (= :time (:dt/left-asof-col ed)))
-      (is (= :time (:dt/right-asof-col ed)))
-      (is (= :local-date-time (:dt/left-asof-datatype ed)))
-      ;; Error message is actionable — mentions epoch-milliseconds as the fix.
-      (is (re-find #"epoch-milliseconds" (.getMessage e)))))
-  (testing ":tolerance with asymmetric datetime keys also caught"
-    (let [left (ds/->dataset {:sym ["A"]
-                              :trade-time [(java.time.LocalDateTime/of 2024 1 1 10 0)]})
-          right (ds/->dataset {:sym ["A"]
-                               :quote-time [(java.time.LocalDateTime/of 2024 1 1 9 59)]
-                               :bid [100.0]})
-          ed (try (join left right :left-on [:sym :trade-time] :right-on [:sym :quote-time]
-                        :how :asof :tolerance 60)
+      (is (re-find #"\[n unit\]" (.getMessage e)))))      ; actionable: names the spec form
+  (testing "string asof key + :tolerance → :join-tolerance-non-numeric"
+    (let [left (ds/->dataset {:sym ["A"] :time ["t1"]})
+          right (ds/->dataset {:sym ["A"] :time ["t0"] :bid [100.0]})
+          ed (try (join left right :on [:sym :time] :how :asof :tolerance 5)
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
       (is (= :join-tolerance-non-numeric (:dt/error ed)))
-      (is (= :trade-time (:dt/left-asof-col ed)))
-      (is (= :quote-time (:dt/right-asof-col ed)))))
-  (testing ":tolerance without a datetime column still works (no regression)"
+      (is (= :time (:dt/left-asof-col ed)))))
+  (testing ":tolerance on a numeric asof key still works (no regression)"
     (let [left (ds/->dataset {:time [100.0 500.0]})
           right (ds/->dataset {:time [50.0 300.0] :bid [10.0 20.0]})
           result (join left right :on [:time] :how :asof :tolerance 100)]
@@ -339,6 +331,36 @@
           result (join left right :on [:sym :time] :how :asof)]
       (is (= 1 (ds/row-count result)))
       (is (= 100.0 (first (vec (:bid result))))))))
+
+(deftest asof-tolerance-temporal-test
+  ;; B3: temporal :tolerance as a [n unit] duration — the point-in-time staleness
+  ;; cap for CRSP daily × Compustat quarterly. Match each daily date to the most
+  ;; recent report by rdq, but drop matches older than the cap.
+  (let [right (ds/->dataset {:gvkey ["A" "A"]
+                             :rdq [(java.time.LocalDate/of 2020 1 31)
+                                   (java.time.LocalDate/of 2020 4 30)]
+                             :eps [1.0 2.0]})
+        left (ds/->dataset {:gvkey ["A" "A" "A"]
+                            :date [(java.time.LocalDate/of 2020 2 10)   ; 10d after Jan-31
+                                   (java.time.LocalDate/of 2020 9 1)    ; 124d after Apr-30 → stale
+                                   (java.time.LocalDate/of 2020 5 5)]})] ; 5d after Apr-30
+    (testing "[n unit] caps staleness; matches beyond the window become nil"
+      (let [r (join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                    :how :asof :tolerance [100 :days])]
+        (is (= [1.0 nil 2.0] (vec (r :eps))))))
+    (testing "without :tolerance the last report carries forward unbounded"
+      (let [r (join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq] :how :asof)]
+        (is (= [1.0 2.0 2.0] (vec (r :eps))))))
+    (testing "a wider window keeps the otherwise-stale match"
+      (let [r (join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                    :how :asof :tolerance [200 :days])]
+        (is (= [1.0 2.0 2.0] (vec (r :eps))))))
+    (testing "an unknown :tolerance unit → :join-tolerance-unknown-unit"
+      (is (= :join-tolerance-unknown-unit
+             (-> (try (join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                            :how :asof :tolerance [3 :fortnights]) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
 
 (deftest asof-deep-group-many-left-rows-test
   ;; Regression for the B1 rewrite: build-right-index splits asof-vals/orig and

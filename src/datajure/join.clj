@@ -37,48 +37,87 @@
   [k]
   (when k (if (keyword? k) [k] (vec k))))
 
+(defn- col-datatype [dataset col-kw]
+  (some-> (ds/column dataset col-kw) meta :datatype))
+
 (defn- numeric-column?
   "Returns true iff the column's :datatype is a numeric type per
   tech.v3.datatype.casting/numeric-type?. Used to gate :tolerance support."
   [dataset col-kw]
-  (let [dt (some-> (ds/column dataset col-kw) meta :datatype)]
+  (let [dt (col-datatype dataset col-kw)]
     (boolean (and dt (casting/numeric-type? dt)))))
 
-(defn- check-tolerance-compatible!
-  "Throw a structured ex-info if :tolerance is non-nil but the asof key
-  column (last of left-keys / right-keys) is not numeric. Prevents the raw
-  ClassCastException that would otherwise surface from (double dt-value)
-  inside asof/within-tolerance? for LocalDateTime and other non-numeric types."
-  [tolerance left right left-keys right-keys]
-  (when (some? tolerance)
-    (let [left-asof (peek left-keys)
-          right-asof (peek right-keys)]
-      (when-not (and (numeric-column? left left-asof)
-                     (numeric-column? right right-asof))
-        (throw (ex-info
-                (str ":tolerance on an as-of join requires a numeric asof key. "
-                     "Got left " left-asof " (datatype "
-                     (some-> (ds/column left left-asof) meta :datatype) ") "
-                     "and right " right-asof " (datatype "
-                     (some-> (ds/column right right-asof) meta :datatype) "). "
-                     "Convert the asof column to epoch-milliseconds (or another "
-                     "numeric representation) before joining, or omit :tolerance.")
-                {:dt/error :join-tolerance-non-numeric
-                 :dt/tolerance tolerance
-                 :dt/left-asof-col left-asof
-                 :dt/right-asof-col right-asof
-                 :dt/left-asof-datatype (some-> (ds/column left left-asof) meta :datatype)
-                 :dt/right-asof-datatype (some-> (ds/column right right-asof) meta :datatype)}))))))
-
-;;; ---- Window join helpers ---------------------------------------------------
+(defn- temporal-column?
+  "Returns true iff the column's :datatype is a datetime type (e.g. :local-date,
+  :local-date-time, :instant). Temporal asof keys support a [n unit] :tolerance."
+  [dataset col-kw]
+  (let [dt (col-datatype dataset col-kw)]
+    (boolean (and dt (dtype-dt/datetime-datatype? dt)))))
 
 (def ^:private window-unit-millis
-  "Milliseconds per temporal unit — used to convert window offsets."
+  "Milliseconds per temporal unit — converts window-join offsets and temporal
+  as-of :tolerance specs to a common numeric (epoch-millisecond) space."
   {:seconds dtype-dt/milliseconds-in-second
    :minutes dtype-dt/milliseconds-in-minute
    :hours dtype-dt/milliseconds-in-hour
    :days dtype-dt/milliseconds-in-day
    :weeks dtype-dt/milliseconds-in-week})
+
+(defn- resolve-tolerance
+  "Validate and normalise :tolerance for an as-of join, returning the numeric
+  tolerance asof/within-tolerance? compares against — raw for a numeric asof key,
+  epoch-milliseconds for a temporal one (from a [n unit] spec like [90 :days]).
+  nil passes through. Throws a structured ex-info for an unsupported asof-key
+  datatype or a tolerance whose form doesn't match the key."
+  [tolerance left right left-keys right-keys]
+  (if (nil? tolerance)
+    nil
+    (let [left-asof (peek left-keys)
+          right-asof (peek right-keys)]
+      (cond
+        ;; Temporal first: packed date types (:packed-local-date) report as BOTH
+        ;; numeric and datetime, and we want the [n unit] (duration) semantics.
+        (and (temporal-column? left left-asof) (temporal-column? right right-asof))
+        (if (and (sequential? tolerance) (= 2 (count tolerance))
+                 (number? (first tolerance)) (keyword? (second tolerance)))
+          (let [[n unit] tolerance
+                ms (or (window-unit-millis unit)
+                       (throw (ex-info (str "Unknown :tolerance unit " unit
+                                            ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
+                                       {:dt/error :join-tolerance-unknown-unit :unit unit})))]
+            (* n ms))
+          (throw (ex-info (str ":tolerance on a temporal asof key must be a [n unit] spec "
+                               "(e.g. [90 :days]); units :seconds/:minutes/:hours/:days/:weeks. Got "
+                               (pr-str tolerance) ".")
+                          {:dt/error :join-tolerance-invalid
+                           :dt/tolerance tolerance
+                           :dt/left-asof-col left-asof
+                           :dt/left-asof-datatype (col-datatype left left-asof)})))
+
+        (and (numeric-column? left left-asof) (numeric-column? right right-asof))
+        (if (number? tolerance)
+          tolerance
+          (throw (ex-info (str ":tolerance on a numeric asof key must be a number, got "
+                               (pr-str tolerance) ".")
+                          {:dt/error :join-tolerance-invalid
+                           :dt/tolerance tolerance
+                           :dt/left-asof-col left-asof
+                           :dt/left-asof-datatype (col-datatype left left-asof)})))
+
+        :else
+        (throw (ex-info
+                (str ":tolerance on an as-of join requires a numeric or temporal asof key. "
+                     "Got left " left-asof " (datatype " (col-datatype left left-asof) ") "
+                     "and right " right-asof " (datatype " (col-datatype right right-asof) "). "
+                     "Convert the asof column to a numeric/temporal representation, or omit :tolerance.")
+                {:dt/error :join-tolerance-non-numeric
+                 :dt/tolerance tolerance
+                 :dt/left-asof-col left-asof
+                 :dt/right-asof-col right-asof
+                 :dt/left-asof-datatype (col-datatype left left-asof)
+                 :dt/right-asof-datatype (col-datatype right right-asof)}))))))
+
+;;; ---- Window join helpers ---------------------------------------------------
 
 (defn- parse-window-spec
   "Parse a window spec vector into {:lo lo-raw :hi hi-raw} in raw units.
@@ -189,8 +228,10 @@
                  :backward = last right where right-key <= left-key.
                  :forward  = first right where right-key >= left-key.
                  :nearest  = closest by abs distance; ties prefer :backward.
-    :tolerance — (asof only) numeric max abs distance; matches exceeding it
-                 produce nil. Requires a numeric asof key. nil = unbounded.
+    :tolerance — (asof only) max abs distance; matches exceeding it produce nil.
+                 nil = unbounded. For a numeric asof key, a number (raw units);
+                 for a temporal asof key, a [n unit] spec (e.g. [90 :days]; units
+                 :seconds/:minutes/:hours/:days/:weeks).
     :window    — (window only) window spec relative to each left row's asof-key.
                  Formats: [lo hi], [lo hi unit], or [lo unit hi].
                  E.g. [-5 0 :minutes] = 5-minute lookback (inclusive).
@@ -234,12 +275,11 @@
     (cond
       ;; --- :asof dispatch ---
       (= how-kw :asof)
-      (do
+      (let [tol (resolve-tolerance tolerance left right left-keys right-keys)]
         (when-not (#{:backward :forward :nearest} direction)
           (throw (ex-info (str "Unknown :direction: " direction
                                ". Must be :backward, :forward, or :nearest.")
                           {:dt/error :join-unknown-direction :dt/direction direction})))
-        (check-tolerance-compatible! tolerance left right left-keys right-keys)
         (when validate
           (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
             (throw (ex-info (str "Unknown :validate value: " validate
@@ -256,7 +296,7 @@
           (print-report left right left-keys right-keys))
         (let [{:keys [li ri]} (asof/asof-row-indices
                                left right left-keys right-keys
-                               {:direction direction :tolerance tolerance
+                               {:direction direction :tolerance tol
                                 :right-index right-index})]
           (asof/build-result-arrays left right li ri right-keys)))
 
