@@ -254,10 +254,11 @@
                              :dt/keys right-keys}))))
         (when report
           (print-report left right left-keys right-keys))
-        (let [pairs (asof/asof-match left right left-keys right-keys
-                                     {:direction direction :tolerance tolerance
-                                      :right-index right-index})]
-          (asof/build-result left right pairs right-keys)))
+        (let [{:keys [li ri]} (asof/asof-row-indices
+                               left right left-keys right-keys
+                               {:direction direction :tolerance tolerance
+                                :right-index right-index})]
+          (asof/build-result-arrays left right li ri right-keys)))
 
       ;; --- :window dispatch ---
       (= how-kw :window)

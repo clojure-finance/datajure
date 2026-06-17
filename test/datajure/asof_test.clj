@@ -369,6 +369,22 @@
       (is (some nil? expected))                           ; below-first rows unmatched
       (is (some #(= 7960 %) expected)))))                 ; right-edge match (10×796)
 
+(deftest asof-result-preserves-dtype-and-missing-test
+  ;; Regression for the B2b array-write build-result: right columns are gathered
+  ;; into object-arrays, so tech must still infer the original datatype and mark
+  ;; unmatched rows as missing (not coerce nil to NaN or widen the type).
+  (testing "matched/unmatched gather preserves right-column dtype + missing set"
+    (let [right (ds/->dataset {:sym ["A" "A"] :time [1 5]
+                               :bid [10.0 20.0] :tag ["x" "y"]})
+          left  (ds/->dataset {:sym ["A" "A" "A"] :time [0 1 9]})  ; t=0 unmatched
+          r     (join left right :on [:sym :time] :how :asof)]
+      (is (= :float64 (-> r (ds/column :bid) meta :datatype)))
+      (is (= :string  (-> r (ds/column :tag) meta :datatype)))
+      (is (= [nil 10.0 20.0] (vec (r :bid))))
+      (is (= [nil "x" "y"]   (vec (r :tag))))
+      (is (= #{0} (set (ds/missing (ds/column r :bid)))))      ; only the t=0 row
+      (is (= #{0} (set (ds/missing (ds/column r :tag))))))))
+
 ;;; ---- B2a: prebuilt :asof index (datajure.index) ----------------------------
 
 (deftest asof-prebuilt-right-index-test
