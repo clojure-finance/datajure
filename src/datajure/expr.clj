@@ -503,6 +503,64 @@
      :else (lit-node form))))
 
 ;; ---------------------------------------------------------------------------
+;; Runtime data-form builder: evaluated Clojure data -> AST
+;; ---------------------------------------------------------------------------
+;;
+;; A data-form is the runtime-data analogue of a #dt/e expression: plain
+;; *evaluated* Clojure data, so a runtime value (a local, a parameter) flows
+;; straight in where #dt/e — a read-time reader tag — can only see a literal.
+;; It compiles down the exact same AST / vectorized path.
+
+(def ^:private data-form-ops
+  "Ops permitted in a runtime data-form: the element-wise comparison, logical,
+  arithmetic, and membership ops. Aggregations, window/row/stat ops, and the
+  structural special forms (if/cond/let/cut/xbar/coalesce) remain #dt/e-only."
+  #{:> :< :>= :<= := :and :or :not :in :between? :+ :- :* :div :div0 :sq :log})
+
+(def ^:private data-op-aliases
+  "Keyword op aliases accepted in data-forms -> canonical op keyword. Only the
+  ops whose natural keyword differs from the canonical name need an entry."
+  {:/ :div})
+
+(defn- data-op->kw
+  "Normalise and validate a data-form op (a keyword like :=, :>, :and)."
+  [op]
+  (if-not (keyword? op)
+    (throw (ex-info (str "data-form op must be a keyword (e.g. :=, :>, :and); got "
+                         (pr-str op) ".")
+                    {:dt/error :invalid-data-op :dt/op op}))
+    (let [op-kw (get data-op-aliases op op)]
+      (if (contains? data-form-ops op-kw)
+        op-kw
+        (throw (ex-info (str "Unknown data-form op " op ". Supported ops: "
+                             (vec (sort data-form-ops))
+                             ". For aggregations, window/row/stat ops, or "
+                             "if/cond/let/cut/xbar use #dt/e.")
+                        {:dt/error :unknown-data-op
+                         :dt/op op
+                         :dt/supported (vec (sort data-form-ops))}))))))
+
+(defn data->ast
+  "Convert a runtime data-form expression to a #dt/e AST so it compiles down the
+  same vectorized path. The form mirrors #dt/e but as plain *evaluated* data:
+    - a vector [op-kw & args] is an operation (op-kw a keyword: :=, :>, :and, ...);
+    - a keyword is a column reference;
+    - anything else (number, string, set, the value of a local) is a literal.
+  So (data->ast [:= :tic ticker]) closes over the runtime value of `ticker`.
+  Supports the element-wise ops in `data-form-ops`; richer expressions use #dt/e.
+  Use sets (not vectors) for `:in` membership, since vectors denote operations."
+  [form]
+  (cond
+    (keyword? form) (col-node form)
+    (vector? form)
+    (do
+      (when (empty? form)
+        (throw (ex-info "Empty data-form vector — expected [op & args]."
+                        {:dt/error :invalid-data-form :dt/value form})))
+      (op-node (data-op->kw (first form)) (mapv data->ast (rest form))))
+    :else (lit-node form)))
+
+;; ---------------------------------------------------------------------------
 ;; Compiler: AST -> fn of dataset
 ;; ---------------------------------------------------------------------------
 

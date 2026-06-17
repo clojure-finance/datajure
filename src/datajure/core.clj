@@ -89,10 +89,16 @@
                        :dt/derived-cols derived-cols})))))))))
 
 (defn- apply-where [dataset predicate]
-  (if (expr-node? predicate)
-    (do (validate-expr-cols dataset predicate :where)
-        (ds/select-rows dataset ((expr/compile-expr predicate) dataset)))
-    (ds/filter dataset predicate)))
+  (let [node (cond
+               (expr-node? predicate) predicate
+               ;; a runtime data-form vector (e.g. [:= :tic ticker]) desugars to
+               ;; the same AST #dt/e produces, riding the vectorized path
+               (vector? predicate) (expr/data->ast predicate)
+               :else nil)]
+    (if node
+      (do (validate-expr-cols dataset node :where)
+          (ds/select-rows dataset ((expr/compile-expr node) dataset)))
+      (ds/filter dataset predicate))))
 
 (defn- derive-column [dataset col-kw col-fn]
   (if (expr-node? col-fn)
@@ -718,7 +724,10 @@
 (defn dt
   "Query a dataset. Supported keywords: :where, :set, :agg, :by, :select, :order-by, :within-order, :take.
 
-  :where         - filter rows. Accepts #dt/e expression or plain fn of row map.
+  :where         - filter rows. Accepts a #dt/e expression, a runtime data-form
+                   vector (e.g. [:= :tic ticker] — keywords are columns, anything
+                   else is a literal value, so runtime values flow in without a
+                   row-map), or a plain fn of the row map.
   :set           - derive/update columns. Accepts map or vector-of-pairs.
                    When :set contains win/* functions, window mode is activated —
                    with :by, computes within groups; without :by, whole dataset is one partition.

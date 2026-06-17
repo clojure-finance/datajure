@@ -2409,4 +2409,74 @@
     (let [col [nil nil nil]]
       (is (= 0 (core/count* col))))))
 
+;; ---------------------------------------------------------------------------
+;; :where data-form predicate (runtime values, vectorized — desugars to #dt/e AST)
+;; ---------------------------------------------------------------------------
+
+(deftest data-form-where-runtime-value
+  (testing "a keyword names a column, a non-keyword is a runtime literal value"
+    (let [ticker "Gentoo"                       ; runtime value, not a read-time literal
+          thr 4000
+          eq (core/dt penguins :where [:= :species ticker])
+          gt (core/dt penguins :where [:> :mass thr])]
+      (is (= ["Gentoo" "Gentoo"] (vec (eq :species))))
+      (is (= [5000 4800] (vec (gt :mass)))))))
+
+(deftest data-form-where-nested-and-membership
+  (testing "nested boolean combinators, :in (set), :between?, and arithmetic"
+    (is (= [3750 5000]
+           (vec ((core/dt penguins :where [:and [:> :mass 3700] [:= :year 2007]]) :mass))))
+    (is (= #{"Adelie" "Chinstrap"}
+           (set (vec ((core/dt penguins :where [:in :species #{"Adelie" "Chinstrap"}]) :species)))))
+    (is (= [3750 3800 4800]
+           (vec ((core/dt penguins :where [:between? :mass 3750 4800]) :mass))))
+    (is (= [5000 4800]                          ; (mass - 100) > 4000
+           (vec ((core/dt penguins :where [:> [:- :mass 100] 4000]) :mass))))))
+
+(deftest data-form-where-equivalent-to-dt-e
+  (testing "a data-form and the equivalent #dt/e literal compile to the same result"
+    (doseq [[df dfe] [[[:> :mass 4000]            #dt/e (> :mass 4000)]
+                      [[:and [:>= :mass 3750] [:< :mass 5000]]
+                       #dt/e (and (>= :mass 3750) (< :mass 5000))]
+                      [[:in :species #{"Adelie"}] #dt/e (in :species #{"Adelie"})]]]
+      (is (= (vec ((core/dt penguins :where df) :mass))
+             (vec ((core/dt penguins :where dfe) :mass)))))))
+
+(deftest data-form-where-nil-value-is-zero-rows
+  (testing "comparing a column to a runtime nil yields 0 rows (matches #dt/e nil-safety)"
+    (let [missing nil]
+      (is (= 0 (ds/row-count (core/dt penguins :where [:= :species missing])))))))
+
+(deftest data-form-where-programmatic
+  (testing "a predicate assembled at runtime (the parameterized-screen pattern)"
+    (let [bounds {:mass [3700 4900] :year 2007}
+          pred (into [:and]
+                     (concat [[:between? :mass (first (:mass bounds)) (second (:mass bounds))]]
+                             [[:= :year (:year bounds)]]))
+          r (core/dt penguins :where pred)]
+      ;; only Adelie@3750 is both in [3700,4900] and year 2007
+      (is (= [3750] (vec (r :mass)))))))
+
+(deftest data-form-where-plain-fn-still-works
+  (testing "a plain fn :where is unaffected by the data-form path"
+    (is (= [5000 4800]
+           (vec ((core/dt penguins :where (fn [row] (> (:mass row) 4000))) :mass))))))
+
+(deftest data-form-where-errors
+  (testing "unknown column → :unknown-column"
+    (is (= :unknown-column
+           (-> (try (core/dt penguins :where [:= :tikker "x"]) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error))))
+  (testing "unknown op → :unknown-data-op (aggregations / win etc. stay #dt/e-only)"
+    (is (= :unknown-data-op
+           (-> (try (core/dt penguins :where [:gt :mass 4000]) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error))))
+  (testing "non-keyword op → :invalid-data-op"
+    (is (= :invalid-data-op
+           (-> (try (core/dt penguins :where [+ :mass 1]) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
 
