@@ -362,6 +362,51 @@
                       (catch clojure.lang.ExceptionInfo e e))
                  ex-data :dt/error))))))
 
+(deftest asof-nearest-window-temporal-key-error-test
+  ;; A date/temporal asof key works with :backward/:forward (they compare), but
+  ;; :direction :nearest and :how :window do raw arithmetic on the asof value and
+  ;; would otherwise blow up with an opaque ClassCastException. Guard both paths
+  ;; with a structured :asof-non-numeric-asof-key error instead.
+  (let [right (ds/->dataset {:gvkey ["A" "A"]
+                             :rdq [(java.time.LocalDate/of 2020 1 31)
+                                   (java.time.LocalDate/of 2020 4 30)]
+                             :eps [1.0 2.0]})
+        left (ds/->dataset {:gvkey ["A"]
+                            :date [(java.time.LocalDate/of 2020 3 1)]})
+        err (fn [thunk] (-> (try (thunk) nil
+                                 (catch clojure.lang.ExceptionInfo e e))
+                            ex-data :dt/error))]
+    (testing ":direction :nearest on a date asof key → structured error, not ClassCastException"
+      (is (= :asof-non-numeric-asof-key
+             (err #(join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                         :how :asof :direction :nearest)))))
+    (testing ":how :window on a date asof key → structured error"
+      (is (= :asof-non-numeric-asof-key
+             (err #(join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                         :how :window :window [-5 5] :agg {:n (fn [d] (ds/row-count d))})))))
+    (testing "the error carries the offending columns and datatypes"
+      (let [data (-> (try (join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                                :how :asof :direction :nearest) nil
+                          (catch clojure.lang.ExceptionInfo e e))
+                     ex-data)]
+        (is (= :date (:dt/left-asof-col data)))
+        (is (= :rdq (:dt/right-asof-col data)))
+        (is (= :packed-local-date (:dt/left-asof-datatype data)))))
+    (testing ":backward/:forward on the same date key are unaffected"
+      ;; left date 2020-03-01: backward → Jan-31 (1.0), forward → Apr-30 (2.0)
+      (is (= [1.0] (vec ((join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                               :how :asof :direction :backward) :eps))))
+      (is (= [2.0] (vec ((join left right :left-on [:gvkey :date] :right-on [:gvkey :rdq]
+                               :how :asof :direction :forward) :eps)))))
+    (testing "numeric :nearest and :window still work (guard is type-gated, not blanket)"
+      (let [nright (ds/->dataset {:sym ["A" "A"] :time [8 13] :v [10 20]})
+            nleft (ds/->dataset {:sym ["A"] :time [10]})]
+        (is (= [10] (vec ((join nleft nright :on [:sym :time]
+                                :how :asof :direction :nearest) :v))))
+        (is (= [2] (vec ((join nleft nright :on [:sym :time]
+                               :how :window :window [-5 5]
+                               :agg {:n (fn [d] (ds/row-count d))}) :n))))))))
+
 (deftest asof-deep-group-many-left-rows-test
   ;; Regression for the B1 rewrite: build-right-index splits asof-vals/orig and
   ;; wraps the reader ONCE per group instead of rebuilding them per left row.

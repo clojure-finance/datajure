@@ -19,6 +19,7 @@
   this namespace owns the search (asof-search) and result assembly."
   (:require [tech.v3.datatype :as dtype]
             [tech.v3.datatype.datetime :as dtype-dt]
+            [tech.v3.datatype.casting :as casting]
             [tech.v3.dataset :as ds]
             [datajure.index :as idx]))
 
@@ -134,6 +135,46 @@
 
 ;;; ---- Part 2 ----------------------------------------------------------------
 
+(defn- numeric-asof-key?
+  "True iff `asof-col` is safe for the double-arithmetic search paths (:nearest
+  direction and window offsets): a numeric datatype that is NOT a datetime type.
+  Packed date types (e.g. :packed-local-date) report as numeric per
+  casting/numeric-type? but their readers yield java.time objects that cannot be
+  double-cast, so datetime types are excluded."
+  [dataset asof-col]
+  (let [dt (some-> (ds/column dataset asof-col) meta :datatype)]
+    (boolean (and dt
+                  (casting/numeric-type? dt)
+                  (not (dtype-dt/datetime-datatype? dt))))))
+
+(defn- ensure-numeric-asof-keys!
+  "Throw a structured ex-info if either asof key (the last of left-keys /
+  right-keys) is not a numeric, non-temporal column. `feature` names the caller
+  for the message (e.g. \":direction :nearest\"). These paths do raw arithmetic
+  on the asof values, so a date/temporal key would otherwise fail with an opaque
+  ClassCastException. :backward and :forward (which compare instead) have no such
+  restriction; temporal keys are fully supported there."
+  [left right left-keys right-keys feature]
+  (let [l-col (peek left-keys)
+        r-col (peek right-keys)]
+    (when-not (and (numeric-asof-key? left l-col)
+                   (numeric-asof-key? right r-col))
+      (let [l-dt (some-> (ds/column left l-col) meta :datatype)
+            r-dt (some-> (ds/column right r-col) meta :datatype)]
+        (throw (ex-info
+                (str feature " requires a numeric asof key; got left " l-col
+                     " (datatype " l-dt ") and right " r-col " (datatype " r-dt "). "
+                     "Date/temporal asof keys are supported by :direction :backward and "
+                     ":forward (and by :tolerance via a [n unit] spec), but not by "
+                     feature ". Convert the asof column to a numeric representation "
+                     "(e.g. epoch days or milliseconds) to use it.")
+                {:dt/error :asof-non-numeric-asof-key
+                 :dt/feature feature
+                 :dt/left-asof-col l-col
+                 :dt/right-asof-col r-col
+                 :dt/left-asof-datatype l-dt
+                 :dt/right-asof-datatype r-dt}))))))
+
 (defn- validate-asof-index!
   "Throw a structured ex-info if a user-supplied `:right-index` does not match
   this join's `right` dataset and `right-keys`. The index stores positional row
@@ -194,7 +235,9 @@
 
   Arguments: left, right, left-keys, right-keys (last key col = asof, rest =
   exact), and `opts`:
-    :direction   — :backward (default), :forward, or :nearest
+    :direction   — :backward (default), :forward, or :nearest. :nearest requires
+                   a numeric (non-temporal) asof key, since it ranks matches by
+                   raw distance; :backward/:forward work with any comparable key.
     :tolerance   — numeric max abs distance; nil = unbounded. Requires a numeric
                    asof key. Matches exceeding it become no-match (-1).
     :right-index — (optional) a prebuilt :asof index over `right`/`right-keys`
@@ -202,6 +245,8 @@
                    against `right` (identical?) and `right-keys`."
   [left right left-keys right-keys opts]
   (let [{:keys [direction tolerance right-index] :or {direction :backward}} opts
+        _ (when (= direction :nearest)
+            (ensure-numeric-asof-keys! left right left-keys right-keys ":direction :nearest"))
         left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
         groups (resolve-asof-groups right right-keys right-index)
         nl (ds/row-count left)
@@ -345,12 +390,17 @@
   an optional prebuilt :asof index over `right`/`right-keys` (validated, reused
   instead of rebuilt).
 
+  Requires a numeric (non-temporal) asof key: the window bounds are computed by
+  adding the raw offsets to each left asof value. A date/temporal asof key throws
+  a structured :asof-non-numeric-asof-key error (convert it to epoch days/millis).
+
   Returns a sequence of [left-row-idx [matched-right-original-row-indices]] pairs.
   Empty inner vector means no right rows fell in the window (left row still appears).
   Left rows with nil asof-key always yield an empty inner vector."
   ([left right left-keys right-keys lo-offset hi-offset]
    (window-indices left right left-keys right-keys {:lo lo-offset :hi hi-offset}))
   ([left right left-keys right-keys opts]
+   (ensure-numeric-asof-keys! left right left-keys right-keys "window join (:how :window)")
    (let [{:keys [lo hi right-index]} opts
          left-rdrs (mapv #(dtype/->reader (ds/column left %)) left-keys)
          groups (resolve-asof-groups right right-keys right-index)

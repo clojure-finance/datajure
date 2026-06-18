@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`:direction :nearest` / `:how :window` on a date/temporal asof key now throw a structured error instead of a raw `ClassCastException`.** Both paths rank or bound matches by raw arithmetic on the asof value, which a `java.time` key (e.g. `:local-date`) cannot supply, so they previously failed deep in the search with an opaque `class java.time.LocalDate cannot be cast to class java.lang.Number`. They now raise `:dt/error :asof-non-numeric-asof-key` up front, naming the offending columns/datatypes and pointing to the supported paths (`:direction :backward`/`:forward`, and `:tolerance` via `[n unit]`, all of which keep working with temporal keys) or to converting the column to epoch days/millis. A packed date type (`:packed-local-date`) reports as both numeric and datetime but yields temporal objects, so it is correctly treated as temporal here.
+
 ## [2.1.0] - 2026-06-17
 
 ### Added

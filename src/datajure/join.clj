@@ -228,6 +228,8 @@
                  :backward = last right where right-key <= left-key.
                  :forward  = first right where right-key >= left-key.
                  :nearest  = closest by abs distance; ties prefer :backward.
+                 :nearest requires a numeric (non-temporal) asof key;
+                 :backward/:forward also support date/temporal keys.
     :tolerance — (asof only) max abs distance; matches exceeding it produce nil.
                  nil = unbounded. For a numeric asof key, a number (raw units);
                  for a temporal asof key, a [n unit] spec (e.g. [90 :days]; units
@@ -236,6 +238,8 @@
                  Formats: [lo hi], [lo hi unit], or [lo unit hi].
                  E.g. [-5 0 :minutes] = 5-minute lookback (inclusive).
                  Units: :seconds, :minutes, :hours, :days, :weeks.
+                 Requires a numeric (non-temporal) asof key; convert a date
+                 column to epoch days/millis to window over it.
     :agg       — (window only) map of {output-col agg-fn}. agg-fn can be a
                  #dt/e expression or a plain fn receiving the matched sub-dataset.
                  Empty windows return nil for #dt/e exprs; plain fns receive a

@@ -455,7 +455,7 @@ The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — 
 
 Inspired by q's `wj`. For each left row, finds **all** right rows whose asof-key falls within a window around the left row's asof-key, then aggregates them with `:agg`. All left rows are preserved.
 
-The **last column** in `:on` is the asof column — preceding columns are exact-match keys.
+The **last column** in `:on` is the asof column — preceding columns are exact-match keys. It must be **numeric** (the window bounds are computed by arithmetic on the asof value, and a `:minutes`/`:days`/… unit just scales the offsets); a date/`java.time` asof column throws a structured `:asof-non-numeric-asof-key` — store it as epoch days/millis to window over it. The same applies to `:direction :nearest`, which ranks by raw distance; `:backward`/`:forward` accept date/temporal keys directly.
 
 ```clojure
 (require '[datajure.join :refer [join]])
