@@ -60,6 +60,26 @@
     (testing "options without column filters pass through untouched"
       (is (= {:key-fn keyword} (norm {:key-fn keyword}))))))
 
+(deftest parquet-read-seq-allowlist-prep
+  ;; read-seq's Parquet path must apply the SAME prep as read: default
+  ;; :key-fn keyword, THEN normalise string allow/blocklist entries to keywords.
+  ;; Without both halves a string :column-allowlist silently projects to a
+  ;; 0-column dataset on the streaming reader (read got the fix in 2.0.13; this
+  ;; extends it to read-seq). Tested at the helper since Parquet read needs an
+  ;; optional dep absent from the CI suite; verified end-to-end against a real
+  ;; parquet via repro/readseq_allowlist.clj.
+  (let [prep #'dio/parquet-read-opts]
+    (testing "defaults :key-fn keyword AND normalises a string allowlist to keywords"
+      (is (= {:key-fn keyword :column-allowlist [:a :b]}
+             (prep {:column-allowlist ["a" "b"]}))))
+    (testing "a keyword allowlist is preserved (and :key-fn defaulted)"
+      (is (= {:key-fn keyword :column-allowlist [:a :b]}
+             (prep {:column-allowlist [:a :b]}))))
+    (testing "bare options just get the :key-fn keyword default"
+      (is (= {:key-fn keyword} (prep {}))))
+    (testing "a caller-supplied :key-fn is not overridden"
+      (is (= identity (:key-fn (prep {:key-fn identity})))))))
+
 (deftest csv-gz-round-trip
   (testing "write and read gzipped CSV"
     (let [path (tmp "datajure-test.csv.gz")]

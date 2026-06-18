@@ -601,7 +601,7 @@ An index is an immutable value that holds a reference to the dataset it was buil
 
 Supported: CSV, TSV, JSON, JSON Lines (`.jsonl`/`.ndjson`), Nippy (native), Parquet, Arrow, Excel (optional deps). Gzipped native-format variants auto-detected. `read-seq` streams Parquet (row groups) and JSON Lines (`:batch-size` row batches).
 
-Columns are read as keywords by default. `:column-allowlist`/`:column-blocklist` accept keyword **or** string names on every format — CSV/TSV match raw headers before `:key-fn`, Parquet/Arrow match after, and `dio/read` normalises either way so you don't have to care:
+Columns are read as keywords by default. `:column-allowlist`/`:column-blocklist` accept keyword **or** string names on every format — CSV/TSV match raw headers before `:key-fn`, Parquet/Arrow match after, and both `dio/read` and `dio/read-seq` normalise either way so you don't have to care:
 
 ```clojure
 (dio/read "data.csv"     {:column-allowlist [:a :b]})   ;; only columns a, b

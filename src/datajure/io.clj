@@ -154,6 +154,17 @@
           opts
           column-filter-keys))
 
+(defn- parquet-read-opts
+  "Option prep for the Parquet streaming path (`read-seq`): default
+  `:key-fn keyword` (datajure's column convention) then normalise string
+  column-allow/blocklist entries to keywords. Mirrors what `read` does inline
+  for one-shot Parquet/Arrow reads, so a string `:column-allowlist` matches the
+  keyworded columns on `read-seq` too (the 2.0.13 fix originally reached `read`
+  only — without this, a string allowlist silently projects to 0 columns on the
+  streaming reader)."
+  [options]
+  (normalize-keyword-column-filters (merge {:key-fn keyword} options)))
+
 (defn read
   "Read a dataset from a file. Dispatches on file extension.
 
@@ -207,6 +218,9 @@
     call site works uniformly across formats. Reach for Parquet or JSON Lines
     for true out-of-core reads.
 
+  Columns are keywords by default (`:key-fn keyword`), and `:column-allowlist`
+  / `:column-blocklist` accept either keywords or strings — matching `read`.
+
   Examples:
     (read-seq \"huge.parquet\")                      ;; many chunks, streamed
     (read-seq \"huge.jsonl\" {:batch-size 50000})    ;; streamed in 50k-row chunks
@@ -218,7 +232,7 @@
      (case ext
        :parquet (do (require-parquet!)
                     (let [parquet-ns (the-ns 'tech.v3.libs.parquet)]
-                      ((ns-resolve parquet-ns 'parquet->ds-seq) path options)))
+                      ((ns-resolve parquet-ns 'parquet->ds-seq) path (parquet-read-opts options))))
        (:jsonl :ndjson) (jsonl-ds-seq path options)
        :json (lazy-seq [(read path options)])
        (throw (ex-info (str "read-seq supports Parquet and JSON Lines (streamed) and JSON (single chunk). Got: " (name (or ext "unknown")))
