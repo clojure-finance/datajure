@@ -2500,6 +2500,54 @@
     (testing "the nil group aggregates the two missing-key rows"
       (is (= 2 (:n (first (filter #(nil? (:g %)) (ds/mapseq-reader r)))))))))
 
+(deftest fast-group-set-window-mixed
+  ;; §2.11: keyword-only :by window-mode :set fast path — grouped+within-order order,
+  ;; window op (per-row) + aggregator (group broadcast) + element-wise (once) together.
+  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
+        r (core/dt d :by [:k] :within-order [(core/asc :t)]
+                   :set {:lg #dt/e (win/lag :x 1)      ;; window: per-row, per-group
+                         :gm #dt/e (mn :x)             ;; aggregator: group mean broadcast
+                         :x2 #dt/e (* :x 2)})]         ;; element-wise: once
+    (testing "rows are grouped + within-order sorted (the existing contract)"
+      (is (= [:a :a :a :b :b] (vec (r :k))))
+      (is (= [1 2 3 1 2] (vec (r :t))))
+      (is (= [10.0 20.0 30.0 100.0 200.0] (vec (r :x)))))
+    (testing "window op (lag) is per-group"
+      (is (= [nil 10.0 20.0 nil 100.0] (vec (r :lg)))))
+    (testing "aggregator broadcasts the group value to every group row"
+      (is (= [20.0 20.0 20.0 150.0 150.0] (vec (r :gm)))))   ;; mean(:a)=20, mean(:b)=150
+    (testing "element-wise derivation is correct row-by-row"
+      (is (= [20.0 40.0 60.0 200.0 400.0] (vec (r :x2))))))
+  (testing "no :within-order → data order within each group"
+    (let [d (ds/->dataset {:k [:a :b :a] :x [5.0 9.0 7.0]})
+          r (core/dt d :by [:k] :set {:c #dt/e (win/cumsum :x)})]
+      (is (= [:a :a :b] (vec (r :k))))
+      (is (= [5.0 7.0 9.0] (vec (r :x))))
+      (is (= [5.0 12.0 9.0] (vec (r :c)))))))
+
+(deftest win-min-periods-option
+  ;; §2.11/§2.7: non-expanding window via {:min-periods n} (leading n-1 rows -> nil),
+  ;; matching R's zoo::rollapplyr; default stays expanding. ddof also accepted in the map.
+  (let [d (ds/->dataset {:x [10.0 20.0 30.0 40.0 50.0]})]
+    (testing "default is expanding (unchanged)"
+      (is (= [10.0 15.0 20.0 30.0 40.0]
+             (vec ((core/dt d :set {:m #dt/e (win/mavg :x 3)}) :m)))))
+    (testing "{:min-periods width} is non-expanding (leading width-1 -> nil)"
+      (is (= [nil nil 20.0 30.0 40.0]
+             (vec ((core/dt d :set {:m #dt/e (win/mavg :x 3 {:min-periods 3})}) :m)))))
+    (testing "win/mdev accepts {:ddof :min-periods} together"
+      (let [v (vec ((core/dt d :set {:m #dt/e (win/mdev :x 3 {:ddof 0 :min-periods 3})}) :m))]
+        (is (nil? (nth v 0))) (is (nil? (nth v 1)))
+        (is (< (Math/abs (- (nth v 2) 8.165)) 0.001))))         ;; population, full window only
+    (testing "win/mdev positional ddof still works (back-compat)"
+      (is (= 0.0 (first (vec ((core/dt d :set {:m #dt/e (win/mdev :x 3 0)}) :m))))))
+    (testing ":min-periods is per-partition in :by window mode"
+      (let [g (ds/->dataset {:k [:a :a :a :b :b] :t [1 2 3 1 2] :x [1.0 2.0 3.0 9.0 9.0]})
+            v (vec ((core/dt g :by [:k] :within-order [(core/asc :t)]
+                             :set {:m #dt/e (win/mavg :x 2 {:min-periods 2})}) :m))]
+        (is (nil? (nth v 0)))                                   ;; group :a first row
+        (is (nil? (nth v 3)))))))                               ;; group :b first row
+
 (deftest win-mdowndev-op
   ;; §2.3: moving downside deviation, MAR=0, method=full, na.rm.
   ;; sqrt(mean(min(r,0)^2)) over finite window values; empty/all-NA window -> nil

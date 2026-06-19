@@ -433,25 +433,146 @@
                                  groups))))
                 (apply ds/concat))))))))
 
+(defn- deriv-ast
+  "AST for a :set derivation value (for col/win-ref introspection), or nil for a
+  plain fn (which can't be introspected → use the general path)."
+  [dval]
+  (cond
+    (expr-node? dval) dval
+    (vector? dval) (try (expr/data->ast dval :agg) (catch Throwable _ nil))
+    :else nil))
+
+(defn- group-perm
+  "For keyword-only `by`, return {:perm int[] :bounds [[start end]…]}: row indices
+  grouped by key (first-seen order) and, within each group, sorted by `within-order`
+  (data order if nil), laid out contiguously. `bounds` gives each group's [start end)
+  range in `perm` — the same grouped+sorted row order the general path produces."
+  [dataset by within-order]
+  (let [key-rdrs (mapv #(dtype/->reader (ds/column dataset %)) by)
+        n (ds/row-count dataset)
+        groups (java.util.LinkedHashMap.)]
+    (dotimes [i n]
+      (let [k (mapv #(nth % i) key-rdrs)]
+        (.add ^java.util.ArrayList
+         (or (.get groups k) (let [a (java.util.ArrayList.)] (.put groups k a) a))
+              (int i))))
+    (let [cmp (when within-order
+                (let [specs (mapv #(if (keyword? %) {:order :asc :col %} %) within-order)
+                      rdrs (mapv #(dtype/->reader (ds/column dataset (:col %))) specs)
+                      dirs (int-array (map #(if (= :desc (:order %)) -1 1) specs))
+                      ns (count specs)]
+                  ;; a 3-way (-1/0/1) fn is directly usable as a java.util.Comparator
+                  (fn [a b]
+                    (loop [k 0]
+                      (if (< k ns)
+                        (let [c (compare (nth (nth rdrs k) a) (nth (nth rdrs k) b))]
+                          (if (zero? c) (recur (inc k)) (* c (aget dirs k))))
+                        0)))))
+          perm (int-array n)
+          bounds (java.util.ArrayList.)
+          pos (int-array 1)]
+      (doseq [^java.util.ArrayList idxs (.values groups)]
+        (when cmp (java.util.Collections/sort idxs cmp))
+        (let [start (aget pos 0) m (.size idxs)]
+          (dotimes [j m] (aset perm (+ start j) (int (.get idxs j))))
+          (.add bounds [start (+ start m)])
+          (aset pos 0 (+ start m))))
+      {:perm perm :bounds (vec bounds)})))
+
+(def ^:private elementwise-op-kws
+  "Ops that compute row-independently — safe to evaluate once over the whole
+  reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
+  are GROUP reductions broadcast to the group's rows, so must run per group."
+  #{:+ :- :* :div :div0 :sq :log :> :< :>= :<= := :and :or :not :in :between?
+    :asinh :na2zero :neg2na :nonfin2na})
+
+(defn- element-wise-ast?
+  "True if `node` is purely element-wise (no aggregation / window / group reduction),
+  so it can run once over the whole reordered base instead of per group. Conservative:
+  unknown node types → false (run per group, always correct)."
+  [node]
+  (case (:node/type node)
+    (:col :lit :binding-ref) true
+    :op (and (contains? elementwise-op-kws (:op/name node))
+             (every? element-wise-ast? (:op/args node)))
+    :if (every? element-wise-ast? [(:if/pred node) (:if/then node) (:if/else node)])
+    :coalesce (every? element-wise-ast? (:coalesce/args node))
+    :let (and (every? (comp element-wise-ast? :binding/expr) (:let/bindings node))
+              (element-wise-ast? (:let/body node)))
+    false))
+
+(defn- window-derive
+  "Compute a per-group derivation (window op, or a group aggregator broadcast to the
+  group's rows) over each contiguous group slice of the already-reordered `base`, and
+  assemble a full-length column. Narrows to the derivation's referenced columns so
+  each group's `ds/select-rows` view covers a handful of columns, not the whole
+  (passthrough-laden) dataset. A scalar result (an aggregator) is broadcast across
+  the group; a per-row result (a window op) is placed elementwise."
+  [base bounds col-kw dval]
+  (let [refs (some-> (deriv-ast dval) expr/col-refs seq vec)
+        wbase (if refs (ds/select-columns base refs) base)
+        out (object-array (ds/row-count base))]
+    (doseq [[s e] bounds]
+      (let [len (- (long e) (long s))
+            sub (ds/select-rows wbase (int-array (range s e)))
+            res (derive-column sub col-kw dval)]
+        (if (dtype/reader? res)
+          (let [rdr (dtype/->reader res)]
+            (dotimes [j len] (aset out (+ (long s) j) (nth rdr j))))
+          (dotimes [j len] (aset out (+ (long s) j) res)))))   ; scalar → broadcast
+    out))
+
+(defn- fast-group-set
+  "Fast path for keyword-only :by window-mode :set (map derivations). Computes the
+  grouped+sorted permutation once, reorders ALL columns in a single `ds/select-rows`
+  (no per-group sub-datasets of every column, no `ds/concat` — the §2.10 fix adapted
+  to window mode), then computes each derivation against the reordered base: window
+  derivations per contiguous group slice, element-wise derivations once over the
+  whole base. Same result (grouped+within-order order) as the general path."
+  [dataset by derivations within-order]
+  (when within-order
+    (let [available (set (ds/column-names dataset))
+          unknown (vec (remove available (map #(if (keyword? %) % (:col %)) within-order)))]
+      (when (seq unknown)
+        (throw (ex-info (str "Unknown column(s) " unknown " in :within-order expression")
+                        {:dt/error :unknown-column :dt/columns unknown
+                         :dt/context :within-order :dt/available (vec (sort available))})))))
+  (let [{:keys [perm bounds]} (group-perm dataset by within-order)
+        base (ds/select-rows dataset perm)]
+    (reduce (fn [d [col-kw dval]]
+              (let [ast (deriv-ast dval)]
+                (ds/add-column
+                 d (ds/new-column col-kw
+                                  (if (element-wise-ast? ast)
+                                    (derive-column base col-kw dval)
+                                    (window-derive base bounds col-kw dval))))))
+            base
+            (seq derivations))))
+
 (defn- apply-group-set [dataset by derivations within-order]
   (if (zero? (ds/row-count dataset))
     dataset
-    ;; Compound case (qtile + exact keys): partition by exact keys first so
-    ;; qtile breakpoints are computed per sub-dataset. Otherwise the single
-    ;; "partition" is the whole dataset and the path is unchanged.
-    (let [partitions (if (needs-per-partition-resolution? by)
-                       (let [exact-keys (filterv keyword? by)]
-                         (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
-                       [dataset])]
-      (->> partitions
-           (mapcat (fn [partition-ds]
-                     (let [group-fn (by->group-fn partition-ds by)
-                           groups (ds/group-by partition-ds group-fn)]
-                       (map (fn [[_group-key sub-ds]]
-                              (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
-                                (apply-set sorted derivations)))
-                            groups))))
-           (apply ds/concat)))))
+    (if (and (keyword-only-by? by)
+             (map? derivations)
+             (every? #(deriv-ast (val %)) derivations))
+      ;; Fast path: keyword-only :by + map derivations — reorder once, no concat.
+      (fast-group-set dataset by derivations within-order)
+      ;; General path. Compound case (qtile + exact keys): partition by exact keys
+      ;; first so qtile breakpoints are computed per sub-dataset. Otherwise the
+      ;; single "partition" is the whole dataset and the path is unchanged.
+      (let [partitions (if (needs-per-partition-resolution? by)
+                         (let [exact-keys (filterv keyword? by)]
+                           (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
+                         [dataset])]
+        (->> partitions
+             (mapcat (fn [partition-ds]
+                       (let [group-fn (by->group-fn partition-ds by)
+                             groups (ds/group-by partition-ds group-fn)]
+                         (map (fn [[_group-key sub-ds]]
+                                (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
+                                  (apply-set sorted derivations)))
+                              groups))))
+             (apply ds/concat))))))
 
 (defn- apply-window-set
   "Window mode without :by — entire dataset is one partition.

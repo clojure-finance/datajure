@@ -234,41 +234,61 @@
                          true
                          (not= (nth rdr idx) (nth rdr (dec idx)))))))
 
+(defn- win-opts
+  "Normalise a rolling op's optional trailing arg to an options map. A map passes
+  through; a bare number is read as `:ddof` (win-mdev positional back-compat);
+  nil/absent → {}. Recognised keys:
+    :min-periods — minimum window SPAN (rows) before a value is emitted; default 1
+                   (expanding, q convention). Set to `width` for a non-expanding /
+                   R `zoo::rollapplyr` window (leading width-1 rows → nil).
+    :ddof        — win-mdev only (delta degrees of freedom)."
+  [opt]
+  (cond (map? opt) opt
+        (number? opt) {:ddof opt}
+        :else {}))
+
 (defn- rolling-window-vals
-  "Returns a vec of per-row window values. Each element is the result of
-  applying f to the non-nil values in the window [i-width+1 .. i].
-  Returns nil when the window contains no non-nil values."
-  [col width f]
-  (let [n (dtype/ecount col)
-        rdr (dtype/->reader col)]
-    (loop [i 0 result (transient [])]
-      (if (= i n)
-        (persistent! result)
-        (let [start (max 0 (- i (dec (long width))))
-              window (loop [j start acc (transient [])]
-                       (if (> j i)
-                         (persistent! acc)
-                         (let [v (nth rdr j)]
-                           (recur (inc j)
-                                  (if (some? v) (conj! acc (double v)) acc)))))]
-          (recur (inc i)
-                 (conj! result (when (seq window) (f window)))))))))
+  "Returns a vec of per-row window values. Each element is the result of applying f
+  to the non-nil values in the window [i-width+1 .. i]. Returns nil when the window
+  spans fewer than `min-periods` rows (default 1) or contains no non-nil values."
+  ([col width f] (rolling-window-vals col width f 1))
+  ([col width f min-periods]
+   (let [n (dtype/ecount col)
+         rdr (dtype/->reader col)
+         mp (long min-periods)]
+     (loop [i 0 result (transient [])]
+       (if (= i n)
+         (persistent! result)
+         (let [start (max 0 (- i (dec (long width))))
+               span (- (inc i) start)
+               window (loop [j start acc (transient [])]
+                        (if (> j i)
+                          (persistent! acc)
+                          (let [v (nth rdr j)]
+                            (recur (inc j)
+                                   (if (some? v) (conj! acc (double v)) acc)))))]
+           (recur (inc i)
+                  (conj! result (when (and (>= span mp) (seq window)) (f window))))))))))
 
 (defn win-mavg
   "Moving average over width rows (expanding at start). nil values skipped.
-  Matches q's mavg convention.
+  Matches q's mavg convention. Optional opts map: `{:min-periods n}` requires an
+  n-row window before emitting (e.g. `width` for a non-expanding R-style window).
   3 mavg [10 20 30 40 50] -> [10.0 15.0 20.0 30.0 40.0]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width
-                        #(/ (reduce + %) (count %)))))
+  ([col width] (win-mavg col width nil))
+  ([col width opts]
+   (dtype/->reader
+    (rolling-window-vals col width #(/ (reduce + %) (count %))
+                         (:min-periods (win-opts opts) 1)))))
 
 (defn win-msum
-  "Moving sum over width rows (expanding at start). nil values skipped.
+  "Moving sum over width rows (expanding at start). nil values skipped. Optional
+  opts map: `{:min-periods n}` (default 1; `width` for a non-expanding window).
   3 msum [10 20 30 40 50] -> [10.0 30.0 60.0 90.0 120.0]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width #(reduce + %))))
+  ([col width] (win-msum col width nil))
+  ([col width opts]
+   (dtype/->reader
+    (rolling-window-vals col width #(reduce + %) (:min-periods (win-opts opts) 1)))))
 
 (defn win-mdev
   "Moving standard deviation over `width` rows (expanding at start). `ddof` (delta
@@ -277,19 +297,25 @@
     ddof=0           — population sd, matching q's `mdev`.
   nil values skipped. A window with `n <= ddof` finite values yields nil (sample sd
   of a single value is undefined, like R's `sd`).
+  The optional 3rd arg is either a bare `ddof` (back-compat) or an opts map
+  `{:ddof d :min-periods n}` (`:min-periods` default 1; `width` for a non-expanding
+  R `sd`/`rollapplyr` window).
   3 mdev [10 20 30 40 50]   -> [nil 7.071 10.0 10.0 10.0]   (ddof=1, default)
   3 mdev [10 20 30 40 50] 0 -> [0.0 5.0 8.165 8.165 8.165]  (ddof=0, q's mdev)"
-  ([col width] (win-mdev col width 1))
-  ([col width ddof]
-   (dtype/->reader
-    (rolling-window-vals col width
-                         (fn [w]
-                           (let [n (count w)
-                                 denom (- n (long ddof))]
-                             (when (pos? denom)
-                               (let [mu (/ (reduce + w) n)
-                                     ss (reduce + (map #(let [d (- % mu)] (* d d)) w))]
-                                 (Math/sqrt (/ ss denom))))))))))
+  ([col width] (win-mdev col width nil))
+  ([col width opt]
+   (let [o (win-opts opt)
+         ddof (long (:ddof o 1))]
+     (dtype/->reader
+      (rolling-window-vals col width
+                           (fn [w]
+                             (let [n (count w)
+                                   denom (- n ddof)]
+                               (when (pos? denom)
+                                 (let [mu (/ (reduce + w) n)
+                                       ss (reduce + (map #(let [d (- % mu)] (* d d)) w))]
+                                   (Math/sqrt (/ ss denom))))))
+                           (:min-periods o 1))))))
 
 (defn win-mdowndev
   "Moving downside deviation over `width` rows (expanding at start), MAR=0:
@@ -299,34 +325,41 @@
   with no finite values (empty / all-missing) yields nil — undefined, no data to
   deviate from — a deliberate divergence from R's DownsideDeviation (which returns
   0), matching datajure's nil-for-undefined philosophy. A window with finite values
-  but no downside returns 0.0.
+  but no downside returns 0.0. Optional opts map: `{:min-periods n}` (default 1;
+  `width` for a non-expanding R `rollapplyr` window — the `roll-dd` convention).
   3 mdowndev [1.0 2.0 -2.0] -> [0.0 0.0 ~1.1547]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width
-                        (fn [w]
-                          (let [xs (filter math/finite-double? w)
-                                m (count xs)]
-                            (when (pos? m)
-                              (let [ss (reduce (fn [^double acc x]
-                                                 (let [d (double x)]
-                                                   (+ acc (if (neg? d) (* d d) 0.0))))
-                                               0.0 xs)]
-                                (Math/sqrt (/ ss (double m))))))))))
+  ([col width] (win-mdowndev col width nil))
+  ([col width opts]
+   (dtype/->reader
+    (rolling-window-vals col width
+                         (fn [w]
+                           (let [xs (filter math/finite-double? w)
+                                 m (count xs)]
+                             (when (pos? m)
+                               (let [ss (reduce (fn [^double acc x]
+                                                  (let [d (double x)]
+                                                    (+ acc (if (neg? d) (* d d) 0.0))))
+                                                0.0 xs)]
+                                 (Math/sqrt (/ ss (double m)))))))
+                         (:min-periods (win-opts opts) 1)))))
 
 (defn win-mmin
-  "Moving minimum over width rows (expanding at start). nil values skipped.
+  "Moving minimum over width rows (expanding at start). nil values skipped. Optional
+  opts map: `{:min-periods n}` (default 1; `width` for a non-expanding window).
   3 mmin [30 10 50 20 40] -> [30.0 10.0 10.0 10.0 20.0]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width #(apply min %))))
+  ([col width] (win-mmin col width nil))
+  ([col width opts]
+   (dtype/->reader
+    (rolling-window-vals col width #(apply min %) (:min-periods (win-opts opts) 1)))))
 
 (defn win-mmax
-  "Moving maximum over width rows (expanding at start). nil values skipped.
+  "Moving maximum over width rows (expanding at start). nil values skipped. Optional
+  opts map: `{:min-periods n}` (default 1; `width` for a non-expanding window).
   3 mmax [30 10 50 20 40] -> [30.0 30.0 50.0 50.0 50.0]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width #(apply max %))))
+  ([col width] (win-mmax col width nil))
+  ([col width opts]
+   (dtype/->reader
+    (rolling-window-vals col width #(apply max %) (:min-periods (win-opts opts) 1)))))
 
 (defn win-ema
   "Exponential moving average. Parameter dispatch:
