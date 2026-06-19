@@ -318,6 +318,8 @@ Inspired by q's `deltas` and `ratios` — eliminate verbose lag patterns:
           :ema-10  #dt/e (win/ema :price 10)})    ;; 10-day EMA
 ```
 
+The moving ops (`win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`) use an **expanding** window at the start (a value from the first row, q convention). Pass a trailing `{:min-periods n}` options map for a **non-expanding** window — `#dt/e (win/mavg :price 20 {:min-periods 20})` emits nil until a full 20-row window exists (R's `zoo::rollapplyr`). `win/mdev` also reads `:ddof` from the map (`{:ddof 0 :min-periods 20}`); the positional `(win/mdev :ret 20 0)` still works.
+
 ### Forward-Fill
 
 ```clojure
