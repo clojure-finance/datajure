@@ -2476,6 +2476,31 @@
       (is (< (Math/abs (- (nth gr 2) (- (math/asinh 2.0) (math/asinh 0.0)))) 1e-12))
       (is (< (Math/abs (- (nth gr 3) (- (math/asinh 5.0) (math/asinh 2.0)))) 1e-12)))))
 
+(deftest win-mdowndev-op
+  ;; §2.3: moving downside deviation, MAR=0, method=full, na.rm.
+  ;; sqrt(mean(min(r,0)^2)) over finite window values; empty/all-NA window -> nil
+  ;; (deliberate divergence from R's DownsideDeviation->0).
+  (testing "basic: expanding head, downside-only contributes"
+    (let [r (vec ((core/dt (ds/->dataset {:r [1.0 2.0 -2.0]})
+                           :set {:dd #dt/e (win/mdowndev :r 3)}) :dd))]
+      (is (== 0.0 (nth r 0)))                         ;; [1] no downside
+      (is (== 0.0 (nth r 1)))                         ;; [1 2] no downside
+      (is (< (Math/abs (- (nth r 2) (Math/sqrt (/ 4.0 3)))) 1e-12)))) ;; [1 2 -2]
+  (testing "a finite window with no downside -> 0.0 (not nil)"
+    (is (= [0.0 0.0 0.0] (vec ((core/dt (ds/->dataset {:r [1.0 2.0 3.0]})
+                                        :set {:dd #dt/e (win/mdowndev :r 3)}) :dd)))))
+  (testing "an empty / all-missing window -> nil"
+    (is (= [nil nil] (vec ((core/dt (ds/->dataset {:r [nil nil]})
+                                    :set {:dd #dt/e (win/mdowndev :r 2)}) :dd)))))
+  (testing "per-partition in window mode; nil values skipped"
+    (let [r (vec ((core/dt (ds/->dataset {:g [:a :a :a :b :b] :t [1 2 3 1 2]
+                                          :r [-1.0 2.0 -3.0 nil -4.0]})
+                           :by [:g] :within-order [(core/asc :t)]
+                           :set {:dd #dt/e (win/mdowndev :r 12)}) :dd))]
+      (is (== 1.0 (nth r 0)))                         ;; [-1]
+      (is (nil? (nth r 3)))                           ;; group :b first row, [nil] -> nil
+      (is (== 4.0 (nth r 4))))))                      ;; [nil -4] -> sqrt(16/1)
+
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"
     (let [col [3750.0 nil 3800.0 5000.0]]

@@ -52,7 +52,7 @@ Concretely, if you've used:
 - **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form rather than a pipeline of a dozen verbs.
 - **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), with less verbosity and without the function-per-verb proliferation.
 - **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`, but because Clojure has a real reader tag mechanism (rather than macros pretending to parse expressions), it integrates more cleanly with the rest of the language.
-- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `each-prior`, `grr`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` and window joins (`:how :window`) are built in.
+- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `mdowndev`, `ema`, `fills`, `scan`, `each-prior`, `grr`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` and window joins (`:how :window`) are built in.
 
 Datajure's unique wedge is that `#dt/e` expressions are first-class AST values — you can store them in vars and compose them across queries. Build a shared vocabulary once, reuse it everywhere:
 

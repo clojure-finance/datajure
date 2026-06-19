@@ -283,6 +283,29 @@
                                 variance (/ (reduce + (map #(let [d (- % mu)] (* d d)) w)) n)]
                             (Math/sqrt variance))))))
 
+(defn win-mdowndev
+  "Moving downside deviation over `width` rows (expanding at start), MAR=0:
+  sqrt(mean(min(r,0)^2)) over the finite values in each trailing window, with the
+  count of finite values as the denominator (PerformanceAnalytics
+  DownsideDeviation, method='full', na.rm). nil/NaN/±Inf are skipped; a window
+  with no finite values (empty / all-missing) yields nil — undefined, no data to
+  deviate from — a deliberate divergence from R's DownsideDeviation (which returns
+  0), matching datajure's nil-for-undefined philosophy. A window with finite values
+  but no downside returns 0.0.
+  3 mdowndev [1.0 2.0 -2.0] -> [0.0 0.0 ~1.1547]"
+  [col width]
+  (dtype/->reader
+   (rolling-window-vals col width
+                        (fn [w]
+                          (let [xs (filter math/finite-double? w)
+                                m (count xs)]
+                            (when (pos? m)
+                              (let [ss (reduce (fn [^double acc x]
+                                                 (let [d (double x)]
+                                                   (+ acc (if (neg? d) (* d d) 0.0))))
+                                               0.0 xs)]
+                                (Math/sqrt (/ ss (double m))))))))))
+
 (defn win-mmin
   "Moving minimum over width rows (expanding at start). nil values skipped.
   3 mmin [30 10 50 20 40] -> [30.0 10.0 10.0 10.0 20.0]"

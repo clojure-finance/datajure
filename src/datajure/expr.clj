@@ -54,6 +54,7 @@
    'win/mavg :win/mavg
    'win/msum :win/msum
    'win/mdev :win/mdev
+   'win/mdowndev :win/mdowndev
    'win/mmin :win/mmin
    'win/mmax :win/mmax
    'win/ema :win/ema
@@ -78,6 +79,7 @@
    :win/mavg win/win-mavg
    :win/msum win/win-msum
    :win/mdev win/win-mdev
+   :win/mdowndev win/win-mdowndev
    :win/mmin win/win-mmin
    :win/mmax win/win-mmax
    :win/ema win/win-ema
