@@ -86,6 +86,13 @@
    :win/fills win/win-fills
    :win/grr win/win-grr})
 
+(defn win-op-fn
+  "The runtime window fn for a `:win/<op>` keyword, or nil. Lets callers (e.g. the
+  core group-set fast path) apply a single-column window op directly to a column
+  slice without compiling/running the whole AST."
+  [win-op-kw]
+  (win-op-table win-op-kw))
+
 (def ^:private row-sym->op
   "Maps row/* source symbols to canonical keyword op names."
   {'row/sum :row/sum

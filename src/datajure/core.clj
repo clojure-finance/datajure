@@ -501,25 +501,51 @@
               (element-wise-ast? (:let/body node)))
     false))
 
+(defn- single-col-win-spec
+  "If `dval` is a *pure single-column* window op — an AST `:win` node whose first arg
+  is a column ref and whose remaining args are literals (e.g. `(win/mavg :x 4)` or
+  `(win/mdev :x 12 {:ddof 0})`) — return {:win-fn :col :args} for the allocation-light
+  reader-slicing path. Otherwise nil (composite/aggregator → the general path)."
+  [dval]
+  (let [node (deriv-ast dval)]
+    (when (and node (= :win (:node/type node)))
+      (let [args (:win/args node)
+            c (first args)]
+        (when (and c (= :col (:node/type c))
+                   (every? #(= :lit (:node/type %)) (rest args)))
+          (when-let [f (expr/win-op-fn (:win/op node))]
+            {:win-fn f :col (:col/name c) :args (mapv :lit/value (rest args))}))))))
+
 (defn- window-derive
   "Compute a per-group derivation (window op, or a group aggregator broadcast to the
   group's rows) over each contiguous group slice of the already-reordered `base`, and
-  assemble a full-length column. Narrows to the derivation's referenced columns so
-  each group's `ds/select-rows` view covers a handful of columns, not the whole
-  (passthrough-laden) dataset. A scalar result (an aggregator) is broadcast across
-  the group; a per-row result (a window op) is placed elementwise."
+  assemble a full-length column.
+
+  Pure single-column window ops take a primitive reader-slicing path: the source
+  column is pulled once and each group is a zero-copy `dtype/sub-buffer` slice handed
+  straight to the window fn — no per-group sub-datasets. Everything else (composite
+  #dt/e, aggregator broadcast) falls back to a narrow per-group `ds/select-rows` view
+  + `derive-column`; a scalar result (an aggregator) is broadcast across the group."
   [base bounds col-kw dval]
-  (let [refs (some-> (deriv-ast dval) expr/col-refs seq vec)
-        wbase (if refs (ds/select-columns base refs) base)
-        out (object-array (ds/row-count base))]
-    (doseq [[s e] bounds]
-      (let [len (- (long e) (long s))
-            sub (ds/select-rows wbase (int-array (range s e)))
-            res (derive-column sub col-kw dval)]
-        (if (dtype/reader? res)
-          (let [rdr (dtype/->reader res)]
-            (dotimes [j len] (aset out (+ (long s) j) (nth rdr j))))
-          (dotimes [j len] (aset out (+ (long s) j) res)))))   ; scalar → broadcast
+  (let [n (ds/row-count base)
+        out (object-array n)]
+    (if-let [{:keys [win-fn col args]} (single-col-win-spec dval)]
+      (let [src (dtype/->reader (ds/column base col))]
+        (doseq [[s e] bounds]
+          (let [len (- (long e) (long s))
+                slice (dtype/sub-buffer src s len)
+                res (dtype/->reader (apply win-fn slice args))]
+            (dotimes [j len] (aset out (+ (long s) j) (nth res j))))))
+      (let [refs (some-> (deriv-ast dval) expr/col-refs seq vec)
+            wbase (if refs (ds/select-columns base refs) base)]
+        (doseq [[s e] bounds]
+          (let [len (- (long e) (long s))
+                sub (ds/select-rows wbase (int-array (range s e)))
+                res (derive-column sub col-kw dval)]
+            (if (dtype/reader? res)
+              (let [rdr (dtype/->reader res)]
+                (dotimes [j len] (aset out (+ (long s) j) (nth rdr j))))
+              (dotimes [j len] (aset out (+ (long s) j) res)))))))   ; scalar → broadcast
     out))
 
 (defn- fast-group-set
