@@ -3,7 +3,8 @@
   Each function takes a column (dtype reader/vector) and returns a column
   of the same length. These are called per-partition by the expr compiler
   when processing :win AST nodes in window mode (:by + :set)."
-  (:require [tech.v3.datatype :as dtype]))
+  (:require [tech.v3.datatype :as dtype]
+            [datajure.math :as math]))
 
 (defn win-rank
   "SQL RANK(): 1-based, min tie method, based on current row order.
@@ -175,6 +176,28 @@
                          (if (or (nil? cur) (nil? prev))
                            nil
                            (- (double cur) (double prev)))))))
+
+(defn win-grr
+  "Inverse-hyperbolic-sine growth (mbmisc `grr` with IHS=TRUE):
+  asinh(x[i]) - asinh(x[i-1]) over the current partition/order. nil for the
+  first element (no predecessor). A run of zeros has zero growth: when both
+  x[i] and x[i-1] are 0, the result is 0.0 (not asinh(0)-asinh(0)). A nil or
+  non-finite operand yields nil.
+
+  [1 2 3]   -> [nil (- (asinh 2) (asinh 1)) (- (asinh 3) (asinh 2))]
+  [0 0 5]   -> [nil 0.0 (- (asinh 5) (asinh 0))]"
+  [col]
+  (let [n (dtype/ecount col)
+        lagged (win-lag col 1)
+        lag-rdr (dtype/->reader lagged)
+        rdr (dtype/->reader col)]
+    (dtype/make-reader :object n
+                       (let [cur (nth rdr idx)
+                             prev (nth lag-rdr idx)]
+                         (when (and (math/finite-double? cur) (math/finite-double? prev))
+                           (if (and (zero? (double cur)) (zero? (double prev)))
+                             0.0
+                             (- (math/asinh cur) (math/asinh prev))))))))
 
 (defn win-ratio
   "Ratio to previous element: x[i] / x[i-1].

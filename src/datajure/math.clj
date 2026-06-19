@@ -11,6 +11,26 @@
   differs from tech.ml.dataset's `dfn/percentiles` / `dfn/median` (Apache Commons
   Math, a different estimation type) at the tails AND, for some n, the median.")
 
+(defn finite-double?
+  "True for a non-nil, finite number — not nil, NaN, or ±Inf (R's `is.finite`)."
+  [x]
+  (and (some? x)
+       (let [d (double x)]
+         (and (not (Double/isNaN d)) (not (Double/isInfinite d))))))
+
+(defn asinh
+  "Numerically-stable inverse hyperbolic sine: sign(x)·ln(|x| + sqrt(x²+1)).
+  Returns nil for nil or non-finite input. The textbook ln(x + sqrt(x²+1)) form
+  suffers catastrophic cancellation for large negative x (x + sqrt(x²+1) → 0 →
+  ln → -Inf), which silently turns legitimate large-negative growth into nil;
+  computing on |x| and reapplying the sign is stable everywhere."
+  [x]
+  (when (finite-double? x)
+    (let [d (double x)
+          a (Math/abs d)
+          r (Math/log (+ a (Math/sqrt (+ (* a a) 1.0))))]
+      (if (neg? d) (- r) r))))
+
 (defn- finite-sorted
   "Ascending double-array of the finite values in `coll`, dropping nil, NaN and
   ±Inf (R's `is.finite`). `coll` is any seqable of numbers (a dtype reader /

@@ -29,6 +29,28 @@
   (testing "a dataset column is accepted"
     (is (== 2.0 (math/quantile-type7 ((ds/->dataset {:x [1.0 2.0 3.0]}) :x) 0.5)))))
 
+(deftest finite-double?-test
+  (is (true? (math/finite-double? 0)))
+  (is (true? (math/finite-double? -3.5)))
+  (is (false? (boolean (math/finite-double? nil))))
+  (is (false? (math/finite-double? ##NaN)))
+  (is (false? (math/finite-double? ##Inf)))
+  (is (false? (math/finite-double? ##-Inf))))
+
+(deftest asinh-test
+  (testing "matches sign(x)·ln(|x|+sqrt(x²+1))"
+    (is (== 0.0 (math/asinh 0.0)))
+    (is (< (Math/abs (- (math/asinh 1.0) 0.881373587019543)) 1e-12))
+    ;; odd symmetry
+    (is (== (math/asinh 5.0) (- (math/asinh -5.0)))))
+  (testing "stable for large negative x (textbook form would collapse to nil/-Inf)"
+    (is (< (math/asinh -1.0e6) -14.0))
+    (is (math/finite-double? (math/asinh -1.0e8))))
+  (testing "nil / non-finite -> nil"
+    (is (nil? (math/asinh nil)))
+    (is (nil? (math/asinh ##NaN)))
+    (is (nil? (math/asinh ##Inf)))))
+
 (deftest quantile-type7-edge-cases
   (testing "no finite values -> nil"
     (is (nil? (math/quantile-type7 [nil nil] 0.5)))

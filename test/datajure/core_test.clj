@@ -3,7 +3,8 @@
             [tech.v3.dataset :as ds]
             [tech.v3.datatype :as dtype]
             [datajure.core :as core]
-            [datajure.row :as row]))
+            [datajure.row :as row]
+            [datajure.math :as math]))
 
 (def ^:private penguins
   (ds/->dataset {:species ["Adelie" "Adelie" "Gentoo" "Gentoo" "Chinstrap"]
@@ -2415,6 +2416,38 @@
              (-> (try (core/dt d :where [:qnt :x 0.5]) nil
                       (catch clojure.lang.ExceptionInfo e e))
                  ex-data :dt/error))))))
+
+(deftest cleaner-and-asinh-ops
+  ;; §2.9 + §2.2: element-wise non-finite cleaners + stable asinh in #dt/e.
+  (let [d (ds/->dataset {:x [-2.0 0.0 5.0] :y [1.0 ##Inf nil]})]
+    (testing "na2zero: non-finite (Inf/nil) -> 0.0, finite kept"
+      (is (= [1.0 0.0 0.0] (vec ((core/dt d :set {:r #dt/e (na2zero :y)}) :r)))))
+    (testing "neg2na: negative -> nil; 0 and positive kept"
+      (is (= [nil 0.0 5.0] (vec ((core/dt d :set {:r #dt/e (neg2na :x)}) :r)))))
+    (testing "nonfin2na: non-finite -> nil, finite kept"
+      (is (= [1.0 nil nil] (vec ((core/dt d :set {:r #dt/e (nonfin2na :y)}) :r)))))
+    (testing "asinh: stable, odd-symmetric; matches the scalar primitive"
+      (let [r (vec ((core/dt d :set {:r #dt/e (asinh :x)}) :r))]
+        (is (== (math/asinh -2.0) (nth r 0)))
+        (is (== 0.0 (nth r 1)))
+        (is (== (math/asinh 5.0) (nth r 2)))))
+    (testing "available as :where/:set/:agg data-forms (element-wise)"
+      (is (= [1.0 0.0 0.0] (vec ((core/dt d :set {:r [:na2zero :y]}) :r))))
+      ;; composed: nonfin2na then arithmetic
+      (is (= [2.0 nil nil] (vec ((core/dt d :set {:r [:* [:nonfin2na :y] 2]}) :r)))))))
+
+(deftest win-grr-op
+  ;; §2.2: inverse-hyperbolic-sine growth window op = asinh(x) - asinh(lag x),
+  ;; per partition, run-of-zeros -> 0, nil for the first element.
+  (let [d (ds/->dataset {:g [:a :a :a :a] :t [1 2 3 4] :x [0.0 0.0 2.0 5.0]})
+        gr (vec ((core/dt d :by [:g] :within-order [(core/asc :t)]
+                          :set {:gr #dt/e (win/grr :x)}) :gr))]
+    (testing "first element nil; run of zeros -> 0.0"
+      (is (nil? (nth gr 0)))
+      (is (== 0.0 (nth gr 1))))           ;; x=0, lag=0 -> 0
+    (testing "growth = asinh(x) - asinh(lag x)"
+      (is (< (Math/abs (- (nth gr 2) (- (math/asinh 2.0) (math/asinh 0.0)))) 1e-12))
+      (is (< (Math/abs (- (nth gr 3) (- (math/asinh 5.0) (math/asinh 2.0)))) 1e-12)))))
 
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"

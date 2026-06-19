@@ -57,7 +57,8 @@
    'win/mmin :win/mmin
    'win/mmax :win/mmax
    'win/ema :win/ema
-   'win/fills :win/fills})
+   'win/fills :win/fills
+   'win/grr :win/grr})
 
 (def ^:private win-op-table
   "Maps window op keywords to runtime functions from datajure.window."
@@ -80,7 +81,8 @@
    :win/mmin win/win-mmin
    :win/mmax win/win-mmax
    :win/ema win/win-ema
-   :win/fills win/win-fills})
+   :win/fills win/win-fills
+   :win/grr win/win-grr})
 
 (def ^:private row-sym->op
   "Maps row/* source symbols to canonical keyword op names."
@@ -225,6 +227,20 @@
                (div0 a b))))
    :sq dfn/sq
    :log dfn/log
+   ;; element-wise non-finite cleaners (mbmisc na2zero/neg2na/nonfin2na) + stable
+   ;; inverse-hyperbolic-sine. Per-element nil/NaN/±Inf handling → object readers.
+   :asinh (fn [col] (dtype/make-reader :object (dtype/ecount col)
+                                       (math/asinh (nth col idx))))
+   :na2zero (fn [col] (dtype/make-reader :object (dtype/ecount col)
+                                         (let [v (nth col idx)]
+                                           (if (math/finite-double? v) (double v) 0.0))))
+   :neg2na (fn [col] (dtype/make-reader :object (dtype/ecount col)
+                                        (let [v (nth col idx)]
+                                          (when (and (math/finite-double? v) (>= (double v) 0.0))
+                                            (double v)))))
+   :nonfin2na (fn [col] (dtype/make-reader :object (dtype/ecount col)
+                                           (let [v (nth col idx)]
+                                             (when (math/finite-double? v) (double v)))))
    :> dfn/>
    :< dfn/<
    :>= dfn/>=
@@ -261,7 +277,8 @@
 (def ^:private sym->op
   "Maps source-form symbols to canonical keyword op names."
   {'+ :+, '- :-, '* :*, '/ :div
-   'sq :sq, 'log :log
+   'sq :sq, 'log :log, 'asinh :asinh
+   'na2zero :na2zero, 'neg2na :neg2na, 'nonfin2na :nonfin2na
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
    'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi, 'qnt :qnt
@@ -523,7 +540,8 @@
   arithmetic, and membership ops. A predicate can't be an aggregator, so
   aggregations, window/row/stat ops, and the structural special forms
   (if/cond/let/cut/xbar/coalesce) remain #dt/e-only here."
-  #{:> :< :>= :<= := :and :or :not :in :between? :+ :- :* :div :div0 :sq :log})
+  #{:> :< :>= :<= := :and :or :not :in :between? :+ :- :* :div :div0 :sq :log
+    :asinh :na2zero :neg2na :nonfin2na})
 
 (def ^:private data-form-agg-ops
   "Ops permitted in an `:agg`/`:set` data-form: the element-wise set plus the
