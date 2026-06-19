@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-19
+
 ### Added
 
 - **R type-7 quantiles everywhere — `median`, `qtile`/`cut`, `winsorize`, `describe` now match R exactly.** datajure's quantile/median estimator was tech.ml.dataset's `dfn/percentiles` / `dfn/median` (Apache Commons Math), which disagrees with R's default **type-7** at the tails *and*, for some n, at the median (e.g. median of a 542-value column: `57.999` vs R's `57.9375`). All quantile call-sites now use a single type-7 primitive (`datajure.math/quantile-type7`): `core/median`, the `qtile`/`cut` breakpoints, `stat/winsorize`, and `util/describe` quartiles. Quantiles drop **nil and non-finite** (NaN/±Inf, R's `is.finite`) before estimating. This is a deliberate behavior change for parity with R as the reference implementation (no backwards-compat shim — see the project's quantile decision).
@@ -295,7 +297,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/clojure-finance/datajure/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/clojure-finance/datajure/compare/v2.0.13...v2.1.0
 [2.0.13]: https://github.com/clojure-finance/datajure/compare/v2.0.12...v2.0.13
 [2.0.12]: https://github.com/clojure-finance/datajure/compare/v2.0.11...v2.0.12
