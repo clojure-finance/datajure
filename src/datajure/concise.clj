@@ -35,6 +35,7 @@
 (def ^{:doc "Column mean. Short alias for `core/mean`."} mn core/mean)
 (def ^{:doc "Column sum. Short alias for `core/sum`."} sm core/sum)
 (def ^{:doc "Column median. Short alias for `core/median`."} md core/median)
+(def ^{:doc "Type-7 p-quantile. Short alias for `core/qnt`. Args: col p [min-n]."} qnt core/qnt)
 (def ^{:doc "Column standard deviation. Short alias for `core/stddev`."} sd core/stddev)
 (def ^{:doc "Element count. Short alias for `dtype/ecount`."} ct dtype/ecount)
 

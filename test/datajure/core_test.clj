@@ -2376,6 +2376,24 @@
           (is (= 2 (q->n 1)) (str "date " d " q=1 should have 2 rows"))
           (is (= 2 (q->n 2)) (str "date " d " q=2 should have 2 rows")))))))
 
+(deftest qnt-agg-type7
+  ;; §2.1: type-7 p-quantile aggregator, fraction p, floor-free min-n.
+  (let [d (ds/->dataset {:g [:a :a :a :b :b] :x [1.0 2.0 3.0 10.0 20.0]})]
+    (testing "(qnt :x p) per group, R type-7 (group :a [1 2 3] p20 = 1.4)"
+      (let [r (group-by :g (ds/mapseq-reader
+                            (core/dt d :by [:g]
+                                     :agg {:q20 #dt/e (qnt :x 0.2)
+                                           :med #dt/e (qnt :x 0.5)})))]
+        (is (== 1.4 (:q20 (first (r :a)))))
+        (is (== 2.0 (:med (first (r :a)))))
+        (is (== 12.0 (:q20 (first (r :b)))))))
+    (testing "qnt at p=0.5 agrees with md and core/median (all type-7)"
+      (let [r (first (ds/mapseq-reader (core/dt d :agg {:a #dt/e (qnt :x 0.5)
+                                                        :b #dt/e (md :x)})))]
+        (is (== (:a r) (:b r) (core/median [1.0 2.0 3.0 10.0 20.0]) 3.0))))
+    (testing "(qnt :x p min-n) returns nil below the finite-count floor"
+      (is (every? nil? ((core/dt d :by [:g] :agg {:q #dt/e (qnt :x 0.2 11)}) :q))))))
+
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"
     (let [col [3750.0 nil 3800.0 5000.0]]

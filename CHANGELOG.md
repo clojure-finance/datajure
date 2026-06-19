@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **R type-7 quantiles everywhere — `median`, `qtile`/`cut`, `winsorize`, `describe` now match R exactly.** datajure's quantile/median estimator was tech.ml.dataset's `dfn/percentiles` / `dfn/median` (Apache Commons Math), which disagrees with R's default **type-7** at the tails *and*, for some n, at the median (e.g. median of a 542-value column: `57.999` vs R's `57.9375`). All quantile call-sites now use a single type-7 primitive (`datajure.math/quantile-type7`): `core/median`, the `qtile`/`cut` breakpoints, `stat/winsorize`, and `util/describe` quartiles. Quantiles drop **nil and non-finite** (NaN/±Inf, R's `is.finite`) before estimating. This is a deliberate behavior change for parity with R as the reference implementation (no backwards-compat shim — see the project's quantile decision).
+- **`qnt` — type-7 quantile aggregator in `#dt/e`.** `#dt/e (qnt :col p)` returns the type-7 p-quantile (p a fraction in [0,1]) of a column's finite values, e.g. `(dt panel :by [:gind] :agg {:q20 #dt/e (qnt :saleq 0.2) :med #dt/e (qnt :saleq 0.5)})`. A 3-arg form `(qnt :col p min-n)` returns nil when fewer than `min-n` finite values remain (floor-free by default — `min-n` is opt-in for rules like peer-bands n≥11). `md` is now type-7 too, so `(md :col)` and `(qnt :col 0.5)` agree.
+
 ### Fixed
 
 - **`dio/read-seq` now applies the string→keyword `:column-allowlist` / `:column-blocklist` normalization on Parquet (the 2.0.13 fix had reached `dio/read` only).** Parquet applies `:key-fn` to column names *before* matching the allow/block list, so under datajure's keyword `:key-fn` a **string** allowlist entry silently matched nothing → a 0-column dataset on the streaming reader (the dashboard was unaffected — it uses `dio/read`; this bit only the out-of-core `read-seq` path). `read-seq`'s Parquet branch now defaults `:key-fn keyword` and normalizes string entries to keywords just like `read`, so `{:column-allowlist [:a :b]}` and `{:column-allowlist ["a" "b"]}` both work on both readers. Verified end-to-end against a real prepared Parquet.

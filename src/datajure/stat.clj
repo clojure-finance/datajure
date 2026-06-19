@@ -9,7 +9,8 @@
   computing reference statistics (mean, sd, percentiles), and nil inputs
   produce nil outputs in the returned column."
   (:require [tech.v3.datatype :as dtype]
-            [tech.v3.datatype.functional :as dfn]))
+            [tech.v3.datatype.functional :as dfn]
+            [datajure.math :as math]))
 
 (defn stat-standardize
   "Standardize a column: (x - mean) / sd, element-wise.
@@ -52,11 +53,8 @@
         vals (filterv some? rdr)]
     (if (empty? vals)
       (dtype/make-reader :object n nil)
-      (let [pct-lo (* (double p) 100.0)
-            pct-hi (* (- 1.0 (double p)) 100.0)
-            [lo hi] (dfn/percentiles vals [pct-lo pct-hi] {:nan-strategy :remove})
-            lo (double lo)
-            hi (double hi)]
+      (let [lo (double (math/quantile-type7 vals (double p)))
+            hi (double (math/quantile-type7 vals (- 1.0 (double p))))]
         (dtype/make-reader :object n
                            (let [v (nth rdr idx)]
                              (when (some? v)

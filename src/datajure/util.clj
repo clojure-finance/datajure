@@ -6,6 +6,7 @@
             [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.casting :as casting]
+            [datajure.math :as math]
             [clojure.string :as str]))
 
 (defn- describe-column [dataset col-kw]
@@ -20,18 +21,18 @@
         ;; an incoherent summary row.
         all-missing? (or (zero? n) (= n-missing n))]
     (if (and numeric? (not all-missing?))
-      (let [pcts (dfn/percentiles col [25 50 75])]
-        {:column col-kw
-         :datatype dt
-         :n n
-         :n-missing n-missing
-         :mean (dfn/mean col)
-         :sd (dfn/standard-deviation col)
-         :min (dfn/reduce-min col)
-         :p25 (nth pcts 0)
-         :median (nth pcts 1)
-         :p75 (nth pcts 2)
-         :max (dfn/reduce-max col)})
+      ;; R type-7 quartiles (consistent with median / qnt elsewhere in datajure)
+      {:column col-kw
+       :datatype dt
+       :n n
+       :n-missing n-missing
+       :mean (dfn/mean col)
+       :sd (dfn/standard-deviation col)
+       :min (dfn/reduce-min col)
+       :p25 (math/quantile-type7 col 0.25)
+       :median (math/quantile-type7 col 0.5)
+       :p75 (math/quantile-type7 col 0.75)
+       :max (dfn/reduce-max col)}
       {:column col-kw
        :datatype dt
        :n n

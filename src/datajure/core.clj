@@ -4,7 +4,8 @@
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.casting :as casting]
             [clojure.set :as set]
-            [datajure.expr :as expr]))
+            [datajure.expr :as expr]
+            [datajure.math :as math]))
 
 (declare apply-order-by validate-select-cols)
 
@@ -158,16 +159,14 @@
      (ds/->dataset result))))
 
 (defn- percentile-breakpoints
-  "Compute n-1 breakpoints at the 100/n, 200/n, ..., (n-1)*100/n percentiles
-  of the non-nil values in col. Returns a vector of breakpoints, or nil if
-  there are fewer than n non-nil values. Uses dfn/percentiles (Apache Commons
-  interpolation) to match the semantics of cut-bucket exactly."
+  "Compute n-1 breakpoints at the 1/n, 2/n, ..., (n-1)/n quantiles of the
+  non-nil values in col. Returns a vector of breakpoints, or nil if there are
+  fewer than n non-nil values. Uses R type-7 quantiles (matching cut-bucket)."
   [col n]
-  (let [sorted (->> col dtype/->reader (remove nil?) sort vec)
-        k (count sorted)]
+  (let [finite (->> col dtype/->reader (remove nil?))
+        k (count finite)]
     (when (>= k n)
-      (let [pcts (mapv #(* % (/ 100.0 n)) (range 1 n))]
-        (vec (dtype/->reader (dfn/percentiles sorted pcts {:nan-strategy :remove})))))))
+      (mapv #(math/quantile-type7 finite (/ (double %) n)) (range 1 n)))))
 
 (defn- bin-via-breakpoints
   "Given a scalar v and n-1 breakpoints (assumed sorted ascending), return the
@@ -362,9 +361,20 @@
   "Column sum. Full-name alias for `dfn/sum`."
   dfn/sum)
 
-(def median
-  "Column median. Full-name alias for `dfn/median`."
-  dfn/median)
+(defn median
+  "Column median (R type-7, matching R's `median`). Drops nil and non-finite
+  values. Equivalent to `(qnt col 0.5)`."
+  [col]
+  (math/quantile-type7 col 0.5))
+
+(defn qnt
+  "Column R type-7 p-quantile (p a fraction in [0,1]); matches R's
+  `quantile(x, p, type = 7, na.rm = TRUE)`. Drops nil and non-finite values.
+  With `min-n`, returns nil when fewer than `min-n` finite values remain
+  (floor-free by default). Also available as the `qnt` op in #dt/e and as an
+  `:agg`/`:set` data-form `[:qnt :col p]`."
+  ([col p] (math/quantile-type7 col p))
+  ([col p min-n] (math/quantile-type7 col p min-n)))
 
 (def stddev
   "Column standard deviation. Full-name alias for `dfn/standard-deviation`."

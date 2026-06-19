@@ -742,7 +742,8 @@ Short aliases for power users (q / data.table refugees in particular):
 |--------|-----------|
 | `mn`   | mean |
 | `sm`   | sum |
-| `md`   | median |
+| `md`   | median (R type-7) |
+| `qnt`  | type-7 p-quantile: `(qnt :col p)` or `(qnt :col p min-n)` |
 | `sd`   | stddev |
 | `mx`   | max (column maximum) |
 | `mi`   | min (column minimum) |
@@ -876,7 +877,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `stddev`, `variance`, `max*`, `min*`, `count*`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `qnt`, `stddev`, `variance`, `max*`, `min*`, `count*`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |

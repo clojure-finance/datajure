@@ -2,7 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [tech.v3.dataset :as ds]
             [datajure.concise :refer [mn sm md sd ct nuniq N dt asc desc rename pass-nil
-                                      fst lst wa ws mx mi between]]))
+                                      fst lst wa ws mx mi between qnt]]))
 
 (def sample
   (ds/->dataset {:species ["Adelie" "Adelie" "Gentoo"]
@@ -19,7 +19,11 @@
   (testing "ct returns element count"
     (is (= 3 (ct (:mass sample)))))
   (testing "nuniq returns distinct count"
-    (is (= 2 (nuniq (:species sample))))))
+    (is (= 2 (nuniq (:species sample)))))
+  (testing "qnt is type-7 and agrees with md at p=0.5"
+    (is (== 3.0 (qnt (range 1 12) 0.2)))
+    (is (== (md (range 1 12)) (qnt (range 1 12) 0.5)))
+    (is (nil? (qnt [1 2 3] 0.5 11)))))
 
 (deftest concise-core-re-exports
   (testing "N works as row count agg"

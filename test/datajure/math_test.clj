@@ -1,0 +1,44 @@
+(ns datajure.math-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [datajure.math :as math]
+            [tech.v3.dataset :as ds]))
+
+(deftest quantile-type7-matches-r
+  ;; Reference values from R's quantile(x, p, type = 7) — the cases recorded in
+  ;; the investing-app DATAJURE-NOTES (where dfn/percentiles disagreed).
+  (testing "1..11 at p20/p50/p80"
+    (is (== 3.0 (math/quantile-type7 (range 1 12) 0.2)))
+    (is (== 6.0 (math/quantile-type7 (range 1 12) 0.5)))
+    (is (== 9.0 (math/quantile-type7 (range 1 12) 0.8))))
+  (testing "1..10 (interpolated) at p20/p50/p80"
+    (is (== 2.8 (math/quantile-type7 (range 1 11) 0.2)))
+    (is (== 5.5 (math/quantile-type7 (range 1 11) 0.5)))
+    (is (== 8.2 (math/quantile-type7 (range 1 11) 0.8))))
+  (testing "p clamps at the endpoints"
+    (is (== 1.0 (math/quantile-type7 (range 1 12) 0.0)))
+    (is (== 11.0 (math/quantile-type7 (range 1 12) 1.0)))))
+
+(deftest quantile-type7-drops-non-finite
+  (testing "nil is dropped (R na.rm)"
+    (is (== 2.0 (math/quantile-type7 [1 2 nil 3 nil] 0.5))))
+  (testing "±Inf and NaN are dropped (R is.finite)"
+    (is (== 2.0 (math/quantile-type7 [1.0 2.0 ##Inf ##-Inf 3.0] 0.5)))
+    (is (== 2.0 (math/quantile-type7 [1.0 ##NaN 2.0 3.0] 0.5))))
+  (testing "a filtered lazy seq is accepted (not just a reader)"
+    (is (== 2.0 (math/quantile-type7 (remove nil? [1 2 nil 3]) 0.5))))
+  (testing "a dataset column is accepted"
+    (is (== 2.0 (math/quantile-type7 ((ds/->dataset {:x [1.0 2.0 3.0]}) :x) 0.5)))))
+
+(deftest quantile-type7-edge-cases
+  (testing "no finite values -> nil"
+    (is (nil? (math/quantile-type7 [nil nil] 0.5)))
+    (is (nil? (math/quantile-type7 [##Inf ##NaN] 0.5)))
+    (is (nil? (math/quantile-type7 [] 0.5))))
+  (testing "single value -> that value regardless of p"
+    (is (== 42.0 (math/quantile-type7 [42.0] 0.2)))
+    (is (== 42.0 (math/quantile-type7 [42.0] 0.9))))
+  (testing "min-n floor: returns nil below the threshold, value at/above"
+    (is (nil? (math/quantile-type7 (range 1 11) 0.2 11)))  ;; 10 finite < 11
+    (is (== 3.0 (math/quantile-type7 (range 1 12) 0.2 11))) ;; 11 finite
+    (is (nil? (math/quantile-type7 [1 2 nil 3] 0.5 4)))     ;; 3 finite < 4 -> nil
+    (is (== 2.0 (math/quantile-type7 [1 2 3] 0.5 3)))))     ;; exactly 3 finite >= 3 -> ok

@@ -27,7 +27,8 @@
             [tech.v3.dataset :as ds]
             [datajure.window :as win]
             [datajure.row :as row]
-            [datajure.stat :as stat]))
+            [datajure.stat :as stat]
+            [datajure.math :as math]))
 
 ;; ---------------------------------------------------------------------------
 ;; Op dispatch table: symbol -> keyword -> dfn fn
@@ -235,7 +236,13 @@
    :not dfn/not
    :mn dfn/mean
    :sm dfn/sum
-   :md dfn/median
+   ;; R type-7 (matches R's median; differs from dfn/median for some n). qnt at
+   ;; p=0.5 and md agree by construction.
+   :md (fn [col] (math/quantile-type7 col 0.5))
+   ;; type-7 p-quantile aggregator. (qnt :col p) or (qnt :col p min-n) — min-n
+   ;; returns nil when fewer than min-n finite values remain (floor-free default).
+   :qnt (fn ([col p] (math/quantile-type7 col p))
+          ([col p min-n] (math/quantile-type7 col p min-n)))
    :sd dfn/standard-deviation
    :mx col-max
    :mi col-min
@@ -257,7 +264,7 @@
    'sq :sq, 'log :log
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
-   'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi
+   'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi, 'qnt :qnt
    ;; full-name aliases for the aggregation ops (datajure.core names), so both
    ;; (mn :x) and (mean :x) work inside #dt/e
    'mean :mn, 'sum :sm, 'median :md, 'stddev :sd, 'variance :variance
@@ -674,10 +681,10 @@
                    (filterv some?
                             (map-indexed (fn [i v] (when (nth mask i) v)) rdr))
                    (filterv some? rdr))
-         pcts (mapv #(* % (/ 100.0 n)) (range 1 n))
-         breaks-arr (if (empty? pcts)
-                      (double-array 0)
-                      (double-array (dfn/percentiles ref-pop pcts {:nan-strategy :remove})))]
+         ;; type-7 breakpoints at the 1/n, 2/n, ..., (n-1)/n quantiles (R default)
+         breaks-arr (double-array
+                     (map #(or (math/quantile-type7 ref-pop (/ (double %) n)) ##NaN)
+                          (range 1 n)))]
      (dtype/make-reader :object cnt
                         (let [v (nth rdr idx)]
                           (if (nil? v)
