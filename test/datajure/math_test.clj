@@ -29,6 +29,26 @@
   (testing "a dataset column is accepted"
     (is (== 2.0 (math/quantile-type7 ((ds/->dataset {:x [1.0 2.0 3.0]}) :x) 0.5)))))
 
+(deftest quantiles-type7-test
+  (testing "multi-probability matches the single-probability calls, sorting once"
+    (is (= (mapv #(math/quantile-type7 (range 1 12) %) [0.2 0.5 0.8])
+           (math/quantiles-type7 (range 1 12) [0.2 0.5 0.8])))
+    (is (= [3.0 6.0 9.0] (math/quantiles-type7 (range 1 12) [0.2 0.5 0.8]))))
+  (testing "min-n applies per element"
+    (is (= [nil nil nil] (math/quantiles-type7 [1 2 3] [0.2 0.5 0.8] 11))))
+  (testing "drops nil + non-finite like the scalar form"
+    (is (= [2.0] (math/quantiles-type7 [1.0 2.0 ##Inf nil 3.0] [0.5])))))
+
+(deftest quantile-non-numeric-guard
+  ;; A date/temporal (or otherwise non-numeric) column can't be ranked — throw a
+  ;; structured error, not a raw ClassCastException deep in the double-cast.
+  (let [err (fn [thunk] (-> (try (thunk) nil (catch clojure.lang.ExceptionInfo e e))
+                            ex-data :dt/error))]
+    (is (= :quantile-non-numeric
+           (err #(math/quantile-type7 [(java.time.LocalDate/of 2020 1 1)] 0.5))))
+    (is (= :quantile-non-numeric
+           (err #(math/quantiles-type7 ["x" "y"] [0.5]))))))
+
 (deftest finite-double?-test
   (is (true? (math/finite-double? 0)))
   (is (true? (math/finite-double? -3.5)))

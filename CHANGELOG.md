@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Element-wise non-finite cleaners + stable `asinh` in `#dt/e`.** Four new element-wise ops, usable in `#dt/e` and in `:where`/`:agg`/`:set` data-forms: `na2zero` (non-finite — nil/NaN/±Inf — → 0.0), `nonfin2na` (non-finite → nil), `neg2na` (negative → nil; nil/non-finite pass through as nil), and `asinh` (numerically-stable inverse hyperbolic sine `sign(x)·ln(|x|+√(x²+1))`, nil for non-finite). These mirror mbmisc's `na2zero`/`nonfin2na`/`neg2na` and a stable `asinh` — the textbook `ln(x+√(x²+1))` form silently collapses large-negative inputs to nil. The scalar primitives `math/finite-double?` and `math/asinh` back them.
 - **`win/grr` — inverse-hyperbolic-sine growth window op.** `#dt/e (win/grr :x)` computes `asinh(x[i]) − asinh(x[i-1])` per partition/order (mbmisc `grr` with IHS=TRUE): nil for the first element, and a run of zeros (`x[i]==0 && x[i-1]==0`) yields `0.0` rather than `asinh(0)−asinh(0)`. Like other `win/*` ops it runs in `:set` window mode (`:by` + optional `:within-order`).
+- **Multi-quantile `qnt` — one sort for a whole band set.** `(qnt :col [0.2 0.5 0.8])` (and `core/qnt`/`concise/qnt`, and the data-form `[:qnt :col [0.2 0.5 0.8]]`) returns a vector of quantiles, sorting the column **once** instead of three times — the q20/median/q80 idiom in one agg. Backed by `math/quantiles-type7`. In a data-form, a number-headed vector like `[0.2 0.5 0.8]` is now a literal (so the form works), while a non-number-headed vector stays an operation.
+
+### Fixed
+
+- **`qnt`/`md` on a date/temporal column now throw a structured `:quantile-non-numeric` error** instead of a raw `ClassCastException` (`LocalDate cannot be cast to Number`) deep in the sort — the same class of guard as the as-of `:asof-non-numeric-asof-key`. Convert the column to epoch days/millis to rank it.
 
 ## [2.2.0] - 2026-06-19
 

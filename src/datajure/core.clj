@@ -385,10 +385,14 @@
   "Column R type-7 p-quantile (p a fraction in [0,1]); matches R's
   `quantile(x, p, type = 7, na.rm = TRUE)`. Drops nil and non-finite values.
   With `min-n`, returns nil when fewer than `min-n` finite values remain
-  (floor-free by default). Also available as the `qnt` op in #dt/e and as an
+  (floor-free by default). `p` may be a vector of probabilities, in which case
+  the column is sorted once and a vector of quantiles is returned (the efficient
+  q20/median/q80 band form). Also available as the `qnt` op in #dt/e and as an
   `:agg`/`:set` data-form `[:qnt :col p]`."
-  ([col p] (math/quantile-type7 col p))
-  ([col p min-n] (math/quantile-type7 col p min-n)))
+  ([col p] (if (sequential? p) (math/quantiles-type7 col p) (math/quantile-type7 col p)))
+  ([col p min-n] (if (sequential? p)
+                   (math/quantiles-type7 col p min-n)
+                   (math/quantile-type7 col p min-n))))
 
 (def stddev
   "Column standard deviation. Full-name alias for `dfn/standard-deviation`."

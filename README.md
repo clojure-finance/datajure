@@ -749,7 +749,7 @@ Short aliases for power users (q / data.table refugees in particular):
 | `mn`   | mean |
 | `sm`   | sum |
 | `md`   | median (R type-7) |
-| `qnt`  | type-7 p-quantile: `(qnt :col p)` or `(qnt :col p min-n)` |
+| `qnt`  | type-7 p-quantile: `(qnt :col p)` / `(qnt :col p min-n)`; `p` may be a vector `[0.2 0.5 0.8]` → vector of quantiles, sorted once |
 | `sd`   | stddev |
 | `mx`   | max (column maximum) |
 | `mi`   | min (column minimum) |

@@ -257,8 +257,13 @@
    :md (fn [col] (math/quantile-type7 col 0.5))
    ;; type-7 p-quantile aggregator. (qnt :col p) or (qnt :col p min-n) — min-n
    ;; returns nil when fewer than min-n finite values remain (floor-free default).
-   :qnt (fn ([col p] (math/quantile-type7 col p))
-          ([col p min-n] (math/quantile-type7 col p min-n)))
+   ;; p may be a vector of probabilities, sorting once and returning a vector.
+   :qnt (fn ([col p] (if (sequential? p)
+                       (math/quantiles-type7 col p)
+                       (math/quantile-type7 col p)))
+          ([col p min-n] (if (sequential? p)
+                           (math/quantiles-type7 col p min-n)
+                           (math/quantile-type7 col p min-n))))
    :sd dfn/standard-deviation
    :mx col-max
    :mi col-min
@@ -580,27 +585,25 @@
   "Convert a runtime data-form expression to a #dt/e AST so it compiles down the
   same vectorized path. The form mirrors #dt/e but as plain *evaluated* data:
     - a vector [op-kw & args] is an operation (op-kw a keyword: :=, :>, :qnt, ...);
+    - a **number-headed** vector is a literal value (e.g. a probability list
+      [0.2 0.5 0.8] for a multi-quantile `qnt`);
     - a keyword is a column reference;
     - anything else (number, string, set, the value of a local) is a literal.
   So (data->ast [:= :tic ticker]) closes over the runtime value of `ticker`, and
-  (data->ast [:qnt :saleq 0.2] :agg) builds an aggregation from runtime values.
+  (data->ast [:qnt :saleq [0.2 0.5 0.8]] :agg) builds a multi-quantile aggregation.
 
   `ctx` selects the permitted ops: :where (default) allows element-wise ops only;
   :agg also allows the scalar aggregators (for `:agg`/`:set`). Richer expressions
-  use #dt/e. Use sets (not vectors) for `:in` membership, since vectors denote
-  operations."
+  use #dt/e. Use sets (not vectors) for `:in` membership, since a non-number-headed
+  vector denotes an operation."
   ([form] (data->ast form :where))
   ([form ctx]
    (let [allowed (case ctx :agg data-form-agg-ops data-form-where-ops)]
      (letfn [(go [f]
                (cond
                  (keyword? f) (col-node f)
-                 (vector? f)
-                 (do
-                   (when (empty? f)
-                     (throw (ex-info "Empty data-form vector — expected [op & args]."
-                                     {:dt/error :invalid-data-form :dt/value f})))
-                   (op-node (data-op->kw (first f) allowed) (mapv go (rest f))))
+                 (and (vector? f) (number? (first f))) (lit-node f)
+                 (vector? f) (op-node (data-op->kw (first f) allowed) (mapv go (rest f)))
                  :else (lit-node f)))]
        (go form)))))
 

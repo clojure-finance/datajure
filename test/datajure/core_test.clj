@@ -2395,6 +2395,33 @@
     (testing "(qnt :x p min-n) returns nil below the finite-count floor"
       (is (every? nil? ((core/dt d :by [:g] :agg {:q #dt/e (qnt :x 0.2 11)}) :q))))))
 
+(deftest qnt-vector-form-and-guard
+  ;; lever 2: a vector of probabilities sorts the group once and returns a vector.
+  (let [d (ds/->dataset {:g [:a :a :a :b :b] :x [1.0 2.0 3.0 10.0 20.0]})]
+    (testing "(qnt :x [..]) returns one column of [q20 med q80] vectors per group"
+      (let [r (group-by :g (ds/mapseq-reader
+                            (core/dt d :by [:g] :agg {:bands #dt/e (qnt :x [0.2 0.5 0.8])})))]
+        (is (= [1.4 2.0 2.6] (:bands (first (r :a)))))
+        (is (= [12.0 15.0 18.0] (:bands (first (r :b)))))))
+    (testing "the vector form equals the three separate aggs"
+      (let [sep (first (ds/mapseq-reader (core/dt d :agg {:a #dt/e (qnt :x 0.2)
+                                                          :b #dt/e (qnt :x 0.5)
+                                                          :c #dt/e (qnt :x 0.8)})))
+            vecd (first (ds/mapseq-reader (core/dt d :agg {:v #dt/e (qnt :x [0.2 0.5 0.8])})))]
+        (is (= [(:a sep) (:b sep) (:c sep)] (:v vecd)))))
+    (testing "data-form vector form equals the #dt/e vector form"
+      (is (= (vec ((core/dt d :by [:g] :agg {:bands #dt/e (qnt :x [0.2 0.5 0.8])}) :bands))
+             (vec ((core/dt d :by [:g] :agg {:bands [:qnt :x [0.2 0.5 0.8]]}) :bands)))))))
+
+(deftest qnt-on-temporal-column-errors
+  ;; qnt/md on a date column → structured :quantile-non-numeric (not ClassCastException)
+  (let [d (ds/->dataset {:g [:a :a] :date [(java.time.LocalDate/of 2020 1 1)
+                                           (java.time.LocalDate/of 2020 6 1)]})]
+    (is (= :quantile-non-numeric
+           (-> (try (core/dt d :by [:g] :agg {:q #dt/e (qnt :date 0.5)}) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
 (deftest agg-set-data-form
   ;; §2.8: :agg/:set accept the runtime data-form vector (like :where), so a
   ;; column list can be turned into aggregations programmatically.

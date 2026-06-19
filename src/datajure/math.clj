@@ -34,20 +34,50 @@
 (defn- finite-sorted
   "Ascending double-array of the finite values in `coll`, dropping nil, NaN and
   ±Inf (R's `is.finite`). `coll` is any seqable of numbers (a dtype reader /
-  column / vector / lazy seq) — reduced directly so a filtered lazy seq is fine."
+  column / vector / lazy seq) — reduced directly so a filtered lazy seq is fine.
+
+  A non-nil, non-numeric value (e.g. a java.time date — quantiles can't rank one)
+  throws a structured `:quantile-non-numeric` error rather than a raw
+  ClassCastException deep in the cast."
   ^doubles [coll]
   (let [al (java.util.ArrayList.)]
     (run! (fn [v]
             (when (some? v)
-              (let [d (double v)]
-                (when-not (or (Double/isNaN d) (Double/isInfinite d))
-                  (.add al d)))))
+              (if (number? v)
+                (let [d (double v)]
+                  (when-not (or (Double/isNaN d) (Double/isInfinite d))
+                    (.add al d)))
+                (throw (ex-info
+                        (str "quantile/median requires a numeric column; got a "
+                             (.getName (class v)) " (" (pr-str v) "). Convert a "
+                             "date/temporal column to epoch days or millis first.")
+                        {:dt/error :quantile-non-numeric
+                         :dt/value-class (.getName (class v))})))))
           coll)
     (let [m (.size al)
           arr (double-array m)]
       (dotimes [i m] (aset arr i (double (.get al i))))
       (java.util.Arrays/sort arr)
       arr)))
+
+(defn- quantile-of-sorted
+  "Type-7 quantile at probability `p` of the pre-sorted finite double-array `xs`
+  (length `n`). nil when empty or below the `min-n` floor. Shared by the single-
+  and multi-probability entry points so a column is sorted at most once."
+  [^doubles xs ^long n p min-n]
+  (cond
+    (zero? n) nil
+    (and min-n (< n (long min-n))) nil
+    (= n 1) (aget xs 0)
+    :else
+    (let [pp (max 0.0 (min 1.0 (double p)))
+          h (* (double (dec n)) pp)
+          lo (min (long (Math/floor h)) (dec n))
+          frac (- h lo)
+          v (aget xs lo)]
+      (if (>= (inc lo) n)
+        v
+        (+ v (* frac (- (aget xs (inc lo)) v)))))))
 
 (defn quantile-type7
   "R type-7 quantile of the finite values in `coll` at probability `p` (a
@@ -63,18 +93,16 @@
   is floor-free by default; pass it only for rules like the peer-bands n>=11."
   ([coll p] (quantile-type7 coll p nil))
   ([coll p min-n]
+   (let [xs (finite-sorted coll)]
+     (quantile-of-sorted xs (alength xs) p min-n))))
+
+(defn quantiles-type7
+  "Type-7 quantiles at several probabilities `ps`, sorting the finite values of
+  `coll` **once**. Returns a vector aligned with `ps` (each element nil under the
+  same empty / `min-n` rules as `quantile-type7`). This is the efficient form for
+  the q20/median/q80 band idiom — one sort instead of three."
+  ([coll ps] (quantiles-type7 coll ps nil))
+  ([coll ps min-n]
    (let [xs (finite-sorted coll)
          n (alength xs)]
-     (cond
-       (zero? n) nil
-       (and min-n (< n (long min-n))) nil
-       (= n 1) (aget xs 0)
-       :else
-       (let [pp (max 0.0 (min 1.0 (double p)))
-             h (* (double (dec n)) pp)
-             lo (min (long (Math/floor h)) (dec n))
-             frac (- h lo)
-             v (aget xs lo)]
-         (if (>= (inc lo) n)
-           v
-           (+ v (* frac (- (aget xs (inc lo)) v)))))))))
+     (mapv #(quantile-of-sorted xs n % min-n) ps))))
