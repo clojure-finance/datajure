@@ -2394,6 +2394,28 @@
     (testing "(qnt :x p min-n) returns nil below the finite-count floor"
       (is (every? nil? ((core/dt d :by [:g] :agg {:q #dt/e (qnt :x 0.2 11)}) :q))))))
 
+(deftest agg-set-data-form
+  ;; §2.8: :agg/:set accept the runtime data-form vector (like :where), so a
+  ;; column list can be turned into aggregations programmatically.
+  (let [d (ds/->dataset {:g [:a :a :b] :x [1.0 2.0 10.0] :y [4.0 6.0 8.0]})]
+    (testing ":agg data-form [:qnt :x p] == the #dt/e form"
+      (let [df (core/dt d :by [:g] :agg {:q [:qnt :x 0.5]})
+            ex (core/dt d :by [:g] :agg {:q #dt/e (qnt :x 0.5)})]
+        (is (= (vec (df :q)) (vec (ex :q))))))
+    (testing "programmatic generation over a column list"
+      (let [cols [:x :y]
+            aggs (into {} (map (fn [c] [(keyword (str (name c) "_med")) [:qnt c 0.5]]) cols))
+            r (first (ds/mapseq-reader (core/dt d :agg aggs)))]
+        (is (== 2.0 (:x_med r)))
+        (is (== 6.0 (:y_med r)))))
+    (testing ":set data-form is element-wise (like :where)"
+      (is (= [1.0 4.0 100.0] (vec ((core/dt d :set {:x2 [:* :x :x]}) :x2)))))
+    (testing "an aggregator is rejected in a :where data-form but allowed in :agg"
+      (is (= :unknown-data-op
+             (-> (try (core/dt d :where [:qnt :x 0.5]) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
+
 (deftest core-full-name-agg-helpers
   (testing "mean skips nil"
     (let [col [3750.0 nil 3800.0 5000.0]]

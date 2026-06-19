@@ -237,9 +237,9 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
 
 **Footgun to know about in `:agg`:** plain functions receive the *group dataset*, not a row, so `(:mass %)` returns a column vector rather than a scalar. Datajure detects this and throws a structured error since v2.0.6 — but this is why `#dt/e (mn :mass)` is safer than `#(mean (:mass %))`.
 
-### Filtering by a runtime value — the `:where` data-form
+### Runtime values & programmatic queries — the data-form
 
-`#dt/e` is a *read-time* reader tag, so it can't see a runtime local: you can't write `#dt/e (= :tic ticker)` and have `ticker` resolve. The escape isn't a plain-fn `:where` (that builds a row map per row — slow on a wide dataset). Instead, `:where` accepts a **data-form vector**: a keyword is a column, anything else is a literal value, so runtime values flow straight in. It desugars to the same AST `#dt/e` compiles — same vectorized `dfn` path, no row map.
+`#dt/e` is a *read-time* reader tag, so it can't see a runtime local: you can't write `#dt/e (= :tic ticker)` and have `ticker` resolve. The escape isn't a plain-fn `:where` (that builds a row map per row — slow on a wide dataset). Instead, `:where`, `:agg`, and `:set` accept a **data-form vector**: a keyword is a column, a vector is an operation `[op-kw & args]`, anything else is a literal value, so runtime values flow straight in. It desugars to the same AST `#dt/e` compiles — same vectorized `dfn` path, no row map.
 
 ```clojure
 (let [ticker "AAPL", lo 3700, hi 4900]
@@ -250,9 +250,15 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
 
 ;; predicates assemble programmatically — ideal for parameterized screens
 (dt ds :where (into [:and] (for [[c lo hi] thresholds] [:between? c lo hi])))
+
+;; :agg / :set take data-forms too — generate aggregations over a column list
+(dt panel :by [:gind]
+    :agg (into {} (for [c benchmark-vars]
+                    [(keyword (str (name c) "_q20")) [:qnt c 0.2]])))
+(dt ds :set {:gross-margin [:div0 [:- :sales :cogs] :sales]})
 ```
 
-Supported ops: `> < >= <= = and or not in between? + - * / sq log div0` (use a set for `:in`). Aggregations, window/row/stat ops, and `if`/`cond`/`let`/`cut`/`xbar` stay `#dt/e`-only.
+Supported ops in a `:where` data-form: `> < >= <= = and or not in between? + - * / sq log div0` (use a set for `:in`). `:agg`/`:set` data-forms additionally allow the scalar aggregators (`mn sm md sd mx mi variance ct nuniq qnt wavg wsum` …). Window/row/stat ops and `if`/`cond`/`let`/`cut`/`xbar` stay `#dt/e`-only.
 
 ## `:select` — Polymorphic Column Selection
 

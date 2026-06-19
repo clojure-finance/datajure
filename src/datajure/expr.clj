@@ -518,11 +518,22 @@
 ;; straight in where #dt/e — a read-time reader tag — can only see a literal.
 ;; It compiles down the exact same AST / vectorized path.
 
-(def ^:private data-form-ops
-  "Ops permitted in a runtime data-form: the element-wise comparison, logical,
-  arithmetic, and membership ops. Aggregations, window/row/stat ops, and the
-  structural special forms (if/cond/let/cut/xbar/coalesce) remain #dt/e-only."
+(def ^:private data-form-where-ops
+  "Ops permitted in a `:where` data-form: the element-wise comparison, logical,
+  arithmetic, and membership ops. A predicate can't be an aggregator, so
+  aggregations, window/row/stat ops, and the structural special forms
+  (if/cond/let/cut/xbar/coalesce) remain #dt/e-only here."
   #{:> :< :>= :<= := :and :or :not :in :between? :+ :- :* :div :div0 :sq :log})
+
+(def ^:private data-form-agg-ops
+  "Ops permitted in an `:agg`/`:set` data-form: the element-wise set plus the
+  scalar aggregators (so a column list can be turned into aggregations
+  programmatically, e.g. [:qnt :saleq 0.2]). Window/row/stat ops and the
+  structural special forms still need #dt/e (their namespaced symbols don't have
+  a plain-keyword data-form spelling)."
+  (into data-form-where-ops
+        #{:mn :sm :md :sd :mx :mi :variance :ct :nuniq :first-val :last-val
+          :wavg :wsum :qnt}))
 
 (def ^:private data-op-aliases
   "Keyword op aliases accepted in data-forms -> canonical op keyword. Only the
@@ -530,42 +541,50 @@
   {:/ :div})
 
 (defn- data-op->kw
-  "Normalise and validate a data-form op (a keyword like :=, :>, :and)."
-  [op]
+  "Normalise and validate a data-form op (a keyword like :=, :>, :qnt) against
+  the set of ops `allowed` in the current context."
+  [op allowed]
   (if-not (keyword? op)
     (throw (ex-info (str "data-form op must be a keyword (e.g. :=, :>, :and); got "
                          (pr-str op) ".")
                     {:dt/error :invalid-data-op :dt/op op}))
     (let [op-kw (get data-op-aliases op op)]
-      (if (contains? data-form-ops op-kw)
+      (if (contains? allowed op-kw)
         op-kw
         (throw (ex-info (str "Unknown data-form op " op ". Supported ops: "
-                             (vec (sort data-form-ops))
-                             ". For aggregations, window/row/stat ops, or "
-                             "if/cond/let/cut/xbar use #dt/e.")
+                             (vec (sort allowed))
+                             ". For window/row/stat ops or if/cond/let/cut/xbar use #dt/e.")
                         {:dt/error :unknown-data-op
                          :dt/op op
-                         :dt/supported (vec (sort data-form-ops))}))))))
+                         :dt/supported (vec (sort allowed))}))))))
 
 (defn data->ast
   "Convert a runtime data-form expression to a #dt/e AST so it compiles down the
   same vectorized path. The form mirrors #dt/e but as plain *evaluated* data:
-    - a vector [op-kw & args] is an operation (op-kw a keyword: :=, :>, :and, ...);
+    - a vector [op-kw & args] is an operation (op-kw a keyword: :=, :>, :qnt, ...);
     - a keyword is a column reference;
     - anything else (number, string, set, the value of a local) is a literal.
-  So (data->ast [:= :tic ticker]) closes over the runtime value of `ticker`.
-  Supports the element-wise ops in `data-form-ops`; richer expressions use #dt/e.
-  Use sets (not vectors) for `:in` membership, since vectors denote operations."
-  [form]
-  (cond
-    (keyword? form) (col-node form)
-    (vector? form)
-    (do
-      (when (empty? form)
-        (throw (ex-info "Empty data-form vector — expected [op & args]."
-                        {:dt/error :invalid-data-form :dt/value form})))
-      (op-node (data-op->kw (first form)) (mapv data->ast (rest form))))
-    :else (lit-node form)))
+  So (data->ast [:= :tic ticker]) closes over the runtime value of `ticker`, and
+  (data->ast [:qnt :saleq 0.2] :agg) builds an aggregation from runtime values.
+
+  `ctx` selects the permitted ops: :where (default) allows element-wise ops only;
+  :agg also allows the scalar aggregators (for `:agg`/`:set`). Richer expressions
+  use #dt/e. Use sets (not vectors) for `:in` membership, since vectors denote
+  operations."
+  ([form] (data->ast form :where))
+  ([form ctx]
+   (let [allowed (case ctx :agg data-form-agg-ops data-form-where-ops)]
+     (letfn [(go [f]
+               (cond
+                 (keyword? f) (col-node f)
+                 (vector? f)
+                 (do
+                   (when (empty? f)
+                     (throw (ex-info "Empty data-form vector — expected [op & args]."
+                                     {:dt/error :invalid-data-form :dt/value f})))
+                   (op-node (data-op->kw (first f) allowed) (mapv go (rest f))))
+                 :else (lit-node f)))]
+       (go form)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Compiler: AST -> fn of dataset

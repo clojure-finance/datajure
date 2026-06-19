@@ -102,10 +102,17 @@
       (ds/filter dataset predicate))))
 
 (defn- derive-column [dataset col-kw col-fn]
-  (if (expr-node? col-fn)
+  (cond
+    (expr-node? col-fn)
     (do (validate-expr-cols dataset col-fn (str ":set " col-kw))
         ((expr/compile-expr col-fn) dataset))
-    (mapv col-fn (ds/mapseq-reader dataset))))
+    ;; a runtime data-form vector (e.g. [:div0 [:- :a :b] :a] or [:qnt :x 0.2])
+    ;; desugars to the same AST #dt/e compiles — see apply-where
+    (vector? col-fn)
+    (let [node (expr/data->ast col-fn :agg)]
+      (validate-expr-cols dataset node (str ":set " col-kw))
+      ((expr/compile-expr node) dataset))
+    :else (mapv col-fn (ds/mapseq-reader dataset))))
 
 (defn- apply-set [dataset derivations]
   (if (map? derivations)
@@ -130,9 +137,16 @@
       (instance? tech.v3.dataset.impl.column.Column v)))
 
 (defn- eval-agg [dataset col-kw agg-fn]
-  (if (expr-node? agg-fn)
+  (cond
+    (expr-node? agg-fn)
     (do (validate-expr-cols dataset agg-fn (str ":agg " col-kw))
         ((expr/compile-expr agg-fn) dataset))
+    ;; runtime data-form vector, e.g. [:qnt :saleq 0.2] — see apply-where/derive-column
+    (vector? agg-fn)
+    (let [node (expr/data->ast agg-fn :agg)]
+      (validate-expr-cols dataset node (str ":agg " col-kw))
+      ((expr/compile-expr node) dataset))
+    :else
     (let [result (agg-fn dataset)]
       (when (agg-result-footgun? result)
         (throw (ex-info
