@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`win/grr` — inverse-hyperbolic-sine growth window op.** `#dt/e (win/grr :x)` computes `asinh(x[i]) − asinh(x[i-1])` per partition/order (mbmisc `grr` with IHS=TRUE): nil for the first element, and a run of zeros (`x[i]==0 && x[i-1]==0`) yields `0.0` rather than `asinh(0)−asinh(0)`. Like other `win/*` ops it runs in `:set` window mode (`:by` + optional `:within-order`).
 - **Multi-quantile `qnt` — one sort for a whole band set.** `(qnt :col [0.2 0.5 0.8])` (and `core/qnt`/`concise/qnt`, and the data-form `[:qnt :col [0.2 0.5 0.8]]`) returns a vector of quantiles, sorting the column **once** instead of three times — the q20/median/q80 idiom in one agg. Backed by `math/quantiles-type7`. In a data-form, a number-headed vector like `[0.2 0.5 0.8]` is now a literal (so the form works), while a non-number-headed vector stays an operation.
 
+### Changed
+
+- **`:by`/`:agg` group aggregation is dramatically faster at scale.** The group-by path no longer builds a materialised sub-dataset per group (over *all* columns) and concatenates one-row results; it now (1) narrows the dataset to just the columns the aggs reference, (2) groups row indices in a single key-column pass, and (3) for single-column quantile aggregators (`qnt`/`md`) gathers each group's values into a primitive `double[]` and reduces with no boxing — assembling the result columns once. On a real 2.1M-row × 20.8k-group cross-section (69 industries × q20/median/q80), the canonical Fama-French/peer-bands aggregation went from **>5 min (effectively unusable) to ~12 s**. Pure internal change — same results (verified against the prior path across the suite); other aggregators and `within-order` groups keep the general per-group path.
+
 ### Fixed
 
 - **`qnt`/`md` on a date/temporal column now throw a structured `:quantile-non-numeric` error** instead of a raw `ClassCastException` (`LocalDate cannot be cast to Number`) deep in the sort — the same class of guard as the as-of `:asof-non-numeric-asof-key`. Convert the column to epoch days/millis to rank it.

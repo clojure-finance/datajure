@@ -39,6 +39,19 @@
   (testing "drops nil + non-finite like the scalar form"
     (is (= [2.0] (math/quantiles-type7 [1.0 2.0 ##Inf nil 3.0] [0.5])))))
 
+(deftest quantiles-of-doubles-test
+  ;; primitive double[] form used by the group-by hot path — must match the
+  ;; reader-based quantiles-type7 (drops NaN/±Inf, same min-n rules).
+  (testing "matches quantiles-type7 on the finite values"
+    (is (= (math/quantiles-type7 [1.0 2.0 3.0 10.0 20.0] [0.2 0.5 0.8])
+           (math/quantiles-of-doubles (double-array [1.0 2.0 3.0 10.0 20.0]) [0.2 0.5 0.8]))))
+  (testing "drops NaN/±Inf (the missing→NaN representation)"
+    (is (= [1.0 2.0 3.0]
+           (math/quantiles-of-doubles (double-array [3.0 ##NaN 1.0 ##Inf 2.0 ##-Inf]) [0.0 0.5 1.0]))))
+  (testing "scalar p returns a scalar; min-n floor returns nil"
+    (is (== 2.0 (math/quantiles-of-doubles (double-array [1.0 2.0 3.0]) 0.5)))
+    (is (nil? (math/quantiles-of-doubles (double-array [1.0 2.0 3.0]) 0.5 11)))))
+
 (deftest quantile-non-numeric-guard
   ;; A date/temporal (or otherwise non-numeric) column can't be ranked — throw a
   ;; structured error, not a raw ClassCastException deep in the double-cast.

@@ -106,3 +106,25 @@
    (let [xs (finite-sorted coll)
          n (alength xs)]
      (mapv #(quantile-of-sorted xs n % min-n) ps))))
+
+(defn quantiles-of-doubles
+  "Type-7 quantiles of a primitive `double-array`, the allocation-light form for
+  the group-by hot path: compacts the finite values (drops NaN/±Inf) to the front
+  of `buf` in place, sorts that prefix, and reads each probability in `ps` off the
+  one sort — no boxing, no intermediate collection. **Mutates `buf`** (it must be
+  scratch the caller owns). `ps` may be a single number or a vector; returns a
+  scalar or vector to match. nil under the empty / `min-n` rules of quantile-type7."
+  ([^doubles buf ps] (quantiles-of-doubles buf ps nil))
+  ([^doubles buf ps min-n]
+   (let [n (alength buf)
+         w (loop [r 0 w 0]
+             (if (< r n)
+               (let [d (aget buf r)]
+                 (if (or (Double/isNaN d) (Double/isInfinite d))
+                   (recur (inc r) w)
+                   (do (aset buf w d) (recur (inc r) (inc w)))))
+               w))]
+     (java.util.Arrays/sort buf 0 w)
+     (if (sequential? ps)
+       (mapv #(quantile-of-sorted buf w % min-n) ps)
+       (quantile-of-sorted buf w ps min-n)))))

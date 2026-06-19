@@ -3,6 +3,7 @@
             [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.casting :as casting]
+            [tech.v3.datatype.datetime :as dtype-dt]
             [clojure.set :as set]
             [datajure.expr :as expr]
             [datajure.math :as math]))
@@ -278,34 +279,159 @@
        (some qtile-marker? by)
        (some keyword? by)))
 
+(defn- keyword-only-by?
+  "True for a :by that is a non-empty sequence of plain column keywords — no
+  qtile/xbar markers and no fn. The fast group-agg path handles exactly this
+  (the common Fama-French / peer-bands shape); marker/fn :by uses the general path."
+  [by]
+  (and (sequential? by) (seq by) (every? keyword? by)))
+
+(defn- agg-col-refs
+  "Columns an agg value references, or :all when it can't be introspected (a plain
+  fn may touch any column). #dt/e and data-form aggs expose their refs via the AST."
+  [agg-fn]
+  (cond
+    (expr-node? agg-fn) (expr/col-refs agg-fn)
+    (vector? agg-fn) (expr/col-refs (expr/data->ast agg-fn :agg))
+    :else :all))
+
+(defn- narrow-for-aggs
+  "Project `dataset` down to just the columns the group-agg actually touches —
+  the :by keys, the columns the aggs reference, and any within-order sort columns
+  — so the per-group `ds/select-rows` views (and their column wrappers) cover a
+  handful of columns instead of all of them. Returns `dataset` unchanged if any
+  agg is a plain fn (which could read any column)."
+  [dataset by pairs within-order]
+  (let [refs (map (comp agg-col-refs second) pairs)]
+    (if (some #{:all} refs)
+      dataset
+      (let [order-cols (when within-order
+                         (map #(if (keyword? %) % (:col %)) within-order))
+            needed (into (set by) (concat (apply concat refs) order-cols))]
+        (ds/select-columns dataset (filterv needed (ds/column-names dataset)))))))
+
+(def ^:private prim-quantile-ops
+  "Aggregator ops eligible for the primitive double[] gather. Limited to the
+  quantile ops because they drop non-finite values, so a gathered double[] with
+  NaN-for-missing is exactly correct (unlike mn/sd, where missing != NaN)."
+  #{:qnt :md})
+
+(defn- prim-quantile-spec
+  "When `agg-fn` is a single-column `qnt`/`md` op over a numeric, non-temporal
+  column (literal prob/min-n args) and there is no `within-order` sort, return a
+  spec `{:col :ps :min-n}` for the allocation-light primitive gather. Otherwise nil
+  (the agg goes through the general per-group `eval-agg` path — which also yields
+  the structured `:quantile-non-numeric` error for a temporal column)."
+  [dataset agg-fn within-order]
+  (when (nil? within-order)
+    (let [node (cond (expr-node? agg-fn) agg-fn
+                     (vector? agg-fn) (try (expr/data->ast agg-fn :agg) (catch Throwable _ nil))
+                     :else nil)]
+      (when (and node (= :op (:node/type node)) (prim-quantile-ops (:op/name node)))
+        (let [args (:op/args node)
+              c (first args)]
+          (when (and c (= :col (:node/type c))
+                     (every? #(= :lit (:node/type %)) (rest args)))
+            (let [col-kw (:col/name c)
+                  dt (some-> (ds/column dataset col-kw) meta :datatype)]
+              (when (and dt (casting/numeric-type? dt) (not (dtype-dt/datetime-datatype? dt)))
+                (if (= :md (:op/name node))
+                  {:col col-kw :ps 0.5 :min-n nil}
+                  (let [[p min-n] (mapv :lit/value (rest args))]
+                    {:col col-kw :ps p :min-n min-n}))))))))))
+
+(defn- fast-group-agg
+  "Fast path for keyword-only :by. Narrows the dataset to the columns the agg
+  actually touches, groups row indices over the key-column readers in a single
+  pass (no per-row maps, no eager per-group split of every column), and assembles
+  the result columns once — no per-group result datasets, no `ds/concat`.
+
+  Single-column quantile aggregators (`qnt`/`md`) take a primitive path: each
+  referenced column is pulled once as a `double[]`, and per group its slice is
+  gathered by row index and reduced with no boxing. Every other agg (composite
+  #dt/e, plain fn, order-sensitive) is fed a lazy `ds/select-rows` view through
+  `eval-agg`. Same result as the general path: key columns first (in :by order),
+  then agg columns (in :agg order); one row per group in first-seen order."
+  [dataset0 by pairs within-order]
+  (let [dataset (narrow-for-aggs dataset0 by pairs within-order)
+        key-rdrs (mapv #(dtype/->reader (ds/column dataset %)) by)
+        nk (count by)
+        np (count pairs)
+        n (ds/row-count dataset)
+        ;; per-agg: a prim-quantile spec map, or :general
+        specs (mapv (fn [pr] (or (prim-quantile-spec dataset (second pr) within-order) :general)) pairs)
+        prim-cols (into #{} (comp (filter map?) (map :col)) specs)
+        darrs (persistent! (reduce (fn [m c] (assoc! m c (dtype/->double-array (ds/column dataset c))))
+                                   (transient {}) prim-cols))
+        need-sub? (boolean (some #{:general} specs))
+        groups (java.util.LinkedHashMap.)]
+    (dotimes [i n]
+      (let [k (mapv #(nth % i) key-rdrs)
+            ^java.util.ArrayList lst (or (.get groups k)
+                                         (let [a (java.util.ArrayList.)] (.put groups k a) a))]
+        (.add lst (int i))))
+    (let [g (.size groups)
+          key-cols (vec (repeatedly nk #(object-array g)))
+          agg-cols (vec (repeatedly np #(object-array g)))
+          gi (int-array 1)]
+      (doseq [^java.util.Map$Entry e (.entrySet groups)]
+        (let [row (aget gi 0)
+              ktuple (.getKey e)
+              ^java.util.ArrayList idxs (.getValue e)
+              m (.size idxs)
+              idx-arr (int-array m)
+              _ (dotimes [j m] (aset idx-arr j (int (.get idxs j))))
+              sub (when need-sub?
+                    (let [s0 (ds/select-rows dataset idx-arr)]
+                      (if within-order (apply-order-by s0 within-order :within-order) s0)))
+              ;; one scratch buffer per group, re-gathered per prim agg
+              ^doubles buf (when (pos? (count darrs)) (double-array m))]
+          (dotimes [c nk] (aset ^objects (nth key-cols c) row (nth ktuple c)))
+          (dotimes [a np]
+            (let [spec (nth specs a)
+                  v (if (map? spec)
+                      (let [^doubles darr (darrs (:col spec))]
+                        (dotimes [j m] (aset buf j (aget darr (aget idx-arr j))))
+                        (math/quantiles-of-doubles buf (:ps spec) (:min-n spec)))
+                      (let [pr (nth pairs a)]
+                        (eval-agg sub (first pr) (second pr))))]
+              (aset ^objects (nth agg-cols a) row v)))
+          (aset gi 0 (inc row))))
+      (reduce (fn [d [cname cdata]] (ds/add-column d (ds/new-column cname cdata)))
+              (ds/->dataset {})
+              (concat (map vector by key-cols)
+                      (map vector (map first pairs) agg-cols))))))
+
 (defn- apply-group-agg
   ([dataset by aggregations] (apply-group-agg dataset by aggregations nil))
   ([dataset by aggregations within-order]
    (if (zero? (ds/row-count dataset))
      dataset
-     (let [pairs (if (map? aggregations) (seq aggregations) aggregations)
-           ;; Compound case (qtile + exact keys): first partition by exact
-           ;; keys so qtile breakpoints are computed per sub-dataset.
-           ;; Otherwise: whole dataset is the single "partition" and the
-           ;; existing single-pass group-by path runs unchanged.
-           partitions (if (needs-per-partition-resolution? by)
-                        (let [exact-keys (filterv keyword? by)]
-                          (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
-                        [dataset])]
-       (->> partitions
-            (mapcat (fn [partition-ds]
-                      (let [group-fn (by->group-fn partition-ds by)
-                            groups (ds/group-by partition-ds group-fn)]
-                        (map (fn [[group-key sub-ds]]
-                               (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)
-                                     wrapped-key (update-vals group-key vector)
-                                     agg-result (reduce (fn [m [col-kw agg-fn]]
-                                                          (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
-                                                        wrapped-key
-                                                        pairs)]
-                                 (ds/->dataset agg-result)))
-                             groups))))
-            (apply ds/concat))))))
+     (let [pairs (if (map? aggregations) (seq aggregations) aggregations)]
+       (if (keyword-only-by? by)
+         ;; Fast path: plain keyword :by (no markers/fn) — manual row-index group
+         ;; + assemble-once, avoiding ds/group-by's eager all-column split.
+         (fast-group-agg dataset by (vec pairs) within-order)
+         ;; General path. Compound case (qtile + exact keys): first partition by
+         ;; exact keys so qtile breakpoints are computed per sub-dataset.
+         (let [partitions (if (needs-per-partition-resolution? by)
+                            (let [exact-keys (filterv keyword? by)]
+                              (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
+                            [dataset])]
+           (->> partitions
+                (mapcat (fn [partition-ds]
+                          (let [group-fn (by->group-fn partition-ds by)
+                                groups (ds/group-by partition-ds group-fn)]
+                            (map (fn [[group-key sub-ds]]
+                                   (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)
+                                         wrapped-key (update-vals group-key vector)
+                                         agg-result (reduce (fn [m [col-kw agg-fn]]
+                                                              (assoc m col-kw [(eval-agg sorted col-kw agg-fn)]))
+                                                            wrapped-key
+                                                            pairs)]
+                                     (ds/->dataset agg-result)))
+                                 groups))))
+                (apply ds/concat))))))))
 
 (defn- apply-group-set [dataset by derivations within-order]
   (if (zero? (ds/row-count dataset))
