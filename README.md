@@ -73,7 +73,7 @@ No equivalent exists in tablecloth, dplyr, pandas, or data.table.
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.2.0"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.3.0"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -239,7 +239,7 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
 
 ### Runtime values & programmatic queries — the data-form
 
-`#dt/e` is a *read-time* reader tag, so it can't see a runtime local: you can't write `#dt/e (= :tic ticker)` and have `ticker` resolve. The escape isn't a plain-fn `:where` (that builds a row map per row — slow on a wide dataset). Instead, `:where`, `:agg`, and `:set` accept a **data-form vector**: a keyword is a column, a vector is an operation `[op-kw & args]`, anything else is a literal value, so runtime values flow straight in. It desugars to the same AST `#dt/e` compiles — same vectorized `dfn` path, no row map.
+`#dt/e` is a *read-time* reader tag, so it can't see a runtime local: you can't write `#dt/e (= :tic ticker)` and have `ticker` resolve. The escape isn't a plain-fn `:where` (that builds a row map per row — slow on a wide dataset). Instead, `:where`, `:agg`, and `:set` accept a **data-form vector**: a keyword is a column, a keyword-headed vector is an operation `[op-kw & args]` (a number-headed vector like `[0.2 0.5 0.8]` is a literal), anything else is a literal value, so runtime values flow straight in. It desugars to the same AST `#dt/e` compiles — same vectorized `dfn` path, no row map.
 
 ```clojure
 (let [ticker "AAPL", lo 3700, hi 4900]

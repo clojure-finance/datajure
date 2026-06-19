@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-06-19
+
 ### Added
 
 - **Element-wise non-finite cleaners + stable `asinh` in `#dt/e`.** Four new element-wise ops, usable in `#dt/e` and in `:where`/`:agg`/`:set` data-forms: `na2zero` (non-finite — nil/NaN/±Inf — → 0.0), `nonfin2na` (non-finite → nil), `neg2na` (negative → nil; nil/non-finite pass through as nil), and `asinh` (numerically-stable inverse hyperbolic sine `sign(x)·ln(|x|+√(x²+1))`, nil for non-finite). These mirror mbmisc's `na2zero`/`nonfin2na`/`neg2na` and a stable `asinh` — the textbook `ln(x+√(x²+1))` form silently collapses large-negative inputs to nil. The scalar primitives `math/finite-double?` and `math/asinh` back them.
@@ -311,7 +313,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/clojure-finance/datajure/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/clojure-finance/datajure/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/clojure-finance/datajure/compare/v2.0.13...v2.1.0
 [2.0.13]: https://github.com/clojure-finance/datajure/compare/v2.0.12...v2.0.13
