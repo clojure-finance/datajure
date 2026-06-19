@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-19
+
 ### Added
 
 - **`win/mdowndev` — moving downside-deviation window op.** `#dt/e (win/mdowndev :ret n)` computes the trailing-window downside deviation `sqrt(mean(min(r,0)²))` over width `n` (MAR=0, `method='full'`, na.rm — matching R's `PerformanceAnalytics::DownsideDeviation`), the Sortino-style risk measure that `win/mdev` (std-dev) doesn't capture. nil/NaN/±Inf are skipped; a window with finite values but no downside returns `0.0`; an **empty / all-missing window returns nil** (undefined — a deliberate divergence from R's `0`, matching datajure's nil-for-undefined philosophy). Runs in `:set` window mode (`:by` + optional `:within-order`), expanding at the start like the other `win/m*` ops.
