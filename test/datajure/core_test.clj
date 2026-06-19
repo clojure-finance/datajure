@@ -2526,25 +2526,32 @@
       (is (= [5.0 12.0 9.0] (vec (r :c)))))))
 
 (deftest off-heap-set-output
-  ;; §2.11(b): :off-heap true materialises numeric derived cols in off-heap native
-  ;; buffers — identical results + missing, derived cols native-backed, passthrough on-heap.
-  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
-        derivs {:lg #dt/e (win/lag :x 1)   ;; window (has nils)
-                :gm #dt/e (mn :x)          ;; aggregator broadcast
-                :x2 #dt/e (* :x 2)}        ;; element-wise
-        on  (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs)
-        off (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs :off-heap true)]
-    (testing "off-heap result is identical to on-heap (values + order)"
-      (is (= (mapv #(vec (on %)) [:k :t :lg :gm :x2])
-             (mapv #(vec (off %)) [:k :t :lg :gm :x2]))))
-    (testing "nils are preserved via the missing-set"
-      (is (= [nil 10.0 20.0 nil 100.0] (vec (off :lg))))
-      (is (= (vec (ds/missing (on :lg))) (vec (ds/missing (off :lg))))))
-    (testing "derived columns are off-heap native, passthrough stays on-heap"
+  ;; §2.11(b): numeric derived cols of a :set + keyword :by are materialised in off-heap
+  ;; native buffers — the DEFAULT now; :off-heap false opts back to on-heap. Off-heap is
+  ;; identical to on-heap by construction (relocates the packed column) and type-preserving.
+  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3]
+                         :x [10.0 100.0 20.0 200.0 30.0] :i [5 9 7 1 3]})
+        derivs {:lg #dt/e (win/lag :x 1)    ;; float window (has nils)
+                :rk #dt/e (win/rank :i)     ;; INT window — must stay :int64
+                :gm #dt/e (mn :x)           ;; aggregator broadcast
+                :x2 #dt/e (* :x 2)}         ;; element-wise
+        off (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs)            ;; default
+        on  (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs :off-heap false)]
+    (testing "off-heap is the default for :set + keyword :by"
       (is (= "tech.v3.datatype.native_buffer.NativeBuffer"
-             (.getName (class (.data (off :x2))))))
+             (.getName (class (.data (off :x2)))))))
+    (testing "off-heap result is identical to on-heap (values + missing + dtype)"
+      (is (= (mapv #(vec (on %)) [:k :t :lg :rk :gm :x2])
+             (mapv #(vec (off %)) [:k :t :lg :rk :gm :x2])))
+      (is (= (vec (ds/missing (on :lg))) (vec (ds/missing (off :lg)))))
+      (is (= (mapv #(dtype/elemwise-datatype (on %)) [:lg :rk :gm :x2])
+             (mapv #(dtype/elemwise-datatype (off %)) [:lg :rk :gm :x2]))))
+    (testing "type-preserving: int window op stays :int64, float stays :float64"
+      (is (= :int64 (dtype/elemwise-datatype (off :rk))))
+      (is (= :float64 (dtype/elemwise-datatype (off :lg)))))
+    (testing ":off-heap false keeps derived columns on-heap"
       (is (not= "tech.v3.datatype.native_buffer.NativeBuffer"
-                (.getName (class (.data (off :x)))))))))
+                (.getName (class (.data (on :x2)))))))))
 
 (deftest win-min-periods-option
   ;; §2.11/§2.7: non-expanding window via {:min-periods n} (leading n-1 rows -> nil),

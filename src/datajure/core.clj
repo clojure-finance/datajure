@@ -549,29 +549,29 @@
               (dotimes [j len] (aset out (+ (long s) j) res)))))))   ; scalar → broadcast
     out))
 
+(def ^:private native-dtype-family
+  "Native datatype family a packed column's dtype maps to for off-heap relocation."
+  {:int8 :int64 :int16 :int64 :int32 :int64 :int64 :int64
+   :uint8 :int64 :uint16 :int64 :uint32 :int64 :uint64 :int64
+   :float32 :float64 :float64 :float64})
+
 (defn- materialize-derived
-  "Build the column for a derived result `raw` (an object-array from window-derive or
-  a reader from derive-column). With `off-heap?` (§2.11(b)), a numeric result is copied
-  into an off-heap native :float64 buffer (NaN sentinel + a missing bitmap for nils),
-  GC-tracked so it frees when the dataset is GC'd — taking a wide `:set` from ~6 GB
-  on-heap to ~0 JVM heap. Non-numeric results, or `off-heap?` false, stay on-heap."
-  [col-kw raw n off-heap?]
-  (if off-heap?
-    (let [rdr (if (dtype/reader? raw) raw (dtype/->reader raw))]
-      (try
-        (let [da (double-array n)
-              missing (RoaringBitmap.)]
-          (dotimes [j n]
-            (let [v (nth rdr j)]
-              (cond (nil? v) (do (.add missing (int j)) (aset da j Double/NaN))
-                    (number? v) (aset da j (double v))
-                    :else (throw (ex-info "non-numeric derived value" {:dt/off-heap :fallback})))))
-          (let [buf (dtype/make-container :native-heap :float64 {:resource-type :gc} n)]
-            (dtype/copy! da buf)
-            (ds/new-column col-kw buf {} missing)))
-        ;; a non-numeric column can't go off-heap as :float64 — keep it on-heap
-        (catch clojure.lang.ExceptionInfo _ (ds/new-column col-kw raw))))
-    (ds/new-column col-kw raw)))
+  "Build the derived column. First lets tech.ml.dataset pack `raw` into a column —
+  deciding dtype + missing-set exactly as the on-heap path does (NaN/nil → missing,
+  integer-valued → :int64, etc.). Then, with `off-heap?` (§2.11(b)), it relocates a
+  numeric column's data into an off-heap native buffer of the same dtype family,
+  carrying the same missing-set (GC-tracked, so it frees when the dataset is GC'd) —
+  taking a wide `:set` from ~6 GB on-heap to ~0 JVM heap. Because it relocates the
+  already-packed column, off-heap output is identical to on-heap by construction.
+  Non-numeric columns and the on-heap default are returned as built."
+  [col-kw raw off-heap?]
+  (let [col (ds/new-column col-kw raw)]
+    (if-let [ndt (and off-heap? (native-dtype-family (dtype/elemwise-datatype col)))]
+      (let [n (ds/row-count col)
+            buf (dtype/make-container :native-heap ndt {:resource-type :gc} n)]
+        (dtype/copy! (dtype/->reader col ndt) buf)
+        (ds/new-column col-kw buf {} (ds/missing col)))
+      col)))
 
 (defn- fast-group-set
   "Fast path for keyword-only :by window-mode :set (map derivations). Computes the
@@ -590,14 +590,13 @@
                         {:dt/error :unknown-column :dt/columns unknown
                          :dt/context :within-order :dt/available (vec (sort available))})))))
   (let [{:keys [perm bounds]} (group-perm dataset by within-order)
-        base (ds/select-rows dataset perm)
-        n (ds/row-count base)]
+        base (ds/select-rows dataset perm)]
     (reduce (fn [d [col-kw dval]]
               (let [ast (deriv-ast dval)
                     raw (if (element-wise-ast? ast)
                           (derive-column base col-kw dval)
                           (window-derive base bounds col-kw dval))]
-                (ds/add-column d (materialize-derived col-kw raw n off-heap?))))
+                (ds/add-column d (materialize-derived col-kw raw off-heap?))))
             base
             (seq derivations))))
 
@@ -1075,12 +1074,14 @@
                    negative keeps the last |n| (tail), 0 yields no rows. |n| beyond
                    the row count returns all rows. Evaluated last, after :order-by —
                    e.g. :order-by [(asc :date)] :take -20 is \"the last 20 by date\".
-  :off-heap      - boolean. For :set + :by (keyword-only :by, the fast window path),
-                   materialise numeric derived columns in off-heap native buffers
-                   (freed on GC) instead of on the JVM heap — for wide per-group
-                   transforms this takes the result from gigabytes of heap to ~0.
+  :off-heap      - boolean, default true. For :set + :by (keyword-only :by, the fast
+                   window path), materialise numeric derived columns in off-heap native
+                   buffers (freed on GC, type-preserving int/float) instead of on the
+                   JVM heap — for wide per-group transforms this takes the result from
+                   gigabytes of heap to ~0. Pass :off-heap false for on-heap output.
                    No effect on other query shapes or non-numeric derived columns."
-  [dataset & {:keys [where set agg by select order-by within-order take off-heap]}]
+  [dataset & {:keys [where set agg by select order-by within-order take off-heap]
+              :or {off-heap true}}]
   (when (and set agg)
     (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
                     {:dt/error :set-agg-conflict})))
