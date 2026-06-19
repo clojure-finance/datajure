@@ -6,7 +6,8 @@
             [tech.v3.datatype.datetime :as dtype-dt]
             [clojure.set :as set]
             [datajure.expr :as expr]
-            [datajure.math :as math]))
+            [datajure.math :as math])
+  (:import [org.roaringbitmap RoaringBitmap]))
 
 (declare apply-order-by validate-select-cols)
 
@@ -548,14 +549,39 @@
               (dotimes [j len] (aset out (+ (long s) j) res)))))))   ; scalar → broadcast
     out))
 
+(defn- materialize-derived
+  "Build the column for a derived result `raw` (an object-array from window-derive or
+  a reader from derive-column). With `off-heap?` (§2.11(b)), a numeric result is copied
+  into an off-heap native :float64 buffer (NaN sentinel + a missing bitmap for nils),
+  GC-tracked so it frees when the dataset is GC'd — taking a wide `:set` from ~6 GB
+  on-heap to ~0 JVM heap. Non-numeric results, or `off-heap?` false, stay on-heap."
+  [col-kw raw n off-heap?]
+  (if off-heap?
+    (let [rdr (if (dtype/reader? raw) raw (dtype/->reader raw))]
+      (try
+        (let [da (double-array n)
+              missing (RoaringBitmap.)]
+          (dotimes [j n]
+            (let [v (nth rdr j)]
+              (cond (nil? v) (do (.add missing (int j)) (aset da j Double/NaN))
+                    (number? v) (aset da j (double v))
+                    :else (throw (ex-info "non-numeric derived value" {:dt/off-heap :fallback})))))
+          (let [buf (dtype/make-container :native-heap :float64 {:resource-type :gc} n)]
+            (dtype/copy! da buf)
+            (ds/new-column col-kw buf {} missing)))
+        ;; a non-numeric column can't go off-heap as :float64 — keep it on-heap
+        (catch clojure.lang.ExceptionInfo _ (ds/new-column col-kw raw))))
+    (ds/new-column col-kw raw)))
+
 (defn- fast-group-set
   "Fast path for keyword-only :by window-mode :set (map derivations). Computes the
   grouped+sorted permutation once, reorders ALL columns in a single `ds/select-rows`
   (no per-group sub-datasets of every column, no `ds/concat` — the §2.10 fix adapted
   to window mode), then computes each derivation against the reordered base: window
   derivations per contiguous group slice, element-wise derivations once over the
-  whole base. Same result (grouped+within-order order) as the general path."
-  [dataset by derivations within-order]
+  whole base. With `off-heap?`, numeric derived columns are materialised off-heap
+  (§2.11(b)). Same result (grouped+within-order order) as the general path."
+  [dataset by derivations within-order off-heap?]
   (when within-order
     (let [available (set (ds/column-names dataset))
           unknown (vec (remove available (map #(if (keyword? %) % (:col %)) within-order)))]
@@ -564,25 +590,25 @@
                         {:dt/error :unknown-column :dt/columns unknown
                          :dt/context :within-order :dt/available (vec (sort available))})))))
   (let [{:keys [perm bounds]} (group-perm dataset by within-order)
-        base (ds/select-rows dataset perm)]
+        base (ds/select-rows dataset perm)
+        n (ds/row-count base)]
     (reduce (fn [d [col-kw dval]]
-              (let [ast (deriv-ast dval)]
-                (ds/add-column
-                 d (ds/new-column col-kw
-                                  (if (element-wise-ast? ast)
-                                    (derive-column base col-kw dval)
-                                    (window-derive base bounds col-kw dval))))))
+              (let [ast (deriv-ast dval)
+                    raw (if (element-wise-ast? ast)
+                          (derive-column base col-kw dval)
+                          (window-derive base bounds col-kw dval))]
+                (ds/add-column d (materialize-derived col-kw raw n off-heap?))))
             base
             (seq derivations))))
 
-(defn- apply-group-set [dataset by derivations within-order]
+(defn- apply-group-set [dataset by derivations within-order off-heap?]
   (if (zero? (ds/row-count dataset))
     dataset
     (if (and (keyword-only-by? by)
              (map? derivations)
              (every? #(deriv-ast (val %)) derivations))
       ;; Fast path: keyword-only :by + map derivations — reorder once, no concat.
-      (fast-group-set dataset by derivations within-order)
+      (fast-group-set dataset by derivations within-order off-heap?)
       ;; General path. Compound case (qtile + exact keys): partition by exact keys
       ;; first so qtile breakpoints are computed per sub-dataset. Otherwise the
       ;; single "partition" is the whole dataset and the path is unchanged.
@@ -1048,8 +1074,13 @@
   :take          - row limit (integer). Positive n keeps the first n rows (head),
                    negative keeps the last |n| (tail), 0 yields no rows. |n| beyond
                    the row count returns all rows. Evaluated last, after :order-by —
-                   e.g. :order-by [(asc :date)] :take -20 is \"the last 20 by date\"."
-  [dataset & {:keys [where set agg by select order-by within-order take]}]
+                   e.g. :order-by [(asc :date)] :take -20 is \"the last 20 by date\".
+  :off-heap      - boolean. For :set + :by (keyword-only :by, the fast window path),
+                   materialise numeric derived columns in off-heap native buffers
+                   (freed on GC) instead of on the JVM heap — for wide per-group
+                   transforms this takes the result from gigabytes of heap to ~0.
+                   No effect on other query shapes or non-numeric derived columns."
+  [dataset & {:keys [where set agg by select order-by within-order take off-heap]}]
   (when (and set agg)
     (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
                     {:dt/error :set-agg-conflict})))
@@ -1085,7 +1116,7 @@
         (info-note :window-no-order "Window mode using current row order. Use :within-order to sort.")))
     (cond-> dataset
       where (apply-where where)
-      (and set by) (apply-group-set by set within-order)
+      (and set by) (apply-group-set by set within-order off-heap)
       (and set (not by) (or within-order set-has-win?)) (apply-window-set set within-order)
       (and set (not by) (not within-order) (not set-has-win?)) (apply-set set)
       (and agg by) (apply-group-agg by agg within-order)

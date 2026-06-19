@@ -2525,6 +2525,27 @@
       (is (= [5.0 7.0 9.0] (vec (r :x))))
       (is (= [5.0 12.0 9.0] (vec (r :c)))))))
 
+(deftest off-heap-set-output
+  ;; §2.11(b): :off-heap true materialises numeric derived cols in off-heap native
+  ;; buffers — identical results + missing, derived cols native-backed, passthrough on-heap.
+  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
+        derivs {:lg #dt/e (win/lag :x 1)   ;; window (has nils)
+                :gm #dt/e (mn :x)          ;; aggregator broadcast
+                :x2 #dt/e (* :x 2)}        ;; element-wise
+        on  (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs)
+        off (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs :off-heap true)]
+    (testing "off-heap result is identical to on-heap (values + order)"
+      (is (= (mapv #(vec (on %)) [:k :t :lg :gm :x2])
+             (mapv #(vec (off %)) [:k :t :lg :gm :x2]))))
+    (testing "nils are preserved via the missing-set"
+      (is (= [nil 10.0 20.0 nil 100.0] (vec (off :lg))))
+      (is (= (vec (ds/missing (on :lg))) (vec (ds/missing (off :lg))))))
+    (testing "derived columns are off-heap native, passthrough stays on-heap"
+      (is (= "tech.v3.datatype.native_buffer.NativeBuffer"
+             (.getName (class (.data (off :x2))))))
+      (is (not= "tech.v3.datatype.native_buffer.NativeBuffer"
+                (.getName (class (.data (off :x)))))))))
+
 (deftest win-min-periods-option
   ;; §2.11/§2.7: non-expanding window via {:min-periods n} (leading n-1 rows -> nil),
   ;; matching R's zoo::rollapplyr; default stays expanding. ddof also accepted in the map.
