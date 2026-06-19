@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-19
+
 ### Added
 
 - **Off-heap (native) result columns for `:set :by` — now the default.** For the keyword-only `:by` window-mode `:set` fast path, numeric derived columns are materialised in off-heap native buffers instead of on the JVM heap. Each derived column is packed normally (so its dtype + missing-set match the on-heap result exactly — output is identical *by construction*, and the native datatype is **type-preserving**: integer window ops like `win/rank` or a lag of an int column stay `:int64`, floats stay `:float64`), then its buffer is relocated off-heap, GC-tracked (freed when the dataset is collected, no manual cleanup) and Arrow-exportable. On a real 2.1M-row × 45k-firm transform (40 moving averages) retained JVM heap dropped from ~888 MB to ~13 MB (~68×) at the same speed; extrapolated to a ~270-column per-firm transform that's ~6 GB → ~90 MB, making datajure `:set :by` memory-competitive with a hand-rolled off-heap scatter. Pass **`:off-heap false`** for on-heap output; non-numeric derived columns stay on-heap regardless.
