@@ -1329,11 +1329,17 @@
           result (core/dt ds :set {:ms #dt/e (win/msum :x 3)})]
       (is (= [10.0 30.0 60.0 90.0 120.0] (vec (:ms result))))))
 
-  (testing "win/mdev: population std dev, expanding window"
+  (testing "win/mdev: sample std dev (ddof=1, default; matches R sd / the sd agg)"
     (core/reset-notes!)
     (let [ds (ds/->dataset {:x [10.0 20.0 30.0 40.0 50.0]})
-          result (core/dt ds :set {:md #dt/e (win/mdev :x 3)})
-          vals (vec (:md result))]
+          vals (vec (:md (core/dt ds :set {:md #dt/e (win/mdev :x 3)})))]
+      (is (nil? (first vals)))                                    ;; sd of 1 value undefined
+      (is (< (Math/abs (- (second vals) (Math/sqrt 50.0))) 1e-9)) ;; [10 20] -> sqrt(50)=7.071
+      (is (< (Math/abs (- (nth vals 2) 10.0)) 1e-9))))            ;; [10 20 30] -> sqrt(200/2)=10
+  (testing "win/mdev with ddof=0: population std dev (q's mdev)"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:x [10.0 20.0 30.0 40.0 50.0]})
+          vals (vec (:md (core/dt ds :set {:md #dt/e (win/mdev :x 3 0)})))]
       (is (= 0.0 (first vals)))
       (is (= 5.0 (second vals)))
       (is (< (Math/abs (- (nth vals 2) 8.165)) 0.001))))
@@ -2475,6 +2481,24 @@
     (testing "growth = asinh(x) - asinh(lag x)"
       (is (< (Math/abs (- (nth gr 2) (- (math/asinh 2.0) (math/asinh 0.0)))) 1e-12))
       (is (< (Math/abs (- (nth gr 3) (- (math/asinh 5.0) (math/asinh 2.0)))) 1e-12)))))
+
+(deftest int-missing-groups-as-nil
+  ;; §2.5 regression: tech stores a missing int as the Integer/MIN sentinel in the
+  ;; backing array (tracked by a missing set). Grouping :by an int column must read
+  ;; missing as nil (one nil group), NOT leak -2147483648 as its own group/value.
+  (let [d (ds/->dataset {:g (ds/new-column :g (int-array [1 -2147483648 1 -2147483648 2])
+                                           {} #{1 3})           ;; rows 1,3 missing
+                         :v [10 20 30 40 50]})
+        r (core/dt d :by [:g] :agg {:n core/N})
+        keys (set (ds/column r :g))]
+    (testing "missing int reads as nil through the reader"
+      (is (= [1 nil 1 nil 2] (vec (ds/column d :g)))))
+    (testing "group keys contain nil, not the -2147483648 sentinel"
+      (is (contains? keys nil))
+      (is (not (contains? keys (int -2147483648))))
+      (is (= 3 (count keys))))                                  ;; {1, nil, 2}
+    (testing "the nil group aggregates the two missing-key rows"
+      (is (= 2 (:n (first (filter #(nil? (:g %)) (ds/mapseq-reader r)))))))))
 
 (deftest win-mdowndev-op
   ;; §2.3: moving downside deviation, MAR=0, method=full, na.rm.

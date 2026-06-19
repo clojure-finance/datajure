@@ -271,17 +271,25 @@
    (rolling-window-vals col width #(reduce + %))))
 
 (defn win-mdev
-  "Moving standard deviation over width rows (expanding at start).
-  Population std dev (ddof=0), matching q's mdev. nil values skipped.
-  3 mdev [10 20 30 40 50] -> [0.0 5.0 8.165 8.165 8.165]"
-  [col width]
-  (dtype/->reader
-   (rolling-window-vals col width
-                        (fn [w]
-                          (let [n (count w)
-                                mu (/ (reduce + w) n)
-                                variance (/ (reduce + (map #(let [d (- % mu)] (* d d)) w)) n)]
-                            (Math/sqrt variance))))))
+  "Moving standard deviation over `width` rows (expanding at start). `ddof` (delta
+  degrees of freedom) sets the divisor `n - ddof`:
+    ddof=1 (default) — sample sd, matching R's `sd` and datajure's `sd` aggregator;
+    ddof=0           — population sd, matching q's `mdev`.
+  nil values skipped. A window with `n <= ddof` finite values yields nil (sample sd
+  of a single value is undefined, like R's `sd`).
+  3 mdev [10 20 30 40 50]   -> [nil 7.071 10.0 10.0 10.0]   (ddof=1, default)
+  3 mdev [10 20 30 40 50] 0 -> [0.0 5.0 8.165 8.165 8.165]  (ddof=0, q's mdev)"
+  ([col width] (win-mdev col width 1))
+  ([col width ddof]
+   (dtype/->reader
+    (rolling-window-vals col width
+                         (fn [w]
+                           (let [n (count w)
+                                 denom (- n (long ddof))]
+                             (when (pos? denom)
+                               (let [mu (/ (reduce + w) n)
+                                     ss (reduce + (map #(let [d (- % mu)] (* d d)) w))]
+                                 (Math/sqrt (/ ss denom))))))))))
 
 (defn win-mdowndev
   "Moving downside deviation over `width` rows (expanding at start), MAR=0:
