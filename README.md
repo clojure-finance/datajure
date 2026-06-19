@@ -320,6 +320,8 @@ Inspired by q's `deltas` and `ratios` — eliminate verbose lag patterns:
 
 The moving ops (`win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`) use an **expanding** window at the start (a value from the first row, q convention). Pass a trailing `{:min-periods n}` options map for a **non-expanding** window — `#dt/e (win/mavg :price 20 {:min-periods 20})` emits nil until a full 20-row window exists (R's `zoo::rollapplyr`). `win/mdev` also reads `:ddof` from the map (`{:ddof 0 :min-periods 20}`); the positional `(win/mdev :ret 20 0)` still works.
 
+For **wide per-group transforms** (many derived columns over millions of rows), add `:off-heap true` to a `:set` + keyword-only `:by` query to materialise the numeric derived columns in off-heap native buffers (freed on GC, Arrow-exportable) instead of on the JVM heap — e.g. a 270-column per-firm transform drops from ~6 GB of heap to ~90 MB. Results are identical; default output is on-heap.
+
 ### Forward-Fill
 
 ```clojure
