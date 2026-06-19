@@ -889,11 +889,13 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 | `datajure.window` | Window function implementations |
 | `datajure.row` | Row-wise function implementations |
 | `datajure.stat` | Statistical transforms: `stat/standardize`, `stat/demean`, `stat/winsorize` |
+| `datajure.math` | Numeric primitives: `quantile-type7` (R type-7 quantiles, shared by `median`/`qnt`/`qtile`/`cut`/`winsorize`/`describe`) |
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
 | `datajure.reshape` | `melt` for wide→long, `cast` for long→wide |
 | `datajure.join` | `join` with `:validate`, `:report`, `:how :asof` (`:direction`, `:tolerance`), and `:how :window` (`:window`, `:agg`) |
 | `datajure.asof` | As-of/window join engine: `asof-search`, `asof-indices`, `asof-match`, `build-result`, `window-indices` |
+| `datajure.index` | Keyed lookup index: `index-by`, `lookup`, `lookup-indices` (`:hash` and reusable `:asof` kinds) |
 | `datajure.nrepl` | nREPL middleware for `*dt*` auto-binding |
 | `datajure.clerk` | Rich Clerk notebook viewers |
 | `datajure.clay` | Clay/Kindly notebook integration |

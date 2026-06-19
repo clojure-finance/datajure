@@ -500,8 +500,8 @@
   in col-kw into one of n equal-count bins based on its percentile rank among
   non-nil values. Inspired by R's `cut` and Stata's `xtile`.
 
-  Breakpoints are computed at the 100/n, 200/n, ..., (n-1)*100/n percentiles
-  (via dfn/percentiles). Each row is then assigned to a bin in [1, n] via
+  Breakpoints are the 1/n, 2/n, ..., (n-1)/n quantiles (R type-7, matching
+  cut-bucket). Each row is then assigned to a bin in [1, n] via
   left-inclusive comparison (values equal to a breakpoint go to the lower
   bin, matching cut-bucket). nil input values produce nil keys (their own
   group).
@@ -568,7 +568,7 @@
   "Equal-count (quantile) binning — assigns each value in a column to a bin
   in 1..n based on its percentile rank among non-nil values.
 
-  Breakpoints are the 100/n, 200/n, ..., (n-1)*100/n percentiles of the
+  Breakpoints are the 1/n, 2/n, ..., (n-1)/n quantiles (R type-7) of the
   non-nil values. Bin assignment is right-open (binarySearch), so every
   value lands in exactly one bin in [1, n]. nil values produce nil.
 
