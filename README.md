@@ -327,6 +327,18 @@ A few window ops take their own trailing options map: `win/lag`/`win/lead` accep
 
 For a `:set` + keyword-only `:by` query, numeric derived columns are materialised in **off-heap native buffers by default** (freed on GC, Arrow-exportable, type-preserving int/float) rather than on the JVM heap — for wide per-group transforms this is the difference between gigabytes of heap and near-zero (a 270-column per-firm transform drops from ~6 GB to ~90 MB). Output is identical to on-heap by construction. Pass `:off-heap false` to keep derived columns on the JVM heap.
 
+For a **multi-pass** per-entity transform (many sequential `:set :by` passes over the same grouping), `prepare-grouping` computes the grouping + within-order permutation once and reuses it, skipping the per-pass grouping/sort:
+
+```clojure
+(let [g (prepare-grouping ds [:gvkey] [(asc :datadate)])]
+  (-> ds
+      (dt :set {:R4.saleq #dt/e (win/mavg :saleq 4)} :grouping g)
+      (dt :set {:G.R4.saleq #dt/e (win/grr :R4.saleq)} :grouping g)   ;; later passes can use earlier-derived cols
+      ...))
+```
+
+It's valid for any dataset with the same rows in the same order (adding columns is fine). On a real 2.1M-row × 45k-firm 10-pass transform this cut the run ~2.6×.
+
 ### Forward-Fill
 
 ```clojure
