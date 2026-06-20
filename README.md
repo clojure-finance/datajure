@@ -321,6 +321,8 @@ Inspired by q's `deltas` and `ratios` — eliminate verbose lag patterns:
 
 The moving ops (`win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`) use an **expanding** window at the start (a value from the first row, q convention). Pass a trailing `{:min-periods n}` options map for a **non-expanding** window — `#dt/e (win/mavg :price 20 {:min-periods 20})` emits nil until a full 20-row window exists (R's `zoo::rollapplyr`). `win/mdev` also reads `:ddof` from the map (`{:ddof 0 :min-periods 20}`); the positional `(win/mdev :ret 20 0)` still works.
 
+A few window ops take their own trailing options map: `win/lag`/`win/lead` accept `{:fill v}` to fill the boundary positions (no history/future) instead of nil — `#dt/e (win/lag :price 1 {:fill 0})` collapses the `(coalesce (win/lag …) 0)` two-step into one. `win/ema` accepts `{:alpha 0.18}` or `{:period 10}` as a self-documenting alternative to its numeric `>= 1` → period / `< 1` → alpha shorthand.
+
 For a `:set` + keyword-only `:by` query, numeric derived columns are materialised in **off-heap native buffers by default** (freed on GC, Arrow-exportable, type-preserving int/float) rather than on the JVM heap — for wide per-group transforms this is the difference between gigabytes of heap and near-zero (a 270-column per-firm transform drops from ~6 GB to ~90 MB). Output is identical to on-heap by construction. Pass `:off-heap false` to keep derived columns on the JVM heap.
 
 ### Forward-Fill

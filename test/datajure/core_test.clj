@@ -933,6 +933,33 @@
     (is (= [nil 10 20 30] (vec (:prev result))))
     (is (= [20 30 40 nil] (vec (:nxt result))))))
 
+(deftest win-lag-lead-fill
+  ;; {:fill v} fills the boundary positions (no history/future) — collapses the
+  ;; common (coalesce (win/lag …) v) two-step into one op.
+  (let [ds (ds/->dataset {:grp ["A" "A" "A" "A"] :val [10.0 20.0 30.0 40.0]})
+        result (core/dt ds :by [:grp] :set {:prev #dt/e (win/lag :val 1 {:fill 0})
+                                            :nxt  #dt/e (win/lead :val 2 {:fill 0})})]
+    (is (= [0.0 10.0 20.0 30.0] (vec (:prev result))))
+    (is (= [30.0 40.0 0.0 0.0] (vec (:nxt result)))))
+  (testing "no :fill (default) keeps boundary nil"
+    (let [ds (ds/->dataset {:grp ["A" "A"] :val [10 20]})]
+      (is (= [nil 10] (vec (:p (core/dt ds :by [:grp] :set {:p #dt/e (win/lag :val 1)}))))))))
+
+(deftest win-ema-options-map
+  ;; {:alpha a} / {:period p} are self-documenting alternatives to the numeric
+  ;; >=1→period / <1→alpha dispatch; results match the numeric forms exactly.
+  (let [xs [10.0 20.0 30.0]
+        ds (ds/->dataset {:grp ["A" "A" "A"] :val xs})
+        alpha-map (vec (:e (core/dt ds :by [:grp] :set {:e #dt/e (win/ema :val {:alpha 0.18})})))
+        alpha-num (vec (:e (core/dt ds :by [:grp] :set {:e #dt/e (win/ema :val 0.18)})))
+        period-map (vec (:e (core/dt ds :by [:grp] :set {:e #dt/e (win/ema :val {:period 2})})))
+        period-num (vec (:e (core/dt ds :by [:grp] :set {:e #dt/e (win/ema :val 2)})))]
+    (is (= alpha-num alpha-map))
+    (is (= period-num period-map))
+    (testing "an options map with neither :alpha nor :period throws"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (vec (:e (core/dt ds :by [:grp] :set {:e #dt/e (win/ema :val {:foo 1})}))))))))
+
 (deftest win-cumulative-fns
   (let [ds (ds/->dataset {:grp ["A" "A" "A"] :val [10 20 30]})
         result (core/dt ds :by [:grp] :set {:csum #dt/e (win/cumsum :val)

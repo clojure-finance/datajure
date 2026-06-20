@@ -52,29 +52,37 @@
     (dtype/->reader (vec (range 1 (inc n))))))
 
 (defn win-lag
-  "Lag by offset positions. Returns nil for positions without enough history.
-  [10 20 30 40], offset=1 -> [nil 10 20 30]"
-  [col offset]
-  (let [n (dtype/ecount col)
-        rdr (dtype/->reader col)
-        off (long offset)]
-    (dtype/make-reader :object n
-                       (if (< idx off)
-                         nil
-                         (nth rdr (- idx off))))))
+  "Lag by offset positions. Boundary positions (no history) are nil, or the `:fill`
+  value from a trailing options map. Source nils that get lagged stay nil.
+  [10 20 30 40], offset=1           -> [nil 10 20 30]
+  [10 20 30 40], offset=1 {:fill 0} -> [0 10 20 30]"
+  ([col offset] (win-lag col offset nil))
+  ([col offset opts]
+   (let [n (dtype/ecount col)
+         rdr (dtype/->reader col)
+         off (long offset)
+         fill (:fill opts)]
+     (dtype/make-reader :object n
+                        (if (< idx off)
+                          fill
+                          (nth rdr (- idx off)))))))
 
 (defn win-lead
-  "Lead by offset positions. Returns nil for positions without enough future.
-  [10 20 30 40], offset=1 -> [20 30 40 nil]"
-  [col offset]
-  (let [n (dtype/ecount col)
-        rdr (dtype/->reader col)
-        off (long offset)]
-    (dtype/make-reader :object n
-                       (let [target (+ idx off)]
-                         (if (>= target n)
-                           nil
-                           (nth rdr target))))))
+  "Lead by offset positions. Boundary positions (no future) are nil, or the `:fill`
+  value from a trailing options map. Source nils that get led stay nil.
+  [10 20 30 40], offset=1           -> [20 30 40 nil]
+  [10 20 30 40], offset=1 {:fill 0} -> [20 30 40 0]"
+  ([col offset] (win-lead col offset nil))
+  ([col offset opts]
+   (let [n (dtype/ecount col)
+         rdr (dtype/->reader col)
+         off (long offset)
+         fill (:fill opts)]
+     (dtype/make-reader :object n
+                        (let [target (+ idx off)]
+                          (if (>= target n)
+                            fill
+                            (nth rdr target)))))))
 
 (defn win-cumsum
   "Cumulative sum. nil values treated as 0.
@@ -362,18 +370,28 @@
     (rolling-window-vals col width #(apply max %) (:min-periods (win-opts opts) 1)))))
 
 (defn win-ema
-  "Exponential moving average. Parameter dispatch:
-  - If period-or-alpha >= 1: treated as period, alpha = 2 / (1 + period)
-  - If period-or-alpha < 1: treated directly as smoothing factor alpha
+  "Exponential moving average. The smoothing parameter accepts three forms:
+  - a number >= 1   → treated as period, alpha = 2 / (1 + period)
+  - a number < 1    → treated directly as smoothing factor alpha
+  - an options map   → `{:alpha a}` sets alpha directly, or `{:period p}` sets it via
+                       the period formula — self-documenting alternatives to the
+                       implicit numeric dispatch.
   Seeded at first non-nil value. nil values carry forward last EMA.
   Leading nils remain nil.
-  ema 2 [10 20 30] -> [10.0 16.67 25.56]"
+  ema 2 [10 20 30]            -> [10.0 16.67 25.56]
+  ema {:alpha 0.18} [10 …]    -> same as ema 0.18 …"
   [col period-or-alpha]
   (let [n (dtype/ecount col)
         rdr (dtype/->reader col)
-        a (double (if (>= (double period-or-alpha) 1.0)
-                    (/ 2.0 (inc (double period-or-alpha)))
-                    period-or-alpha))]
+        a (double (cond
+                    (map? period-or-alpha)
+                    (let [{:keys [alpha period]} period-or-alpha]
+                      (cond (some? alpha) (double alpha)
+                            (some? period) (/ 2.0 (inc (double period)))
+                            :else (throw (ex-info "win/ema options map requires :alpha or :period"
+                                                  {:dt/error :ema-opts :opts period-or-alpha}))))
+                    (>= (double period-or-alpha) 1.0) (/ 2.0 (inc (double period-or-alpha)))
+                    :else (double period-or-alpha)))]
     (dtype/->reader
      (vec (loop [i 0 prev nil acc []]
             (if (= i n)

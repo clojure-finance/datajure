@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`coalesce-finite` (alias `coalescef`) — first-finite coalesce.** Like `coalesce`, but skips `NaN` and `±Inf` as well as `nil`, returning the first **finite** value (`#dt/e (coalesce-finite :a :b 0.0)`). This is the right primitive for fallback chains over computed columns, where an arithmetic step can yield `NaN`/`±Inf` (e.g. `(+ x nil)` → `NaN`) that plain `coalesce` would treat as present — previously expressed verbosely as `(coalesce (nonfin2na :a) (nonfin2na :b) …)`. Non-numeric and non-finite arguments count as absent; if no argument is finite the result is `nil`. A `#dt/e` special form like `coalesce`, so it's also element-wise (works in off-heap `:set :by`).
+- **`win/lag` / `win/lead` `:fill` option.** A trailing options map fills the boundary positions (those without enough history/future) with a given value: `#dt/e (win/lag :price 1 {:fill 0})` → `[0 …]` instead of `[nil …]`. Collapses the common `(coalesce (win/lag …) 0)` two-step into one op. Source nils that get shifted stay nil; default (no map) is unchanged.
+- **`win/ema` accepts an options map.** Alongside the numeric shorthand (`>= 1` → period, `< 1` → smoothing factor `alpha`), `win/ema` now takes `{:alpha 0.18}` or `{:period 10}` — a self-documenting alternative that makes the alpha-vs-period intent explicit at the call site. Same results as the equivalent numeric form.
 
 ## [2.5.0] - 2026-06-19
 
