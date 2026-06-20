@@ -2547,6 +2547,32 @@
     (testing "the nil group aggregates the two missing-key rows"
       (is (= 2 (:n (first (filter #(nil? (:g %)) (ds/mapseq-reader r)))))))))
 
+(deftest prepare-grouping-reuse
+  ;; prepare-grouping computes the grouping/permutation once for reuse across passes;
+  ;; identical results to plain :by/:within-order, valid across passes (same rows+order).
+  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
+        g (core/prepare-grouping d [:k] [(core/asc :t)])
+        derivs {:lg #dt/e (win/lag :x 1) :gm #dt/e (mn :x) :x2 #dt/e (* :x 2)}
+        via-g  (core/dt d :set derivs :grouping g)
+        via-by (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs)]
+    (testing ":grouping gives identical results to :by/:within-order (original order)"
+      (is (= (mapv #(vec (via-by %)) [:k :lg :gm :x2])
+             (mapv #(vec (via-g %)) [:k :lg :gm :x2]))))
+    (testing "reusable across passes, including references to earlier-derived columns"
+      (let [p1 (core/dt d  :set {:lg #dt/e (win/lag :x 1)} :grouping g)
+            p2 (core/dt p1 :set {:lg2 #dt/e (win/lag :lg 1)} :grouping g)]
+        (is (= [nil nil nil nil 10.0] (vec (p2 :lg2))))))
+    (testing "guards: row-count mismatch and :by/:within-order conflict throw"
+      (is (= :grouping-row-mismatch
+             (try (core/dt (ds/head d 3) :set {:y #dt/e (* :x 2)} :grouping g) nil
+                  (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e))))))
+      (is (= :grouping-conflict
+             (try (core/dt d :by [:k] :set {:y #dt/e (* :x 2)} :grouping g) nil
+                  (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
+    (testing "prepare-grouping validates by/within-order columns"
+      (is (thrown? clojure.lang.ExceptionInfo (core/prepare-grouping d [:nope] nil)))
+      (is (thrown? clojure.lang.ExceptionInfo (core/prepare-grouping d [] nil))))))
+
 (deftest fast-group-set-window-mixed
   ;; §2.11: keyword-only :by window-mode :set fast path — output stays in ORIGINAL row
   ;; order (:within-order orders only the per-group computation). window op (per-row) +

@@ -587,16 +587,18 @@
   derivations scatter their per-group results back to original positions via the
   permutation; element-wise derivations are computed directly on the original dataset.
   `:within-order` thus orders only the per-group computation, not the output. With
-  `off-heap?`, numeric derived columns are materialised off-heap (§2.11(b))."
-  [dataset by derivations within-order off-heap?]
-  (when within-order
+  `off-heap?`, numeric derived columns are materialised off-heap (§2.11(b)). A
+  precomputed `grouping` ({:perm :bounds} from `prepare-grouping`) is reused as-is,
+  skipping the per-call grouping + sort (the amortised multi-pass path)."
+  [dataset by derivations within-order off-heap? grouping]
+  (when (and within-order (not grouping))
     (let [available (set (ds/column-names dataset))
           unknown (vec (remove available (map #(if (keyword? %) % (:col %)) within-order)))]
       (when (seq unknown)
         (throw (ex-info (str "Unknown column(s) " unknown " in :within-order expression")
                         {:dt/error :unknown-column :dt/columns unknown
                          :dt/context :within-order :dt/available (vec (sort available))})))))
-  (let [{:keys [perm bounds]} (group-perm dataset by within-order)
+  (let [{:keys [perm bounds]} (or grouping (group-perm dataset by within-order))
         base (ds/select-rows dataset perm)]
     (reduce (fn [d [col-kw dval]]
               (let [ast (deriv-ast dval)
@@ -607,14 +609,14 @@
             dataset
             (seq derivations))))
 
-(defn- apply-group-set [dataset by derivations within-order off-heap?]
+(defn- apply-group-set [dataset by derivations within-order off-heap? grouping]
   (if (zero? (ds/row-count dataset))
     dataset
     (if (and (keyword-only-by? by)
              (map? derivations)
              (every? #(deriv-ast (val %)) derivations))
       ;; Fast path: keyword-only :by + map derivations — reorder once, no concat.
-      (fast-group-set dataset by derivations within-order off-heap?)
+      (fast-group-set dataset by derivations within-order off-heap? grouping)
       ;; General path. Output stays in original input order: tag each row with an
       ;; index, group/sort/compute/concat (grouped order), then sort back by the index
       ;; and drop it. Compound case (qtile + exact keys): partition by exact keys first
@@ -643,6 +645,37 @@
   [dataset derivations within-order]
   (let [sorted (if within-order (apply-order-by dataset within-order :within-order) dataset)]
     (apply-set sorted derivations)))
+
+(defn prepare-grouping
+  "Precompute the grouping + `:within-order` permutation for `dataset` so it can be
+  reused across many `:set` + `:by` passes (e.g. a multi-pass per-entity ETL),
+  amortising the grouping + sort that each pass would otherwise repeat. `by` is a
+  non-empty vector of keyword column names; `within-order` is an optional sort spec
+  (same form as `:within-order`). Pass the result as `:grouping` to `dt`, in place of
+  `:by`/`:within-order`:
+
+      (let [g (prepare-grouping ds [:gvkey] [(asc :datadate)])]
+        (-> ds (dt :set {…} :grouping g) (dt :set {…} :grouping g) …))
+
+  The grouping stays valid for any dataset with the SAME rows in the SAME order —
+  adding columns between passes is fine, since `:set :by` preserves input row order.
+  `dt` checks the row count matches; reusing it on reordered rows is undefined."
+  ([dataset by] (prepare-grouping dataset by nil))
+  ([dataset by within-order]
+   (when-not (and (sequential? by) (seq by) (every? keyword? by))
+     (throw (ex-info "prepare-grouping :by must be a non-empty vector of column keywords."
+                     {:dt/error :invalid-grouping-by :dt/by by})))
+   (let [available (set (ds/column-names dataset))
+         unknown (vec (remove available
+                              (concat by (when within-order
+                                           (map #(if (keyword? %) % (:col %)) within-order)))))]
+     (when (seq unknown)
+       (throw (ex-info (str "Unknown column(s) " unknown " in prepare-grouping")
+                       {:dt/error :unknown-column :dt/columns unknown
+                        :dt/available (vec (sort available))})))
+     (let [{:keys [perm bounds]} (group-perm dataset (vec by) within-order)]
+       {:by (vec by) :within-order within-order :perm perm :bounds bounds
+        :row-count (ds/row-count dataset)}))))
 
 (def ^:private shown-notes (atom #{}))
 
@@ -1091,8 +1124,13 @@
                    buffers (freed on GC, type-preserving int/float) instead of on the
                    JVM heap — for wide per-group transforms this takes the result from
                    gigabytes of heap to ~0. Pass :off-heap false for on-heap output.
-                   No effect on other query shapes or non-numeric derived columns."
-  [dataset & {:keys [where set agg by select order-by within-order take off-heap]
+                   No effect on other query shapes or non-numeric derived columns.
+  :grouping      - a value from `prepare-grouping`, used in place of :by/:within-order
+                   for a :set. Reuses a precomputed grouping + sort permutation across
+                   many passes (a multi-pass per-entity ETL), amortising the per-call
+                   grouping. Must be reused on the same rows in the same order (adding
+                   columns is fine); mutually exclusive with :by/:within-order."
+  [dataset & {:keys [where set agg by select order-by within-order take off-heap grouping]
               :or {off-heap true}}]
   (when (and set agg)
     (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
@@ -1104,8 +1142,21 @@
   (when (and within-order (not set) (not agg))
     (throw (ex-info ":within-order requires :set or :agg."
                     {:dt/error :within-order-invalid})))
-  (let [set-has-win? (and set (derivations-have-win? set))
-        window-mode? (and by set (not agg))]
+  (when grouping
+    (when (or agg (not set))
+      (throw (ex-info ":grouping requires :set (and is not for :agg)." {:dt/error :grouping-requires-set})))
+    (when (or by within-order)
+      (throw (ex-info ":grouping already encodes :by and :within-order — don't pass them alongside it."
+                      {:dt/error :grouping-conflict})))
+    (when (not= (:row-count grouping) (ds/row-count dataset))
+      (throw (ex-info (str ":grouping was prepared for " (:row-count grouping) " rows but the dataset has "
+                           (ds/row-count dataset) " — it must be reused on the same rows in the same order.")
+                      {:dt/error :grouping-row-mismatch
+                       :dt/expected (:row-count grouping) :dt/actual (ds/row-count dataset)}))))
+  (let [eff-by (if grouping (:by grouping) by)
+        eff-wo (if grouping (:within-order grouping) within-order)
+        set-has-win? (and set (derivations-have-win? set))
+        window-mode? (and eff-by set (not agg))]
     (when (and where (expr-node? where))
       (validate-no-win where :where))
     (when (and set (not window-mode?) (not set-has-win?))
@@ -1121,17 +1172,17 @@
       (info-note :agg-no-by "Aggregating over entire dataset. Use :by for group aggregation."))
     (when window-mode?
       (info-note :window-mode "Window mode: computing within groups, keeping all rows in input order.")
-      (when (not within-order)
+      (when (not eff-wo)
         (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
-    (when (and set-has-win? (not by))
+    (when (and set-has-win? (not eff-by))
       (info-note :window-mode-no-by "Window mode (whole dataset): computing over entire dataset, keeping all rows.")
       (when (not within-order)
         (info-note :window-no-order "Window mode using current row order. Use :within-order to sort.")))
     (cond-> dataset
       where (apply-where where)
-      (and set by) (apply-group-set by set within-order off-heap)
-      (and set (not by) (or within-order set-has-win?)) (apply-window-set set within-order)
-      (and set (not by) (not within-order) (not set-has-win?)) (apply-set set)
+      (and set eff-by) (apply-group-set eff-by set eff-wo off-heap grouping)
+      (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order)
+      (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
       (and agg by) (apply-group-agg by agg within-order)
       (and agg (not by)) (apply-agg agg within-order)
       select (apply-select select)
