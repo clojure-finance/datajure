@@ -122,18 +122,21 @@
     (let [result (core/dt penguins :by [:species] :set {:mean-mass #dt/e (mn :mass)})]
       (is (= 5 (ds/row-count result)))
       (is (contains? (set (ds/column-names result)) :mean-mass))))
-  (testing ":within-order sorts rows within each partition before derivation"
+  (testing ":within-order orders the per-group computation; output keeps original row order"
     (let [ds (ds/->dataset {:species ["A" "A" "A" "B" "B"]
                             :mass [3800.0 3500.0 4000.0 5000.0 4600.0]})
           result (core/dt ds
                           :by [:species]
                           :within-order [(core/desc :mass)]
-                          :set {:first-mass #dt/e (mn :mass)})]
+                          :set {:prev #dt/e (win/lag :mass 1)})]
       (is (= 5 (ds/row-count result)))
-      (let [rows (ds/mapseq-reader result)
-            a-rows (filter #(= "A" (:species %)) rows)
-            masses (map :mass a-rows)]
-        (is (= [4000.0 3800.0 3500.0] masses)))))
+      ;; rows stay in ORIGINAL order, not sorted by :mass
+      (is (= [3800.0 3500.0 4000.0 5000.0 4600.0] (vec (result :mass))))
+      ;; lag is computed in DESC :mass order within each group, then scattered back:
+      ;; A desc [4000 3800 3500] → lag [nil 4000 3800] at original rows 2,0,1
+      (is (= [4000.0 3800.0 nil] (take 3 (vec (result :prev)))))
+      ;; B desc [5000 4600] → lag [nil 5000] at original rows 3,4
+      (is (= [nil 5000.0] (vec (drop 3 (vec (result :prev))))))))
   (testing ":without-order produces same result as omitting :within-order"
     (let [ds (ds/->dataset {:species ["A" "A"] :mass [3800.0 3500.0]})
           r1 (core/dt ds :by [:species] :set {:x #dt/e (mn :mass)})
@@ -1000,13 +1003,14 @@
       (is (= [nil 50 -20] (mapv #(when % (long %)) (:chg result)))))))
 
 (deftest win-with-within-order
-  (testing "rank respects :within-order sort direction"
+  (testing "rank respects :within-order computation direction; output stays original order"
     (let [ds (ds/->dataset {:grp ["A" "A" "A"] :val [20 10 30]})
           result (core/dt ds :by [:grp]
                           :within-order [(core/desc :val)]
                           :set {:rank #dt/e (win/rank :val)})]
-      (is (= [1 2 3] (vec (:rank result))))
-      (is (= [30 20 10] (vec (:val result)))))))
+      ;; ranked in desc :val order (30→1, 20→2, 10→3) then scattered to original rows
+      (is (= [2 3 1] (vec (:rank result))))
+      (is (= [20 10 30] (vec (:val result)))))))
 
 (deftest win-whole-dataset-window
   (testing "win/cumsum over whole dataset without :by"
@@ -2544,29 +2548,31 @@
       (is (= 2 (:n (first (filter #(nil? (:g %)) (ds/mapseq-reader r)))))))))
 
 (deftest fast-group-set-window-mixed
-  ;; §2.11: keyword-only :by window-mode :set fast path — grouped+within-order order,
-  ;; window op (per-row) + aggregator (group broadcast) + element-wise (once) together.
+  ;; §2.11: keyword-only :by window-mode :set fast path — output stays in ORIGINAL row
+  ;; order (:within-order orders only the per-group computation). window op (per-row) +
+  ;; aggregator (group broadcast) + element-wise (once) together.
   (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
         r (core/dt d :by [:k] :within-order [(core/asc :t)]
                    :set {:lg #dt/e (win/lag :x 1)      ;; window: per-row, per-group
                          :gm #dt/e (mn :x)             ;; aggregator: group mean broadcast
                          :x2 #dt/e (* :x 2)})]         ;; element-wise: once
-    (testing "rows are grouped + within-order sorted (the existing contract)"
-      (is (= [:a :a :a :b :b] (vec (r :k))))
-      (is (= [1 2 3 1 2] (vec (r :t))))
-      (is (= [10.0 20.0 30.0 100.0 200.0] (vec (r :x)))))
-    (testing "window op (lag) is per-group"
-      (is (= [nil 10.0 20.0 nil 100.0] (vec (r :lg)))))
-    (testing "aggregator broadcasts the group value to every group row"
-      (is (= [20.0 20.0 20.0 150.0 150.0] (vec (r :gm)))))   ;; mean(:a)=20, mean(:b)=150
+    (testing "rows stay in original input order (passthrough untouched)"
+      (is (= [:a :b :a :b :a] (vec (r :k))))
+      (is (= [1 1 2 2 3] (vec (r :t))))
+      (is (= [10.0 100.0 20.0 200.0 30.0] (vec (r :x)))))
+    (testing "window op (lag) computed in :t order per group, scattered to original rows"
+      ;; group :a rows 0,2,4 (t 1,2,3) lag → nil,10,20 ; group :b rows 1,3 (t 1,2) → nil,100
+      (is (= [nil nil 10.0 100.0 20.0] (vec (r :lg)))))
+    (testing "aggregator broadcasts the group value to every group row (original order)"
+      (is (= [20.0 150.0 20.0 150.0 20.0] (vec (r :gm)))))   ;; mean(:a)=20, mean(:b)=150
     (testing "element-wise derivation is correct row-by-row"
-      (is (= [20.0 40.0 60.0 200.0 400.0] (vec (r :x2))))))
-  (testing "no :within-order → data order within each group"
+      (is (= [20.0 200.0 40.0 400.0 60.0] (vec (r :x2))))))
+  (testing "no :within-order → original order, computation in input order within group"
     (let [d (ds/->dataset {:k [:a :b :a] :x [5.0 9.0 7.0]})
           r (core/dt d :by [:k] :set {:c #dt/e (win/cumsum :x)})]
-      (is (= [:a :a :b] (vec (r :k))))
-      (is (= [5.0 7.0 9.0] (vec (r :x))))
-      (is (= [5.0 12.0 9.0] (vec (r :c)))))))
+      (is (= [:a :b :a] (vec (r :k))))
+      (is (= [5.0 9.0 7.0] (vec (r :x))))
+      (is (= [5.0 9.0 12.0] (vec (r :c)))))))  ;; group :a cumsum 5,12 at rows 0,2; :b 9 at row 1
 
 (deftest off-heap-set-output
   ;; §2.11(b): numeric derived cols of a :set + keyword :by are materialised in off-heap

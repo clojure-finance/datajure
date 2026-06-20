@@ -520,23 +520,28 @@
 (defn- window-derive
   "Compute a per-group derivation (window op, or a group aggregator broadcast to the
   group's rows) over each contiguous group slice of the already-reordered `base`, and
-  assemble a full-length column.
+  assemble a full-length column **in original input order** — each group's results are
+  scattered back to their original row positions via `perm` (perm[i] = the input row at
+  base position i). So `:within-order` governs only the per-group computation order, not
+  the output order; the output keeps input row order.
 
   Pure single-column window ops take a primitive reader-slicing path: the source
   column is pulled once and each group is a zero-copy `dtype/sub-buffer` slice handed
   straight to the window fn — no per-group sub-datasets. Everything else (composite
   #dt/e, aggregator broadcast) falls back to a narrow per-group `ds/select-rows` view
   + `derive-column`; a scalar result (an aggregator) is broadcast across the group."
-  [base bounds col-kw dval]
+  [base perm bounds col-kw dval]
   (let [n (ds/row-count base)
-        out (object-array n)]
+        out (object-array n)
+        ^ints p perm]
     (if-let [{:keys [win-fn col args]} (single-col-win-spec dval)]
       (let [src (dtype/->reader (ds/column base col))]
         (doseq [[s e] bounds]
           (let [len (- (long e) (long s))
                 slice (dtype/sub-buffer src s len)
                 res (dtype/->reader (apply win-fn slice args))]
-            (dotimes [j len] (aset out (+ (long s) j) (nth res j))))))
+            ;; scatter each result to its ORIGINAL row position (perm[s+j])
+            (dotimes [j len] (aset out (aget p (+ (long s) j)) (nth res j))))))
       (let [refs (some-> (deriv-ast dval) expr/col-refs seq vec)
             wbase (if refs (ds/select-columns base refs) base)]
         (doseq [[s e] bounds]
@@ -545,8 +550,8 @@
                 res (derive-column sub col-kw dval)]
             (if (dtype/reader? res)
               (let [rdr (dtype/->reader res)]
-                (dotimes [j len] (aset out (+ (long s) j) (nth rdr j))))
-              (dotimes [j len] (aset out (+ (long s) j) res)))))))   ; scalar → broadcast
+                (dotimes [j len] (aset out (aget p (+ (long s) j)) (nth rdr j))))
+              (dotimes [j len] (aset out (aget p (+ (long s) j)) res)))))))   ; scalar → broadcast
     out))
 
 (def ^:private native-dtype-family
@@ -575,12 +580,14 @@
 
 (defn- fast-group-set
   "Fast path for keyword-only :by window-mode :set (map derivations). Computes the
-  grouped+sorted permutation once, reorders ALL columns in a single `ds/select-rows`
-  (no per-group sub-datasets of every column, no `ds/concat` — the §2.10 fix adapted
-  to window mode), then computes each derivation against the reordered base: window
-  derivations per contiguous group slice, element-wise derivations once over the
-  whole base. With `off-heap?`, numeric derived columns are materialised off-heap
-  (§2.11(b)). Same result (grouped+within-order order) as the general path."
+  grouped + `:within-order`-sorted permutation once and a `base` view of the source
+  columns in that order (for contiguous per-group window computation, no per-group
+  sub-datasets of every column, no `ds/concat`). Output is in **original input row
+  order**: passthrough columns are the original dataset untouched; window/aggregator
+  derivations scatter their per-group results back to original positions via the
+  permutation; element-wise derivations are computed directly on the original dataset.
+  `:within-order` thus orders only the per-group computation, not the output. With
+  `off-heap?`, numeric derived columns are materialised off-heap (§2.11(b))."
   [dataset by derivations within-order off-heap?]
   (when within-order
     (let [available (set (ds/column-names dataset))
@@ -594,10 +601,10 @@
     (reduce (fn [d [col-kw dval]]
               (let [ast (deriv-ast dval)
                     raw (if (element-wise-ast? ast)
-                          (derive-column base col-kw dval)
-                          (window-derive base bounds col-kw dval))]
+                          (derive-column dataset col-kw dval)            ; original order, direct
+                          (window-derive base perm bounds col-kw dval))] ; scattered to original
                 (ds/add-column d (materialize-derived col-kw raw off-heap?))))
-            base
+            dataset
             (seq derivations))))
 
 (defn- apply-group-set [dataset by derivations within-order off-heap?]
@@ -608,22 +615,27 @@
              (every? #(deriv-ast (val %)) derivations))
       ;; Fast path: keyword-only :by + map derivations — reorder once, no concat.
       (fast-group-set dataset by derivations within-order off-heap?)
-      ;; General path. Compound case (qtile + exact keys): partition by exact keys
-      ;; first so qtile breakpoints are computed per sub-dataset. Otherwise the
-      ;; single "partition" is the whole dataset and the path is unchanged.
-      (let [partitions (if (needs-per-partition-resolution? by)
+      ;; General path. Output stays in original input order: tag each row with an
+      ;; index, group/sort/compute/concat (grouped order), then sort back by the index
+      ;; and drop it. Compound case (qtile + exact keys): partition by exact keys first
+      ;; so qtile breakpoints are computed per sub-dataset.
+      (let [n (ds/row-count dataset)
+            indexed (ds/add-column dataset (ds/new-column ::orig-idx (int-array (range n))))
+            partitions (if (needs-per-partition-resolution? by)
                          (let [exact-keys (filterv keyword? by)]
-                           (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
-                         [dataset])]
-        (->> partitions
-             (mapcat (fn [partition-ds]
-                       (let [group-fn (by->group-fn partition-ds by)
-                             groups (ds/group-by partition-ds group-fn)]
-                         (map (fn [[_group-key sub-ds]]
-                                (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
-                                  (apply-set sorted derivations)))
-                              groups))))
-             (apply ds/concat))))))
+                           (vals (ds/group-by indexed (fn [row] (select-keys row exact-keys)))))
+                         [indexed])]
+        (-> (->> partitions
+                 (mapcat (fn [partition-ds]
+                           (let [group-fn (by->group-fn partition-ds by)
+                                 groups (ds/group-by partition-ds group-fn)]
+                             (map (fn [[_group-key sub-ds]]
+                                    (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
+                                      (apply-set sorted derivations)))
+                                  groups))))
+                 (apply ds/concat))
+            (ds/sort-by-column ::orig-idx)
+            (dissoc ::orig-idx))))))
 
 (defn- apply-window-set
   "Window mode without :by — entire dataset is one partition.
@@ -1108,9 +1120,9 @@
     (when (and agg (not by))
       (info-note :agg-no-by "Aggregating over entire dataset. Use :by for group aggregation."))
     (when window-mode?
-      (info-note :window-mode "Window mode: computing within groups, keeping all rows.")
+      (info-note :window-mode "Window mode: computing within groups, keeping all rows in input order.")
       (when (not within-order)
-        (info-note :window-no-order "Window mode using current row order. Use :within-order to sort within groups.")))
+        (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
     (when (and set-has-win? (not by))
       (info-note :window-mode-no-by "Window mode (whole dataset): computing over entire dataset, keeping all rows.")
       (when (not within-order)

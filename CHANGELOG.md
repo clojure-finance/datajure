@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `:set` + `:by` window mode now preserves input row order.** Previously a window-mode `:set` with `:by` returned rows reordered into grouped + `:within-order`-sorted blocks (an artifact of the per-group split + concat). Now the output keeps the original input row order — passthrough columns are untouched and each derivation's per-group results are scattered back to their original positions. `:within-order` consequently governs only the **per-group computation order** (so `win/lag`/`win/cumsum`/etc. walk in the right order within a group), not the output order; use `:order-by` to sort output. Both the fast and general `:by` paths agree. (Window-mode `:set` *without* `:by` is unchanged — it still sorts by `:within-order`.)
+
 ### Added
 
 - **`coalesce-finite` (alias `coalescef`) — first-finite coalesce.** Like `coalesce`, but skips `NaN` and `±Inf` as well as `nil`, returning the first **finite** value (`#dt/e (coalesce-finite :a :b 0.0)`). This is the right primitive for fallback chains over computed columns, where an arithmetic step can yield `NaN`/`±Inf` (e.g. `(+ x nil)` → `NaN`) that plain `coalesce` would treat as present — previously expressed verbosely as `(coalesce (nonfin2na :a) (nonfin2na :b) …)`. Non-numeric and non-finite arguments count as absent; if no argument is finite the result is `nil`. A `#dt/e` special form like `coalesce`, so it's also element-wise (works in off-heap `:set :by`).

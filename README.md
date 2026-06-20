@@ -111,6 +111,8 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
         :prev   #dt/e (win/lag :price 1)})
 ```
 
+A window-mode `:set` **with `:by` preserves the input row order** — `:within-order` sets the per-group *computation* order (so `win/lag`/`win/cumsum`/… walk by, say, date within each group), and the derived values are scattered back to their original rows. Use `:order-by` if you want sorted output. (Without `:by`, the whole-dataset window still sorts by `:within-order`.)
+
 `:within-order` also combines with `:agg`, sorting rows within each group before the aggregation runs. This is the one-call OHLC pattern and the reason `first-val` / `last-val` are first-class helpers:
 
 ```clojure
