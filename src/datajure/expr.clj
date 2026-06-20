@@ -347,7 +347,7 @@
                   (keys win-sym->op)
                   (keys row-sym->op)
                   (keys stat-sym->op)
-                  '[if cond coalesce let cut xbar win/scan win/each-prior]))))
+                  '[if cond coalesce coalesce-finite let cut xbar win/scan win/each-prior]))))
 
 (defn- suggest-op [op]
   (let [op-str (str op)
@@ -481,8 +481,10 @@
                       :if/else else-node})
                    (lit-node nil)
                    (reverse pairs)))
-         (= op 'coalesce)
-         {:node/type :coalesce :coalesce/args (mapv #(parse-form % env) args)}
+         (or (= op 'coalesce) (= op 'coalesce-finite) (= op 'coalescef))
+         {:node/type :coalesce
+          :coalesce/args (mapv #(parse-form % env) args)
+          :coalesce/finite? (not= op 'coalesce)}
          (= op 'let)
          (let [[binding-vec body] args
                binding-pairs (partition 2 binding-vec)
@@ -779,13 +781,19 @@
                                     (let [t (if (dtype/reader? then) (nth then idx) then)
                                           e (if (dtype/reader? else) (nth else idx) else)]
                                       (if (nth pred idx) t e)))))))
-     :coalesce (let [arg-fns (mapv #(compile-expr % env) (:coalesce/args node))]
+     :coalesce (let [arg-fns (mapv #(compile-expr % env) (:coalesce/args node))
+                     ;; coalesce → first non-nil; coalesce-finite → first finite
+                     ;; (skips nil AND NaN/±Inf; number? guards finite-double? which
+                     ;; would throw on a non-numeric fallback)
+                     present? (if (:coalesce/finite? node)
+                                (fn [v] (and (number? v) (math/finite-double? v)))
+                                some?)]
                  (fn [ds]
                    (let [n (ds/row-count ds)
                          cols (mapv #(% ds) arg-fns)]
                      (dtype/make-reader :object n
                                         (let [vals (map #(if (dtype/reader? %) (nth % idx) %) cols)]
-                                          (first (filter some? vals)))))))
+                                          (first (filter present? vals)))))))
      :let (let [final-env
                 (reduce (fn [acc-env b]
                           (let [kw (:binding/name b)

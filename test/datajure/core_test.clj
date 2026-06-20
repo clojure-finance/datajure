@@ -516,6 +516,22 @@
           result (core/dt ds :where #dt/e (> (coalesce :a :b 0.0) 1.5))]
       (is (= 2 (ds/row-count result))))))
 
+(deftest coalesce-finite-special-form
+  ;; coalesce-finite: first FINITE value (skips nil AND NaN/±Inf), unlike coalesce
+  ;; which only skips nil. Absorbs the (coalesce (nonfin2na a) (nonfin2na b) …) idiom.
+  (testing "skips nil, NaN, and ±Inf to the first finite value"
+    (let [ds (ds/->dataset {:a [1.0 ##NaN nil ##Inf] :b [10.0 20.0 30.0 40.0]})]
+      (is (= [1.0 20.0 30.0 ##Inf] (vec ((core/dt ds :set {:c #dt/e (coalesce :a :b)}) :c))))
+      (is (= [1.0 20.0 30.0 40.0]  (vec ((core/dt ds :set {:c #dt/e (coalesce-finite :a :b)}) :c))))))
+  (testing "coalescef is a synonym"
+    (let [ds (ds/->dataset {:a [##NaN 5.0] :b [7.0 9.0]})]
+      (is (= [7.0 5.0] (vec ((core/dt ds :set {:c #dt/e (coalescef :a :b)}) :c))))))
+  (testing "all-non-finite → nil; non-numeric fallback is treated as absent (no throw)"
+    (is (= [nil] (vec ((core/dt (ds/->dataset {:a [##NaN] :b [##Inf]})
+                                :set {:c #dt/e (coalesce-finite :a :b)}) :c))))
+    (is (= [nil nil] (vec ((core/dt (ds/->dataset {:a [##NaN nil]})
+                                    :set {:c #dt/e (coalesce-finite :a "x")}) :c))))))
+
 (deftest count-distinct-agg
   (testing "count-distinct — whole-table"
     (let [ds (ds/->dataset {:species ["Adelie" "Adelie" "Gentoo" "Chinstrap" "Gentoo"]})

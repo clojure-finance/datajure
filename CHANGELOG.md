@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`coalesce-finite` (alias `coalescef`) — first-finite coalesce.** Like `coalesce`, but skips `NaN` and `±Inf` as well as `nil`, returning the first **finite** value (`#dt/e (coalesce-finite :a :b 0.0)`). This is the right primitive for fallback chains over computed columns, where an arithmetic step can yield `NaN`/`±Inf` (e.g. `(+ x nil)` → `NaN`) that plain `coalesce` would treat as present — previously expressed verbosely as `(coalesce (nonfin2na :a) (nonfin2na :b) …)`. Non-numeric and non-finite arguments count as absent; if no argument is finite the result is `nil`. A `#dt/e` special form like `coalesce`, so it's also element-wise (works in off-heap `:set :by`).
+
 ## [2.5.0] - 2026-06-19
 
 ### Added

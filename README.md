@@ -170,7 +170,8 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | Column-level nils (nil values within a column)        | depends on the `dfn` op  |
 | Aggregation helpers (`mn`/`sm`/`md`/`sd`/`nrow`/...)  | skip nil; `nil` if all missing (never `0`/`-Inf`/`NaN`) |
 | `win/fills :col`                                      | forward-fill nils        |
-| `coalesce :col default`                               | replace nils with fallback |
+| `coalesce :col default`                               | replace nils with fallback (first non-nil) |
+| `coalesce-finite :col default` (alias `coalescef`)    | first **finite** value — also skips `NaN`/`±Inf` |
 | `div0 num den`                                        | `nil` if denominator is `nil` or zero |
 | `win/ratio :col`                                      | `nil` if previous value is `nil` or zero |
 | Plain Clojure functions                               | **not** automatic; wrap with `pass-nil` |
