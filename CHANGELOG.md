@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Faster moving-window ops (`win/mavg`/`msum`/`mdev`/`mdowndev`/`mmin`/`mmax`).** The rolling engine now realises the column once into a primitive `double[]` + a present-mask and computes each trailing window with primitive arithmetic — no per-window vector allocation or boxing (the previous hot path boxed every value in every window). Results are identical (same nil/`NaN`/`±Inf` and `:min-periods`/`:ddof` semantics). On a real 2.1M-row × 45k-firm transform (40 moving averages) the window computation dropped ~3× (21 s → 7 s) and the full `:set :by` pass ~2.1× (27 s → 13 s).
 - **BREAKING: `:set` + `:by` window mode now preserves input row order.** Previously a window-mode `:set` with `:by` returned rows reordered into grouped + `:within-order`-sorted blocks (an artifact of the per-group split + concat). Now the output keeps the original input row order — passthrough columns are untouched and each derivation's per-group results are scattered back to their original positions. `:within-order` consequently governs only the **per-group computation order** (so `win/lag`/`win/cumsum`/etc. walk in the right order within a group), not the output order; use `:order-by` to sort output. Both the fast and general `:by` paths agree. (Window-mode `:set` *without* `:by` is unchanged — it still sorts by `:within-order`.)
 
 ### Added

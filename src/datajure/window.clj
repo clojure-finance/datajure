@@ -255,28 +255,100 @@
         (number? opt) {:ddof opt}
         :else {}))
 
-(defn- rolling-window-vals
-  "Returns a vec of per-row window values. Each element is the result of applying f
-  to the non-nil values in the window [i-width+1 .. i]. Returns nil when the window
-  spans fewer than `min-periods` rows (default 1) or contains no non-nil values."
-  ([col width f] (rolling-window-vals col width f 1))
-  ([col width f min-periods]
-   (let [n (dtype/ecount col)
-         rdr (dtype/->reader col)
-         mp (long min-periods)]
-     (loop [i 0 result (transient [])]
-       (if (= i n)
-         (persistent! result)
-         (let [start (max 0 (- i (dec (long width))))
-               span (- (inc i) start)
-               window (loop [j start acc (transient [])]
-                        (if (> j i)
-                          (persistent! acc)
-                          (let [v (nth rdr j)]
-                            (recur (inc j)
-                                   (if (some? v) (conj! acc (double v)) acc)))))]
-           (recur (inc i)
-                  (conj! result (when (and (>= span mp) (seq window)) (f window))))))))))
+(defn- rolling-prim
+  "Primitive trailing-window engine for the win/m* ops. Realises the column once into
+  a `double[]` + a `present` mask (one O(n) pass, the only boxing), then for each row
+  applies `reducer` to the window [max(0,i-width+1) .. i] with no per-window allocation
+  or boxing. Emits the reducer's result (a Double, or nil) when the window spans
+  `>= min-periods` rows; otherwise nil. `reducer` is
+  (fn [^doubles darr ^booleans present start i] -> Double|nil), reading only present
+  slots. Present-but-non-finite values are kept (so they poison sums, as before);
+  nil/missing slots are skipped."
+  [col width min-periods reducer]
+  (let [rdr (dtype/->reader col)
+        n (long (dtype/ecount col))
+        present (boolean-array n)
+        darr (double-array n)
+        out (object-array n)
+        w (long width)
+        mp (long min-periods)]
+    (dotimes [j n]
+      (let [v (nth rdr j)]
+        (when (some? v) (aset present j true) (aset darr j (double v)))))
+    (dotimes [i n]
+      (let [start (max 0 (- (inc i) w))]
+        (when (>= (- (inc i) start) mp)
+          (aset out i (reducer darr present start i)))))
+    (dtype/->reader out)))
+
+(defn- r-msum [darr present start i]
+  (let [^doubles darr darr ^booleans present present e (long i)]
+    (loop [j (long start) sum 0.0 cnt 0]
+      (if (> j e)
+        (when (pos? cnt) sum)
+        (if (aget present j)
+          (recur (inc j) (+ sum (aget darr j)) (inc cnt))
+          (recur (inc j) sum cnt))))))
+
+(defn- r-mavg [darr present start i]
+  (let [^doubles darr darr ^booleans present present e (long i)]
+    (loop [j (long start) sum 0.0 cnt 0]
+      (if (> j e)
+        (when (pos? cnt) (/ sum (double cnt)))
+        (if (aget present j)
+          (recur (inc j) (+ sum (aget darr j)) (inc cnt))
+          (recur (inc j) sum cnt))))))
+
+(defn- r-mmin [darr present start i]
+  (let [^doubles darr darr ^booleans present present e (long i)]
+    (loop [j (long start) m 0.0 seen false]
+      (if (> j e)
+        (when seen m)
+        (if (aget present j)
+          (let [v (aget darr j)] (recur (inc j) (if seen (min m v) v) true))
+          (recur (inc j) m seen))))))
+
+(defn- r-mmax [darr present start i]
+  (let [^doubles darr darr ^booleans present present e (long i)]
+    (loop [j (long start) m 0.0 seen false]
+      (if (> j e)
+        (when seen m)
+        (if (aget present j)
+          (let [v (aget darr j)] (recur (inc j) (if seen (max m v) v) true))
+          (recur (inc j) m seen))))))
+
+(defn- r-mdev
+  "Returns a reducer for sample/population sd with the given ddof (divisor n-ddof)."
+  [ddof]
+  (let [dd (long ddof)]
+    (fn [darr present start i]
+      (let [^doubles darr darr ^booleans present present s (long start) e (long i)]
+        (loop [j s sum 0.0 cnt 0]
+          (if (> j e)
+            (let [denom (- cnt dd)]
+              (when (pos? denom)
+                (let [mu (/ sum (double cnt))]
+                  (loop [k s ss 0.0]
+                    (if (> k e)
+                      (Math/sqrt (/ ss (double denom)))
+                      (if (aget present k)
+                        (let [d (- (aget darr k) mu)] (recur (inc k) (+ ss (* d d))))
+                        (recur (inc k) ss)))))))
+            (if (aget present j)
+              (recur (inc j) (+ sum (aget darr j)) (inc cnt))
+              (recur (inc j) sum cnt))))))))
+
+(defn- r-mdowndev [darr present start i]
+  (let [^doubles darr darr ^booleans present present e (long i)]
+    (loop [j (long start) ss 0.0 m 0]
+      (if (> j e)
+        (when (pos? m) (Math/sqrt (/ ss (double m))))
+        (if (aget present j)
+          (let [v (aget darr j)]
+            (if (and (not (Double/isNaN v)) (not (Double/isInfinite v)))   ; finite only
+              (recur (inc j) (+ ss (if (neg? v) (* v v) 0.0)) (inc m))
+              (recur (inc j) ss m)))
+          (recur (inc j) ss m))))))
 
 (defn win-mavg
   "Moving average over width rows (expanding at start). nil values skipped.
@@ -285,9 +357,7 @@
   3 mavg [10 20 30 40 50] -> [10.0 15.0 20.0 30.0 40.0]"
   ([col width] (win-mavg col width nil))
   ([col width opts]
-   (dtype/->reader
-    (rolling-window-vals col width #(/ (reduce + %) (count %))
-                         (:min-periods (win-opts opts) 1)))))
+   (rolling-prim col width (:min-periods (win-opts opts) 1) r-mavg)))
 
 (defn win-msum
   "Moving sum over width rows (expanding at start). nil values skipped. Optional
@@ -295,8 +365,7 @@
   3 msum [10 20 30 40 50] -> [10.0 30.0 60.0 90.0 120.0]"
   ([col width] (win-msum col width nil))
   ([col width opts]
-   (dtype/->reader
-    (rolling-window-vals col width #(reduce + %) (:min-periods (win-opts opts) 1)))))
+   (rolling-prim col width (:min-periods (win-opts opts) 1) r-msum)))
 
 (defn win-mdev
   "Moving standard deviation over `width` rows (expanding at start). `ddof` (delta
@@ -312,18 +381,8 @@
   3 mdev [10 20 30 40 50] 0 -> [0.0 5.0 8.165 8.165 8.165]  (ddof=0, q's mdev)"
   ([col width] (win-mdev col width nil))
   ([col width opt]
-   (let [o (win-opts opt)
-         ddof (long (:ddof o 1))]
-     (dtype/->reader
-      (rolling-window-vals col width
-                           (fn [w]
-                             (let [n (count w)
-                                   denom (- n ddof)]
-                               (when (pos? denom)
-                                 (let [mu (/ (reduce + w) n)
-                                       ss (reduce + (map #(let [d (- % mu)] (* d d)) w))]
-                                   (Math/sqrt (/ ss denom))))))
-                           (:min-periods o 1))))))
+   (let [o (win-opts opt)]
+     (rolling-prim col width (:min-periods o 1) (r-mdev (:ddof o 1))))))
 
 (defn win-mdowndev
   "Moving downside deviation over `width` rows (expanding at start), MAR=0:
@@ -338,18 +397,7 @@
   3 mdowndev [1.0 2.0 -2.0] -> [0.0 0.0 ~1.1547]"
   ([col width] (win-mdowndev col width nil))
   ([col width opts]
-   (dtype/->reader
-    (rolling-window-vals col width
-                         (fn [w]
-                           (let [xs (filter math/finite-double? w)
-                                 m (count xs)]
-                             (when (pos? m)
-                               (let [ss (reduce (fn [^double acc x]
-                                                  (let [d (double x)]
-                                                    (+ acc (if (neg? d) (* d d) 0.0))))
-                                                0.0 xs)]
-                                 (Math/sqrt (/ ss (double m)))))))
-                         (:min-periods (win-opts opts) 1)))))
+   (rolling-prim col width (:min-periods (win-opts opts) 1) r-mdowndev)))
 
 (defn win-mmin
   "Moving minimum over width rows (expanding at start). nil values skipped. Optional
@@ -357,8 +405,7 @@
   3 mmin [30 10 50 20 40] -> [30.0 10.0 10.0 10.0 20.0]"
   ([col width] (win-mmin col width nil))
   ([col width opts]
-   (dtype/->reader
-    (rolling-window-vals col width #(apply min %) (:min-periods (win-opts opts) 1)))))
+   (rolling-prim col width (:min-periods (win-opts opts) 1) r-mmin)))
 
 (defn win-mmax
   "Moving maximum over width rows (expanding at start). nil values skipped. Optional
@@ -366,8 +413,7 @@
   3 mmax [30 10 50 20 40] -> [30.0 30.0 50.0 50.0 50.0]"
   ([col width] (win-mmax col width nil))
   ([col width opts]
-   (dtype/->reader
-    (rolling-window-vals col width #(apply max %) (:min-periods (win-opts opts) 1)))))
+   (rolling-prim col width (:min-periods (win-opts opts) 1) r-mmax)))
 
 (defn win-ema
   "Exponential moving average. The smoothing parameter accepts three forms:
