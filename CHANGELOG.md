@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-06-20
+
 ### Changed
 
 - **Faster moving-window ops (`win/mavg`/`msum`/`mdev`/`mdowndev`/`mmin`/`mmax`).** The rolling engine now realises the column once into a primitive `double[]` + a present-mask and computes each trailing window with primitive arithmetic — no per-window vector allocation or boxing (the previous hot path boxed every value in every window). Results are identical (same nil/`NaN`/`±Inf` and `:min-periods`/`:ddof` semantics). On a real 2.1M-row × 45k-firm transform (40 moving averages) the window computation dropped ~3× (21 s → 7 s) and the full `:set :by` pass ~2.1× (27 s → 13 s).
