@@ -44,14 +44,14 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 
 ## Why Datajure
 
-Datajure takes inspiration from whichever library or language got a given idea right — R's `data.table` (terse query form, single-expression semantics), APL/q/kdb+ (first-class primitives for time-series operations you use every day), Polars (expressions as values, composable vocabulary), Julia's `DataFramesMeta.jl` (one function with keyword arguments, not twenty-eight verbs). The goal is not to be any of them. It is to combine the parts that were genuinely revelations.
+Datajure takes inspiration from whichever library or language got a given idea right — R's `data.table` (terse query form, single-expression semantics), APL/q/kdb+ (first-class primitives for time-series operations you use every day), Polars (expressions as values, composable vocabulary), Julia's `DataFramesMeta.jl` (one function with keyword arguments). The goal is not to be any of them. It is to combine the parts that were genuinely revelations.
 
 Concretely, if you've used:
 
-- **R's `data.table`** — you'll find `DT[i, j, by]` maps directly onto `(dt ds :where i :set-or-agg j :by by)`. Nil handling is cleaner than data.table's `NA`. There is no in-place mutation (Datajure is immutable) and no secondary indexes (`setkey`); tech.v3.dataset's columnar layout is fast enough without them.
-- **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form rather than a pipeline of a dozen verbs.
-- **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), with less verbosity and without the function-per-verb proliferation.
-- **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`, but because Clojure has a real reader tag mechanism (rather than macros pretending to parse expressions), it integrates more cleanly with the rest of the language.
+- **R's `data.table`** — you'll find `DT[i, j, by]` maps directly onto `(dt ds :where i :set-or-agg j :by by)`. Missing values are represented by `nil`, which propagates through comparisons and arithmetic in one consistent way. There is no in-place mutation (Datajure is immutable) and no secondary indexes (`setkey`) — it relies on tech.v3.dataset's columnar layout instead.
+- **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form.
+- **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), expressed through a single query function rather than one function per verb.
+- **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`; because Clojure has a reader tag mechanism, `#dt/e` is read as data and integrates directly with the rest of the language.
 - **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `mdowndev`, `ema`, `fills`, `scan`, `each-prior`, `grr`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` and window joins (`:how :window`) are built in.
 
 Datajure's unique wedge is that `#dt/e` expressions are first-class AST values — you can store them in vars and compose them across queries. Build a shared vocabulary once, reuse it everywhere:
@@ -66,7 +66,7 @@ Datajure's unique wedge is that `#dt/e` expressions are first-class AST values �
     :set {:ret ret :log-ret log-ret :vol-20d vol-20d :wealth wealth})
 ```
 
-No equivalent exists in tablecloth, dplyr, pandas, or data.table.
+Treating query fragments as first-class values you can name in a var and recompose across queries is a distinctive feature of Datajure's design.
 
 ## Installation
 
@@ -757,7 +757,7 @@ Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a co
 
 ## Concise Namespace
 
-Short aliases for power users (q / data.table refugees in particular):
+Short aliases for power users (q / data.table users in particular):
 
 ```clojure
 (require '[datajure.concise :refer [mn sm md sd ct nuniq fst lst wa ws mx mi N between]])
@@ -928,7 +928,7 @@ Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compil
 3. **Keyword lifting requires `#dt/e`** — no implicit magic in plain Clojure forms.
 4. **Layered nil story** — nil literals are safe in `#dt/e`, aggregation helpers skip nils, `coalesce`/`div0`/`win/fills` handle the rest, `pass-nil` wraps plain functions. Not a blanket "nil-safe" claim, but a coherent set of rules that eliminate the common NPE footguns.
 5. **Expressions are values** — `#dt/e` returns an AST, not a function. Store in vars, compose freely, build shared vocabularies.
-6. **One function, not twenty-eight** — one `dt`, seven keywords, two expression modes. Threading for pipelines.
+6. **One function, not dozens** — one `dt`, seven keywords, two expression modes. Threading for pipelines.
 7. **Errors are data** — structured `ex-info` with `:dt/error` dispatch keys, Damerau-Levenshtein typo suggestions, extensible.
 8. **Syntax layer, not engine** — delegate to tech.v3.dataset. Full interop with tablecloth, Clerk, Clay, and the Scicloj ecosystem.
 9. **Steal the best ideas** — from data.table, q/kdb+, Polars, DataFramesMeta.jl, APL. The goal isn't to be any of them.
