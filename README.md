@@ -17,21 +17,11 @@ Datajure is a Clojure data manipulation library built on [tech.ml.dataset](https
   :by [:species]
   :agg {:n nrow :avg #dt/e (mn :mass)})
 
-;; Window functions — same keywords, no new concepts
+;; Window functions — same keywords
 (dt ds
   :by [:species]
   :within-order [(desc :mass)]
   :set {:rank #dt/e (win/rank :mass)})
-
-;; OHLC bars in one call — :within-order with :agg sorts each group first
-(dt trades
-  :by [:sym]
-  :within-order [(asc :time)]
-  :agg {:open  #dt/e (first-val :price)
-        :close #dt/e (last-val :price)
-        :hi    #dt/e (mx :price)
-        :lo    #dt/e (mi :price)
-        :vol   #dt/e (sm :size)})
 
 ;; Thread for multi-step pipelines
 (-> ds
@@ -40,21 +30,28 @@ Datajure is a Clojure data manipulation library built on [tech.ml.dataset](https
     (dt :order-by [(desc :avg-bmi)]))
 ```
 
-Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expressions to vectorized operations and delegates all computation to `tech.v3.dataset`. Every result is a standard `tech.v3.dataset` dataset. Full interop with tablecloth, Clerk, Clay, and the Scicloj ecosystem.
+Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expressions to vectorized operations and delegates all computation to `tech.v3.dataset`. Every result is a standard dataset. Full interop with tablecloth, Clerk, Clay, and the Scicloj ecosystem.
+
+## Installation
+
+Add to your `deps.edn`:
+
+```clojure
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.6.0"}}}
+```
+
+Datajure requires Clojure 1.12+ and Java 21+.
 
 ## Why Datajure
 
-Datajure takes inspiration from whichever library or language got a given idea right — R's `data.table` (terse query form, single-expression semantics), APL/q/kdb+ (first-class primitives for time-series operations you use every day), Polars (expressions as values, composable vocabulary), Julia's `DataFramesMeta.jl` (one function with keyword arguments). The goal is not to be any of them. It is to combine the parts that were genuinely revelations.
+Datajure takes inspiration from whichever library got a given idea right:
 
-Concretely, if you've used:
+- **R's `data.table`** — `DT[i, j, by]` maps onto `(dt ds :where i :set-or-agg j :by by)`. Immutable (no in-place mutation).
+- **Python's Polars** — expressions as first-class values, nil-safe comparisons and arithmetic.
+- **q/kdb+** — `win/*` gives you `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `grr`, plus `wavg`, `wsum`, `first-val`, `last-val`. `xbar` for time-series bars. As-of and window joins built in.
+- **Julia's `DataFramesMeta.jl`** — `#dt/e` serves the same role as `@transform`/`@subset`; Clojure's reader tag mechanism makes it integrate naturally.
 
-- **R's `data.table`** — you'll find `DT[i, j, by]` maps directly onto `(dt ds :where i :set-or-agg j :by by)`. Missing values are represented by `nil`, which propagates through comparisons and arithmetic in one consistent way. There is no in-place mutation (Datajure is immutable) and no secondary indexes (`setkey`) — it relies on tech.v3.dataset's columnar layout instead.
-- **Python's pandas/Polars** — you get expression objects as values (like Polars' `Expr`), nil-safe comparisons and arithmetic by default, and a single query form.
-- **R's `dplyr` or tidyverse** — you'll find the same pipe-friendly composition (`->` is Clojure's pipe), expressed through a single query function rather than one function per verb.
-- **Julia's `DataFramesMeta.jl`** — the `#dt/e` reader tag serves the same role as DFM's `@transform`/`@subset`; because Clojure has a reader tag mechanism, `#dt/e` is read as data and integrates directly with the rest of the language.
-- **q/kdb+** — the `win/*` namespace gives you first-class `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `mdowndev`, `ema`, `fills`, `scan`, `each-prior`, `grr`, plus `wavg`, `wsum`, `first`, `last` as aggregation primitives. `xbar` ships for time-series bar generation. As-of joins with `:direction` and `:tolerance` and window joins (`:how :window`) are built in.
-
-Datajure's unique wedge is that `#dt/e` expressions are first-class AST values — you can store them in vars and compose them across queries. Build a shared vocabulary once, reuse it everywhere:
+The distinctive feature: `#dt/e` expressions are first-class AST values. Store them in vars, compose across queries, build a shared vocabulary:
 
 ```clojure
 (def ret     #dt/e (- (win/ratio :price) 1))
@@ -65,18 +62,6 @@ Datajure's unique wedge is that `#dt/e` expressions are first-class AST values �
 (dt prices :by [:permno] :within-order [(asc :date)]
     :set {:ret ret :log-ret log-ret :vol-20d vol-20d :wealth wealth})
 ```
-
-Treating query fragments as first-class values you can name in a var and recompose across queries is a distinctive feature of Datajure's design.
-
-## Installation
-
-Add to your `deps.edn`:
-
-```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.3.0"}}}
-```
-
-Datajure requires Clojure 1.12+ and Java 21+.
 
 ## The Key Insight: `:by` × `:set`/`:agg`
 
@@ -186,7 +171,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 (dt ds :set {:x (pass-nil #(parse-int (:x-str %)) :x-str)})  ;; nil if :x-str is nil
 ```
 
-`div0` is callable both inside `#dt/e` and as a plain function (`core/div0 num den` → `nil` on a nil/zero denominator, else `num/den` as a double), so it works in plain-fn `:set`/`:agg` and computed `:by` too — no need to roll your own zero-guard.
+`div0` works both inside `#dt/e` and as a plain function, so it's usable in plain-fn `:set`/`:agg` and computed `:by`.
 
 ### Special forms
 
@@ -210,20 +195,17 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 
 ### Reusable expressions
 
-`#dt/e` returns first-class AST values. Store them in vars, reuse across queries, compose them into new expressions:
+As shown in the "Why Datajure" section, `#dt/e` expressions are first-class AST values — store in vars, compose across queries:
 
 ```clojure
-(def bmi       #dt/e (/ :mass (sq :height)))
-(def high-mass #dt/e (> :mass 4000))
-(def obese     #dt/e (> bmi 30))         ;; composition — bmi appears inside another #dt/e
+(def bmi   #dt/e (/ :mass (sq :height)))
+(def obese #dt/e (> bmi 30))              ;; composition — bmi spliced in
 
 (dt ds :set {:bmi bmi})
-(dt ds :where high-mass)
 (dt ds :by [:species] :agg {:avg-bmi #dt/e (mn bmi)})
-(dt ds :where obese)
 ```
 
-The mechanism is simple: `#dt/e` returns an AST map, and `(def ...)` captures that value. When the symbol appears inside another `#dt/e`, Clojure evaluates it to its AST value before the outer reader sees it, and the compiler splices it in. No macros, no magic — just values.
+The mechanism: `#dt/e` returns an AST map, `(def ...)` captures it. When the symbol appears inside another `#dt/e`, Clojure evaluates it to its AST value before the outer reader sees it, and the compiler splices it in.
 
 ### Expression Mode vs. Plain Functions
 
@@ -296,7 +278,7 @@ Available via `win/*` inside `#dt/e`. Work in `:set` context — with `:by` for 
         :prev   #dt/e (win/lag :price 1)})
 ```
 
-Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`.
+Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`, `win/grr`.
 
 ### Adjacent-Element Ops
 
@@ -644,14 +626,12 @@ Floor-division bucketing inspired by q's `xbar`. Primary use case is computed `:
 ;; Numeric bucketing in :by — price buckets of width 10
 (dt ds :by [(xbar :price 10)] :agg {:n nrow :avg #dt/e (mn :volume)})
 
-;; 5-minute OHLCV bars
+;; 5-minute OHLCV bars (xbar + the OHLC pattern from above)
 (dt trades
     :by [(xbar :time 5 :minutes) :sym]
     :within-order [(asc :time)]
-    :agg {:open  #dt/e (first-val :price)
-          :close #dt/e (last-val :price)
-          :vol   #dt/e (sm :size)
-          :n     nrow})
+    :agg {:open #dt/e (first-val :price) :close #dt/e (last-val :price)
+          :vol  #dt/e (sm :size) :n nrow})
 
 ;; Also usable inside #dt/e as a column derivation
 (dt ds :set {:bucket #dt/e (xbar :price 5)})
@@ -887,18 +867,18 @@ Structured `ex-info` with suggestions. All errors carry a `:dt/error` key in `ex
 ## Architecture
 
 ```
-User writes:   #dt/e (/ :mass (sq :height))
-                          ↓
-               AST (pure data, serializable)
-                          ↓
-               compile-expr → fn [ds] → column vector
-                          ↓
-               tech.v3.datatype.functional (dfn)
-                          ↓
-               tech.v3.dataset (columnar, JVM, fast)
+#dt/e (/ :mass (sq :height))
+              ↓
+AST (pure data, serializable)
+              ↓
+compile-expr → fn [ds] → column vector
+              ↓
+tech.v3.datatype.functional (dfn)
+              ↓
+tech.v3.dataset (columnar, JVM, fast)
 ```
 
-Datajure is a syntax layer. `#dt/e` expressions compile to an AST, which `compile-expr` translates to vectorized `dfn` operations on `tech.v3.dataset` column vectors. Computation is entirely delegated to the underlying engine; the DSL itself adds only the parsing and dispatch overhead.
+The DSL adds only parsing and dispatch overhead; all computation is delegated to tech.v3.dataset.
 
 ## Namespace Guide
 
