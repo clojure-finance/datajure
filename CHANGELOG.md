@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-07-15
+
+### Changed
+
+- **License changed from the Eclipse Public License 2.0 to the Apache License, Version 2.0**
+  (`LICENSE` file and the published pom). Code is unchanged by this; it affects only the terms
+  the library is distributed under from this version onward.
+
+### Fixed
+
+- **Independent seq-of-pairs `:set` with `:by` now rides the fast one-pass window path.**
+  2.7.0's "`:set` accepts any seq of pairs" hid a performance cliff: *every* seq-of-pairs `:set`
+  (sequential semantics) with `:by` dropped to the general per-group path — per-group sub-datasets
+  over **all** columns, the pre-2.4.0 OOM shape on wide data — while only a map `:set` rode the
+  fast one-pass path. `dt` now detects **independent** pairs (all expression-valued, no pair
+  referencing a column derived by an earlier pair — the common generated-pass shape) and upgrades
+  them to the fast path; results are unchanged (independence makes sequential ≡ simultaneous) and
+  pair order still fixes derived-column order. Genuinely cross-referencing or plain-fn derivations
+  keep the general path and now print a one-time `[datajure] NOTE:` about its per-group cost.
+  (On 2.7.0, wrap generated `:by` window passes in `(into {})` to stay on the fast path.)
+
 ## [2.7.0] - 2026-07-15
 
 The syntax-consolidation release: one expression language with two spellings, queries as
@@ -409,7 +430,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/clojure-finance/datajure/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/clojure-finance/datajure/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/clojure-finance/datajure/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/clojure-finance/datajure/compare/v2.4.0...v2.5.0

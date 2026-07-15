@@ -2826,6 +2826,52 @@
                                :agg (for [c [:mass :year]]
                                       [(keyword (str "mean-" (name c))) [:mn c]]))))))))
 
+(deftest independent-seq-of-pairs-set-by-rides-fast-path
+  ;; Footgun fix (investing-app DATAJURE-NOTES §7): seq-of-pairs :set with :by used to
+  ;; ALWAYS take the general per-group path (per-group sub-datasets over all columns —
+  ;; the pre-2.4.0 OOM shape on wide data); only a map :set rode the fast one-pass path.
+  ;; Independent pairs (no reference to a column derived by an earlier pair) are now
+  ;; upgraded to the fast path — independence makes sequential ≡ simultaneous — while
+  ;; cross-referencing pairs keep sequential semantics on the general path.
+  (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
+        pairs (for [[nm e] [[:lg [:win/lag :x 1]] [:gm [:mn :x]] [:x2 [:* :x 2]]]] [nm e])
+        via-pairs (core/dt d :by [:k] :within-order [(core/asc :t)] :set pairs)
+        via-map (core/dt d :by [:k] :within-order [(core/asc :t)]
+                         :set {:lg [:win/lag :x 1] :gm [:mn :x] :x2 [:* :x 2]})]
+    (testing "independent lazy seq of pairs ≡ map :set (values + original row order)"
+      (is (= (mapv #(vec (via-map %)) [:k :t :x :lg :gm :x2])
+             (mapv #(vec (via-pairs %)) [:k :t :x :lg :gm :x2]))))
+    (testing "pair order fixes derived column order (the vector-:set ordering guarantee)"
+      (is (= [:k :t :x :lg :gm :x2] (vec (ds/column-names via-pairs)))))
+    (testing "independent pairs never touch the per-group path (apply-set unused)"
+      (with-redefs-fn {#'datajure.core/apply-set
+                       (fn [& _] (throw (ex-info "general path taken" {})))}
+        #(is (= [10.0 100.0 30.0 300.0 60.0]
+                (vec ((core/dt d :by [:k] :set (list [:c [:win/cumsum :x]])) :c))))))
+    (testing "cross-referencing pairs keep sequential semantics via the general path"
+      (let [r (core/dt d :by [:k] :set (list [:m10 [:* :x 10]] [:m10+1 [:+ :m10 1]]))]
+        (is (= [101.0 1001.0 201.0 2001.0 301.0] (vec (r :m10+1)))))
+      (with-redefs-fn {#'datajure.core/apply-set
+                       (fn [& _] (throw (ex-info "general path taken" {})))}
+        #(is (thrown? clojure.lang.ExceptionInfo
+                      (core/dt d :by [:k]
+                               :set (list [:m10 [:* :x 10]] [:m10+1 [:+ :m10 1]]))))))
+    (testing "self-overwrite idiom ([[:c e1] [:c e2-referencing-c]]) stays sequential"
+      ;; spec §Self-overwrite: compute then clean — the second :lg sees the first's result
+      (let [r (core/dt d :by [:k] :within-order [(core/asc :t)]
+                       :set (list [:lg [:win/lag :x 1]]
+                                  [:lg [:coalesce :lg 0.0]]))]
+        (is (= [0.0 0.0 10.0 100.0 20.0] (vec (r :lg))))))
+    (testing "plain-fn derivations still take the general path"
+      (with-redefs-fn {#'datajure.core/apply-set
+                       (fn [& _] (throw (ex-info "general path taken" {})))}
+        #(is (thrown? clojure.lang.ExceptionInfo
+                      (core/dt d :by [:k] :set (list [:x10 (fn [row] (* 10 (:x row)))]))))))
+    (testing "prepared grouping :by works with independent seq-of-pairs"
+      (let [g (core/prepare-grouping d [:k] [(core/asc :t)])]
+        (is (= (mapv #(vec (via-map %)) [:lg :gm :x2])
+               (mapv #(vec ((core/dt d :set pairs :by g) %)) [:lg :gm :x2])))))))
+
 (deftest order-specs-accept-data-form-vectors
   (testing ":order-by accepts [:asc :col]/[:desc :col] alongside (asc …)/(desc …)"
     (is (= [5000 4800 3800 3750 3500]

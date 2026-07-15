@@ -9,7 +9,7 @@
             [datajure.math :as math])
   (:import [org.roaringbitmap RoaringBitmap]))
 
-(declare apply-order-by order-perm validate-select-cols)
+(declare apply-order-by order-perm validate-select-cols info-note)
 
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
@@ -624,7 +624,8 @@
       col)))
 
 (defn- fast-group-set
-  "Fast path for keyword-only :by window-mode :set (map derivations). Computes the
+  "Fast path for keyword-only :by window-mode :set (map or independent
+  seq-of-pairs derivations). Computes the
   grouped + `:within-order`-sorted permutation once and a `base` view of the source
   columns in that order (for contiguous per-group window computation, no per-group
   sub-datasets of every column, no `ds/concat`). Output is in **original input row
@@ -654,35 +655,59 @@
             dataset
             (seq derivations))))
 
+(defn- independent-derivations?
+  "True when the fast :by path computes the same result as sequential/simultaneous
+  application: every derivation is an introspectable expression (no plain fns) and
+  no derivation references a column derived by an EARLIER pair (map entries never
+  see siblings — validate-map-set-cross-refs rejects cross-refs — so a map only
+  needs the AST check). Independence makes sequential ≡ simultaneous, so a
+  seq-of-pairs :set qualifies for the fast path; pair order still fixes column order."
+  [derivations]
+  (if (map? derivations)
+    (every? #(deriv-ast (val %)) derivations)
+    (loop [ps (seq derivations) derived #{}]
+      (if-let [[col-kw dval] (first ps)]
+        (let [ast (deriv-ast dval)]
+          (and (some? ast)
+               (empty? (set/intersection (expr/col-refs ast) derived))
+               (recur (next ps) (conj derived col-kw))))
+        true))))
+
 (defn- apply-group-set [dataset by derivations within-order off-heap? grouping]
   (if (zero? (ds/row-count dataset))
     dataset
     (if (and (keyword-only-by? by)
-             (map? derivations)
-             (every? #(deriv-ast (val %)) derivations))
-      ;; Fast path: keyword-only :by + map derivations — reorder once, no concat.
+             (independent-derivations? derivations))
+      ;; Fast path: keyword-only :by + independent derivations — reorder once, no concat.
       (fast-group-set dataset by derivations within-order off-heap? grouping)
       ;; General path. Output stays in original input order: tag each row with an
       ;; index, group/sort/compute/concat (grouped order), then sort back by the index
       ;; and drop it. Compound case (qtile + exact keys): partition by exact keys first
       ;; so qtile breakpoints are computed per sub-dataset.
-      (let [n (ds/row-count dataset)
-            indexed (ds/add-column dataset (ds/new-column ::orig-idx (int-array (range n))))
-            partitions (if (needs-per-partition-resolution? by)
-                         (let [exact-keys (filterv keyword? by)]
-                           (vals (ds/group-by indexed (fn [row] (select-keys row exact-keys)))))
-                         [indexed])]
-        (-> (->> partitions
-                 (mapcat (fn [partition-ds]
-                           (let [group-fn (by->group-fn partition-ds by)
-                                 groups (ds/group-by partition-ds group-fn)]
-                             (map (fn [[_group-key sub-ds]]
-                                    (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
-                                      (apply-set sorted derivations)))
-                                  groups))))
-                 (apply ds/concat))
-            (ds/sort-by-column ::orig-idx)
-            (dissoc ::orig-idx))))))
+      (do
+        (when (keyword-only-by? by)
+          (info-note :group-set-general-path
+                     (str ":set with :by took the general per-group path (cross-referencing"
+                          " pairs or plain-fn derivations) — it builds per-group sub-datasets"
+                          " over ALL columns, which is slow and memory-hungry on wide data."
+                          " Independent expression derivations ride the fast one-pass path.")))
+        (let [n (ds/row-count dataset)
+              indexed (ds/add-column dataset (ds/new-column ::orig-idx (int-array (range n))))
+              partitions (if (needs-per-partition-resolution? by)
+                           (let [exact-keys (filterv keyword? by)]
+                             (vals (ds/group-by indexed (fn [row] (select-keys row exact-keys)))))
+                           [indexed])]
+          (-> (->> partitions
+                   (mapcat (fn [partition-ds]
+                             (let [group-fn (by->group-fn partition-ds by)
+                                   groups (ds/group-by partition-ds group-fn)]
+                               (map (fn [[_group-key sub-ds]]
+                                      (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
+                                        (apply-set sorted derivations)))
+                                    groups))))
+                   (apply ds/concat))
+              (ds/sort-by-column ::orig-idx)
+              (dissoc ::orig-idx)))))))
 
 (defn- apply-window-set
   "Window mode without :by — the entire dataset is one partition. Same output
@@ -1231,6 +1256,10 @@
                    seq of pairs (sequential — later pairs see earlier-derived columns).
                    When :set contains win/* functions, window mode is activated —
                    with :by, computes within groups; without :by, whole dataset is one partition.
+                   With :by, a map — or a seq of pairs whose expressions never reference
+                   a column derived by an earlier pair — runs on the fast one-pass path;
+                   genuinely cross-referencing or plain-fn derivations fall back to the
+                   per-group path (slow on wide data; a one-time NOTE says so).
   :agg           - collapse to summary. Accepts map or seq-of-pairs. Use (nrow)/[:nrow] for row count.
   :by            - grouping for :agg or :set (partitioned window mode). A vector of
                    keywords, a fn of the row, or (for :set) a prepared grouping from

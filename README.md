@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.0"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.1"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -986,4 +986,4 @@ Special thanks to [YANG Ming-Tian](https://github.com/skylee03) for the original
 
 Copyright © 2024–2026 Centre for Investment Management, HKU Business School.
 
-Distributed under the Eclipse Public License version 2.0.
+Distributed under the Apache License, Version 2.0 (since 2.7.1; versions up to 2.7.0 were published under the Eclipse Public License 2.0).

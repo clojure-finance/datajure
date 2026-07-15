@@ -3,7 +3,7 @@
             [deps-deploy.deps-deploy :as dd]))
 
 (def lib 'com.github.clojure-finance/datajure)
-(def version "2.7.0")
+(def version "2.7.1")
 (def class-dir "target/classes")
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
 
@@ -22,8 +22,8 @@
                 :src-dirs ["src" "resources"]
                 :pom-data [[:licenses
                             [:license
-                             [:name "Eclipse Public License 2.0"]
-                             [:url "https://www.eclipse.org/legal/epl-2.0/"]]]
+                             [:name "Apache License, Version 2.0"]
+                             [:url "https://www.apache.org/licenses/LICENSE-2.0"]]]
                            [:description
                             "Clojure data manipulation DSL built on tech.ml.dataset"]
                            [:url
