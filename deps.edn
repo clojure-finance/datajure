@@ -7,7 +7,7 @@
  :aliases
  {:nrepl
   {:extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
-   :main-opts ["-m" "nrepl.cmdline" "--port" "7888"]
+   :main-opts ["-m" "nrepl.cmdline" "--port" "0"]
    :extra-paths ["test"]}
   :clerk
   {:extra-deps {io.github.nextjournal/clerk {:mvn/version "0.18.1158"}}
