@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-07-15
+
+The syntax-consolidation release: one expression language with two spellings, queries as
+pure data, and uniform window-mode semantics. Contains two **breaking** changes (whole-dataset
+window output order; `:grouping` folded into `:by`).
+
+### Added
+
+- **Data-form full parity with `#dt/e` — one expression language, two spellings.** The runtime
+  data-form vector now covers the *entire* `#dt/e` vocabulary instead of a subset: window ops
+  (`[:win/lag :price 1]`, `[:win/mavg :x 12 {:min-periods 12}]`), row/stat ops (`[:row/sum …]`,
+  `[:stat/winsorize …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`,
+  `[:coalesce …]`/`[:coalesce-finite …]`, `[:cut :col n :from pred]`, `[:xbar :col w :minutes]`,
+  `[:win/scan :* expr]`, `[:win/each-prior :- expr]`), and every full-name/concise aggregator alias
+  (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]` — derived from the same table as `#dt/e`,
+  so the spellings can never drift). Aggregators now also compose in `:where` data-forms
+  (`[:> :x [:mn :x]]`), matching `#dt/e`. Context rules are enforced on the resulting AST exactly as
+  for `#dt/e` (e.g. `win/*` outside `:set` → `:win-outside-window`); unknown ops throw
+  `:unknown-data-op` with Damerau-Levenshtein suggestions. Data-forms are normalised to ASTs at the
+  `dt` boundary, so they ride identical validation and dispatch (window-mode detection, map-`:set`
+  cross-reference checks, fast paths). Window-join `:agg` maps accept data-forms too. This retires
+  the `read-expr`-over-quoted-forms workaround for programmatic pipelines: a generated `:set` pass is
+  now just `(into {} (for [c cols] [(l1key c) [:win/lag c 1]]))`.
+- **`dt` accepts a single query map** — `(dt ds {:where [:> :x 1] :by [:g] :agg {:n [:nrow]}})` is
+  equivalent to the kwargs form (kwargs + a trailing map also merge). With data-forms, a whole query
+  is pure EDN: storable, diffable, mergeable, and round-trippable through `clojure.edn/read-string`.
+- **Unknown `dt` query keys are rejected.** A typo like `:wehre` previously *silently* did nothing;
+  it now throws `:unknown-query-key` with a suggestion (`:wehre -> :where`). Malformed argument lists
+  throw `:invalid-dt-args`.
+- **`when-finite` — NA-propagating guard (R's `ifelse(NA→NA)` building block).**
+  `#dt/e (when-finite :g body)` (data-form `[:when-finite :g […]]`) yields the body value where the
+  guard is finite and nil (missing) where it is nil/NaN/±Inf. A bare comparison collapses a nil
+  operand to `false` *before* `if` sees it, so NA-propagating binary indicators (Piotroski-style
+  `p-ind`) were previously inexpressible in the DSL: now
+  `#dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))`, with computed guards via `let`
+  (`(let [d (- :a :b)] (when-finite d …))`). Element-wise, so it runs on the off-heap `:set :by`
+  fast path.
+- **`nrow`/`N` as a real nullary op.** `#dt/e (nrow)` / `#dt/e (N)` / `[:nrow]` / `[:N]` — so row
+  count composes in arithmetic (`#dt/e (- (nrow) 1)` for peer counts) instead of needing the bare
+  value-marker (which still works). `(nrow :col)` is a read-time `:wrong-arity` error pointing to
+  `count*`/`ct`.
+- **`:set`/`:agg` accept any seq of pairs** — a lazy `(for [c cols] [(kw c) …])` passes directly,
+  no `(into {})`/`vec` wrapping. Sequential semantics as with vector-of-pairs.
+- **`[:asc :col]`/`[:desc :col]` sort-spec spelling** for `:order-by`/`:within-order`/
+  `prepare-grouping`, alongside `(asc :col)`/`(desc :col)` — the EDN-friendly variant, so sort specs
+  fit in stored query maps. Malformed specs still throw `:invalid-order-spec`.
+
+### Changed
+
+- **BREAKING: whole-dataset window mode (`:set` without `:by`) now preserves input row order**,
+  completing the 2.6.0 change for the `:by` case — the two window modes now have one contract:
+  `:within-order` governs only the order the window computation walks the rows; results are
+  scattered back to their original positions; passthrough columns are untouched; use `:order-by`
+  to sort output. (Previously the no-`:by` form returned the dataset *sorted* by `:within-order` —
+  the same keyword meant different output orders depending on `:by`.) Whole-dataset window
+  derivations also gain the off-heap default and the structured `:unknown-column` error path.
+- **BREAKING: `:grouping` is folded into `:by` — the keyword is removed.** A prepared grouping from
+  `prepare-grouping` is now passed directly as `:by`:
+  `(dt ds :set {…} :by g)` instead of `(dt ds :set {…} :grouping g)`. `:by` already dispatched
+  polymorphically (keywords, fns, `xbar`/`qtile` markers); the prepared grouping is one more shape,
+  and `dt` stays at nine query keywords instead of ten. The old keyword now throws
+  `:unknown-query-key`; the `:grouping-requires-set`, `:grouping-conflict` (with `:within-order`),
+  and `:grouping-row-mismatch` guards are unchanged.
+
 ## [2.6.0] - 2026-06-20
 
 ### Changed
@@ -345,7 +409,11 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/clojure-finance/datajure/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/clojure-finance/datajure/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/clojure-finance/datajure/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/clojure-finance/datajure/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/clojure-finance/datajure/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/clojure-finance/datajure/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/clojure-finance/datajure/compare/v2.0.13...v2.1.0

@@ -201,7 +201,9 @@
              (pr-str v)))
     :op (let [op-name (get op-display (:op/name node) (name (:op/name node)))
               args (map ast->string (:op/args node))]
-          (str "(" op-name " " (clojure.string/join " " args) ")"))
+          (if (seq args)
+            (str "(" op-name " " (clojure.string/join " " args) ")")
+            (str "(" op-name ")")))
     :win (let [op-name (get win-op-display (:win/op node) (name (:win/op node)))
                args (map ast->string (:win/args node))]
            (str "(" op-name " " (clojure.string/join " " args) ")"))

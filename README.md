@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.6.0"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.0"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -96,7 +96,7 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
         :prev   #dt/e (win/lag :price 1)})
 ```
 
-A window-mode `:set` **with `:by` preserves the input row order** — `:within-order` sets the per-group *computation* order (so `win/lag`/`win/cumsum`/… walk by, say, date within each group), and the derived values are scattered back to their original rows. Use `:order-by` if you want sorted output. (Without `:by`, the whole-dataset window still sorts by `:within-order`.)
+A window-mode `:set` **preserves the input row order** — with or without `:by` (2.7.0). `:within-order` sets only the *computation* order (so `win/lag`/`win/cumsum`/… walk by, say, date within each partition), and the derived values are scattered back to their original rows. Use `:order-by` if you want sorted output.
 
 `:within-order` also combines with `:agg`, sorting rows within each group before the aggregation runs. This is the one-call OHLC pattern and the reason `first-val` / `last-val` are first-class helpers:
 
@@ -128,7 +128,9 @@ A window-mode `:set` **with `:by` preserves the input row order** — `:within-o
 | —      | —       | ✓       | optional        | Whole-table aggregate (sorted first if `:within-order`) |
 | ✓      | —       | ✓       | optional        | Group aggregate (sorted within group if `:within-order`)|
 
-Disallowed: `:set` and `:agg` in the same call (use `->` threading); `:within-order` without `:set` or `:agg`.
+Disallowed: `:set` and `:agg` in the same call (use `->` threading); `:within-order` without `:set` or `:agg`. Unknown query keywords throw a structured error with a typo suggestion (`:wehre -> :where`) rather than being silently ignored.
+
+`dt` also accepts its whole query as a **single map** — `(dt ds {:where [:> :mass 4000] :by [:species] :agg {:n [:nrow]}})` — equivalent to the kwargs form. Combined with data-form expressions (next sections), a query is pure EDN: storable, mergeable, and built programmatically without `apply` gymnastics.
 
 ## Expression Mode: `#dt/e`
 
@@ -161,6 +163,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | `coalesce-finite :col default` (alias `coalescef`)    | first **finite** value — also skips `NaN`/`±Inf` |
 | `div0 num den`                                        | `nil` if denominator is `nil` or zero |
 | `win/ratio :col`                                      | `nil` if previous value is `nil` or zero |
+| `when-finite :g body`                                 | body where `:g` is finite; `nil` where it is nil/`NaN`/`±Inf` (2.7.0) |
 | Plain Clojure functions                               | **not** automatic; wrap with `pass-nil` |
 
 ```clojure
@@ -172,6 +175,17 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 ```
 
 `div0` works both inside `#dt/e` and as a plain function, so it's usable in plain-fn `:set`/`:agg` and computed `:by`.
+
+**`when-finite` — the NA-propagating guard (2.7.0).** A bare comparison collapses a nil operand to `false` *before* `if` sees it, so `#dt/e (if (>= :g 0) 1.0 0.0)` yields `0.0` at missing rows — R's `ifelse(NA → NA)` was inexpressible. `when-finite` guards on the *input*: the body value where the guard expression is finite, missing where it is nil/`NaN`/`±Inf`. This is the Piotroski-style binary-indicator primitive:
+
+```clojure
+;; 1/0 indicator that stays missing where the input is missing
+(dt ds :set {:P3 #dt/e (when-finite :G.R4.ROA (if (>= :G.R4.ROA 0) 1.0 0.0))})
+
+;; computed guard via let (indicator over a derived quantity)
+(dt ds :set {:P4 #dt/e (let [d (- :R4.oancfq :R4.ibq)]
+                         (when-finite d (if (> d 0) 1.0 0.0)))})
+```
 
 ### Special forms
 
@@ -226,6 +240,8 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
 
 `#dt/e` is a *read-time* reader tag, so it can't see a runtime local: you can't write `#dt/e (= :tic ticker)` and have `ticker` resolve. The escape isn't a plain-fn `:where` (that builds a row map per row — slow on a wide dataset). Instead, `:where`, `:agg`, and `:set` accept a **data-form vector**: a keyword is a column, a keyword-headed vector is an operation `[op-kw & args]` (a number-headed vector like `[0.2 0.5 0.8]` is a literal), anything else is a literal value, so runtime values flow straight in. It desugars to the same AST `#dt/e` compiles — same vectorized `dfn` path, no row map.
 
+Since 2.7.0 the data-form covers the **entire** `#dt/e` vocabulary — one expression language, two spellings. `#dt/e (...)` is read-time sugar for static expressions; the keyword-vector is the same AST written as data, for anything built at runtime:
+
 ```clojure
 (let [ticker "AAPL", lo 3700, hi 4900]
   (dt panel :where [:= :tic ticker])                       ;; runtime value
@@ -241,9 +257,23 @@ Prefer `#dt/e` by default. Fall back to plain functions when the computation doe
     :agg (into {} (for [c benchmark-vars]
                     [(keyword (str (name c) "_q20")) [:qnt c 0.2]])))
 (dt ds :set {:gross-margin [:div0 [:- :sales :cogs] :sales]})
+
+;; window / row / stat ops and the special forms all have data-form spellings (2.7.0)
+(dt ds :by [:gvkey] :within-order [[:asc :date]]
+    :set (for [c [:saleq :cogsq]]                       ;; :set takes any seq of pairs
+           [(keyword (str "L1." (name c))) [:win/lag c 1]]))
+(dt ds :set {:cat  [:cond [:> :bmi 30] "obese" [:> :bmi 25] "over" :else "normal"]
+             :size [:cut :mktcap 5 :from [:= :exchcd 1]]
+             :w    [:win/scan :* [:+ 1 :ret]]})
+
+;; a whole query as one EDN value
+(dt ds {:where [:> :mass 3700]
+        :by [:species]
+        :within-order [[:desc :mass]]
+        :agg {:top [:first-val :mass] :n [:nrow]}})
 ```
 
-Supported ops in a `:where` data-form: `> < >= <= = and or not in between? + - * / sq log div0 asinh na2zero neg2na nonfin2na` (use a set for `:in`). `:agg`/`:set` data-forms additionally allow the scalar aggregators (`mn sm md sd mx mi variance ct nuniq qnt wavg wsum` …). Window/row/stat ops and `if`/`cond`/`let`/`cut`/`xbar` stay `#dt/e`-only.
+Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`, `[:coalesce-finite …]`, `[:cut …]`, `[:xbar …]`, `[:win/scan :op …]`, `[:win/each-prior :op …]`), and `[:nrow]` for row count. Use a set for `:in` (a non-number-headed vector denotes an operation). Context rules match `#dt/e` exactly — e.g. `win/*` outside `:set` throws; unknown ops throw `:unknown-data-op` with a suggestion.
 
 ## `:select` — Polymorphic Column Selection
 
@@ -314,8 +344,8 @@ For a **multi-pass** per-entity transform (many sequential `:set :by` passes ove
 ```clojure
 (let [g (prepare-grouping ds [:gvkey] [(asc :datadate)])]
   (-> ds
-      (dt :set {:R4.saleq #dt/e (win/mavg :saleq 4)} :grouping g)
-      (dt :set {:G.R4.saleq #dt/e (win/grr :R4.saleq)} :grouping g)   ;; later passes can use earlier-derived cols
+      (dt :set {:R4.saleq #dt/e (win/mavg :saleq 4)} :by g)
+      (dt :set {:G.R4.saleq #dt/e (win/grr :R4.saleq)} :by g)   ;; later passes can use earlier-derived cols
       ...))
 ```
 
@@ -766,7 +796,7 @@ Short aliases for power users (q / data.table users in particular):
 | `winsorize`   | stat/stat-winsorize |
 | `between`     | positional range selector |
 
-Both `nrow` (discoverable) and `N` (terse, q/data.table style) live in `datajure.core`; `N` is also re-exported from `datajure.concise`.
+Both `nrow` (discoverable) and `N` (terse, q/data.table style) live in `datajure.core`; `N` is also re-exported from `datajure.concise`. Since 2.7.0 row count is also a real nullary op — `#dt/e (nrow)` / `#dt/e (N)` / data-form `[:nrow]` — so it composes in arithmetic: `#dt/e (- (nrow) 1)` for peer counts.
 
 ## Notebook Integration
 

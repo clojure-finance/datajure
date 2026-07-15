@@ -250,6 +250,18 @@
    :nonfin2na (fn [col] (dtype/make-reader :object (dtype/ecount col)
                                            (let [v (nth col idx)]
                                              (when (math/finite-double? v) (double v)))))
+   ;; NA-propagating guard (R's ifelse(NA → NA) building block): the body value
+   ;; where the guard is finite, nil (missing) where it is nil/NaN/±Inf. Brings
+   ;; NA-propagating binary indicators (Piotroski-style p-ind) into the DSL —
+   ;; a bare comparison collapses a nil operand to false *before* `if` sees it,
+   ;; so `(if (>= :g 0) 1.0 0.0)` alone can't yield nil; guard on the input:
+   ;;   #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))
+   :when-finite (fn [guard body]
+                  (if (dtype/reader? guard)
+                    (dtype/make-reader :object (dtype/ecount guard)
+                                       (when (math/finite-double? (nth guard idx))
+                                         (if (dtype/reader? body) (nth body idx) body)))
+                    (when (math/finite-double? guard) body)))
    :> dfn/>
    :< dfn/<
    :>= dfn/>=
@@ -306,7 +318,11 @@
    'in :in, 'between? :between?, 'count-distinct :nuniq
    'first-val :first-val, 'last-val :last-val
    'wavg :wavg, 'wsum :wsum
-   'div0 :div0})
+   'div0 :div0
+   'when-finite :when-finite
+   ;; row count as a real nullary op — #dt/e (nrow) / (N) — so it composes in
+   ;; arithmetic (e.g. (- (nrow) 1)) instead of needing the bare value marker
+   'nrow :nrow, 'N :nrow})
 
 (defn damerau-levenshtein
   "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
@@ -394,7 +410,19 @@
     (and (#{:and :or} op-kw) (zero? n-args))
     (throw (ex-info
             (str "`" op-sym "` requires at least one argument in #dt/e. Got 0.")
-            {:dt/error :wrong-arity :dt/op op-sym :dt/expected :at-least-1 :dt/got n-args}))))
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected :at-least-1 :dt/got n-args}))
+
+    (and (= :when-finite op-kw) (not= 2 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly two arguments (guard expression, body expression). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
+    (and (= :nrow op-kw) (pos? n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes no arguments — it is the group/dataset row count. Got "
+                 n-args ". For a non-nil count of a column use `count*`/`ct`.")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 0 :dt/got n-args}))))
 
 (defn- check-arith-nil-literal!
   "Arithmetic ops require non-nil operands. A literal nil — e.g. `(+ :x nil)` —
@@ -551,72 +579,165 @@
 ;; straight in where #dt/e — a read-time reader tag — can only see a literal.
 ;; It compiles down the exact same AST / vectorized path.
 
-(def ^:private data-form-where-ops
-  "Ops permitted in a `:where` data-form: the element-wise comparison, logical,
-  arithmetic, and membership ops. A predicate can't be an aggregator, so
-  aggregations, window/row/stat ops, and the structural special forms
-  (if/cond/let/cut/xbar/coalesce) remain #dt/e-only here."
-  #{:> :< :>= :<= := :and :or :not :in :between? :+ :- :* :div :div0 :sq :log
-    :asinh :na2zero :neg2na :nonfin2na})
-
-(def ^:private data-form-agg-ops
-  "Ops permitted in an `:agg`/`:set` data-form: the element-wise set plus the
-  scalar aggregators (so a column list can be turned into aggregations
-  programmatically, e.g. [:qnt :saleq 0.2]). Window/row/stat ops and the
-  structural special forms still need #dt/e (their namespaced symbols don't have
-  a plain-keyword data-form spelling)."
-  (into data-form-where-ops
-        #{:mn :sm :md :sd :mx :mi :variance :ct :nuniq :first-val :last-val
-          :wavg :wsum :qnt}))
-
 (def ^:private data-op-aliases
   "Keyword op aliases accepted in data-forms -> canonical op keyword. Only the
-  ops whose natural keyword differs from the canonical name need an entry."
-  {:/ :div})
+  ops whose natural keyword differs from the canonical name need an entry;
+  everything else falls out of the sym->op table."
+  {:/ :div
+   :N :nrow})
+
+(def ^:private kw->op
+  "Keyword spelling of every base-op symbol data-forms accept — the full #dt/e
+  vocabulary (canonical names plus every full-name/concise alias), derived from
+  sym->op so the two spellings can never drift."
+  (delay
+    (into data-op-aliases
+          (map (fn [[s k]] [(keyword (str s)) k]))
+          sym->op)))
+
+(def ^:private data-special-op?
+  "Vector heads handled structurally by data->ast (mirroring parse-form's special
+  forms) rather than through the op tables."
+  #{:if :cond :let :coalesce :coalesce-finite :coalescef :cut :xbar
+    :win/scan :win/each-prior})
 
 (defn- data-op->kw
-  "Normalise and validate a data-form op (a keyword like :=, :>, :qnt) against
-  the set of ops `allowed` in the current context."
-  [op allowed]
+  "Normalise and validate a data-form op head (a keyword like :=, :>, :qnt,
+  :win/lag). Returns the canonical op keyword, tagged with how it dispatches."
+  [op]
   (if-not (keyword? op)
-    (throw (ex-info (str "data-form op must be a keyword (e.g. :=, :>, :and); got "
+    (throw (ex-info (str "data-form op must be a keyword (e.g. :=, :>, :win/lag); got "
                          (pr-str op) ".")
                     {:dt/error :invalid-data-op :dt/op op}))
-    (let [op-kw (get data-op-aliases op op)]
-      (if (contains? allowed op-kw)
-        op-kw
-        (throw (ex-info (str "Unknown data-form op " op ". Supported ops: "
-                             (vec (sort allowed))
-                             ". For window/row/stat ops or if/cond/let/cut/xbar use #dt/e.")
-                        {:dt/error :unknown-data-op
-                         :dt/op op
-                         :dt/supported (vec (sort allowed))}))))))
+    (or (when-let [k (get @kw->op op)] [:op k])
+        (when (contains? win-op-table op) [:win op])
+        (when (contains? row-op-table op) [:row op])
+        (when (contains? stat-op-table op) [:stat op])
+        (let [suggestions (suggest-op (symbol (str (when-let [ns (namespace op)] (str ns "/"))
+                                                   (name op))))]
+          (throw (ex-info (str "Unknown data-form op " op "."
+                               (when suggestions
+                                 (str " Did you mean: "
+                                      (str/join ", " (map #(str "`:" % "`") suggestions))
+                                      "?")))
+                          {:dt/error :unknown-data-op
+                           :dt/op op
+                           :dt/suggestions suggestions}))))))
+
+(defn- data-scan-op
+  "Normalise the operator argument of a data-form [:win/scan op …] /
+  [:win/each-prior op …] — a keyword like :+, :/, :max — to the canonical op
+  keyword, mirroring parse-form's symbol normalisation."
+  [op-kw form]
+  (if (keyword? op-kw)
+    (or (get @kw->op op-kw) op-kw)
+    (throw (ex-info (str (first form) " in a data-form takes its operator as a keyword"
+                         " (e.g. [:win/scan :* …]); got " (pr-str op-kw) ".")
+                    {:dt/error :invalid-data-op :dt/op op-kw}))))
 
 (defn data->ast
   "Convert a runtime data-form expression to a #dt/e AST so it compiles down the
-  same vectorized path. The form mirrors #dt/e but as plain *evaluated* data:
-    - a vector [op-kw & args] is an operation (op-kw a keyword: :=, :>, :qnt, ...);
+  same vectorized path. The form mirrors #dt/e one-for-one, as plain *evaluated*
+  data — one expression language, two spellings:
+    - a vector [op-kw & args] is an operation. op-kw is the keyword spelling of
+      any #dt/e op — element-wise (:>, :div0, :na2zero, …), aggregator (:mn,
+      :qnt, :nrow, … including every full-name/concise alias), window/row/stat
+      (:win/lag, :row/sum, :stat/winsorize, …);
+    - the special forms are vector-headed too: [:if pred then else?],
+      [:cond p1 v1 … :else d], [:let [:name expr …] body],
+      [:coalesce …]/[:coalesce-finite …], [:cut :col n]/[:cut :col n :from pred],
+      [:xbar :col w]/[:xbar :col w :minutes], [:win/scan :* expr],
+      [:win/each-prior :- expr];
     - a **number-headed** vector is a literal value (e.g. a probability list
       [0.2 0.5 0.8] for a multi-quantile `qnt`);
-    - a keyword is a column reference;
+    - a keyword is a column reference (or a [:let] binding reference in a body);
     - anything else (number, string, set, the value of a local) is a literal.
   So (data->ast [:= :tic ticker]) closes over the runtime value of `ticker`, and
-  (data->ast [:qnt :saleq [0.2 0.5 0.8]] :agg) builds a multi-quantile aggregation.
+  (data->ast [:win/lag :price 1]) is exactly #dt/e (win/lag :price 1). Context
+  rules (e.g. win/* only in :set) are enforced by dt on the resulting AST, the
+  same as for #dt/e. Use sets (not vectors) for `:in` membership, since a
+  non-number-headed vector denotes an operation.
 
-  `ctx` selects the permitted ops: :where (default) allows element-wise ops only;
-  :agg also allows the scalar aggregators (for `:agg`/`:set`). Richer expressions
-  use #dt/e. Use sets (not vectors) for `:in` membership, since a non-number-headed
-  vector denotes an operation."
-  ([form] (data->ast form :where))
-  ([form ctx]
-   (let [allowed (case ctx :agg data-form-agg-ops data-form-where-ops)]
-     (letfn [(go [f]
-               (cond
-                 (keyword? f) (col-node f)
-                 (and (vector? f) (number? (first f))) (lit-node f)
-                 (vector? f) (op-node (data-op->kw (first f) allowed) (mapv go (rest f)))
-                 :else (lit-node f)))]
-       (go form)))))
+  The `ctx` argument of the 2-arity is retained for call compatibility and
+  ignored — the op vocabulary is uniform across contexts, exactly like #dt/e."
+  ([form] (data->ast form nil))
+  ([form _ctx]
+   (letfn [(go [f env]
+             (cond
+               (keyword? f) (if (contains? env f)
+                              {:node/type :binding-ref :binding-ref/name f}
+                              (col-node f))
+               (and (vector? f) (number? (first f))) (lit-node f)
+               (vector? f) (go-vec f env)
+               :else (lit-node f)))
+           (go-vec [f env]
+             (let [[h & args] f]
+               (if (data-special-op? h)
+                 (case h
+                   :if
+                   (let [[pred then else] args]
+                     {:node/type :if
+                      :if/pred (go pred env)
+                      :if/then (go then env)
+                      :if/else (if (some? else) (go else env) (lit-node nil))})
+                   :cond
+                   (reduce (fn [else-node [test then]]
+                             {:node/type :if
+                              :if/pred (if (= test :else) (lit-node true) (go test env))
+                              :if/then (go then env)
+                              :if/else else-node})
+                           (lit-node nil)
+                           (reverse (partition 2 args)))
+                   (:coalesce :coalesce-finite :coalescef)
+                   {:node/type :coalesce
+                    :coalesce/args (mapv #(go % env) args)
+                    :coalesce/finite? (not= h :coalesce)}
+                   :let
+                   (let [[bvec body] args
+                         _ (when-not (and (vector? bvec) (even? (count bvec))
+                                          (every? keyword? (take-nth 2 bvec)))
+                             (throw (ex-info (str "[:let …] bindings must be a vector of"
+                                                  " keyword/expression pairs; got " (pr-str bvec) ".")
+                                             {:dt/error :invalid-data-op :dt/op :let})))
+                         [bindings env']
+                         (reduce (fn [[acc e] [k bexpr]]
+                                   [(conj acc {:binding/name k :binding/expr (go bexpr e)})
+                                    (conj e k)])
+                                 [[] env]
+                                 (partition 2 bvec))]
+                     {:node/type :let :let/bindings bindings :let/body (go body env')})
+                   :cut
+                   (let [[col-form n-form & rest-args] args
+                         from-expr (when (= (first rest-args) :from) (second rest-args))]
+                     {:node/type :cut
+                      :cut/col (go col-form env)
+                      :cut/n (go n-form env)
+                      :cut/from (when from-expr (go from-expr env))})
+                   :xbar
+                   (let [[col-form width-form unit-kw] args]
+                     {:node/type :xbar
+                      :xbar/col (go col-form env)
+                      :xbar/width (go width-form env)
+                      :xbar/unit unit-kw})
+                   :win/scan
+                   (let [[scan-op col-form] args]
+                     {:node/type :scan
+                      :scan/op (data-scan-op scan-op f)
+                      :scan/arg (go col-form env)})
+                   :win/each-prior
+                   (let [[ep-op col-form] args]
+                     {:node/type :each-prior
+                      :each-prior/op (data-scan-op ep-op f)
+                      :each-prior/arg (go col-form env)}))
+                 (let [[kind op-kw] (data-op->kw h)]
+                   (case kind
+                     :win (win-node op-kw (mapv #(go % env) args))
+                     :row (row-node op-kw (mapv #(go % env) args))
+                     :stat (stat-node op-kw (mapv #(go % env) args))
+                     :op (do (check-op-arity! op-kw h (count args))
+                             (check-arith-nil-literal! op-kw h args)
+                             (op-node op-kw (mapv #(go % env) args))))))))]
+     (go form #{}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Compiler: AST -> fn of dataset
@@ -846,19 +967,23 @@
              (fn [ds]
                (let [args (map #(% ds) arg-fns)]
                  (apply stat-fn args))))
-     :op (let [op-kw (:op/name node)
-               op-fn (or (op-table op-kw)
-                         (throw (ex-info "Unknown op in #dt/e expression"
-                                         {:op op-kw})))
-               arg-fns (mapv #(compile-expr % env) (:op/args node))
-               cmp? (comparison-ops op-kw)]
-           (fn [ds]
-             (let [args (map #(% ds) arg-fns)]
-               (if (some nil? args)
-                 (if cmp?
-                   (dtype/make-reader :boolean (ds/row-count ds) false)
-                   nil)
-                 (apply op-fn args))))))))
+     :op (if (= :nrow (:op/name node))
+           ;; row count needs the dataset itself, not evaluated column args —
+           ;; the only op with that shape, so it short-circuits the op-table
+           (fn [ds] (ds/row-count ds))
+           (let [op-kw (:op/name node)
+                 op-fn (or (op-table op-kw)
+                           (throw (ex-info "Unknown op in #dt/e expression"
+                                           {:op op-kw})))
+                 arg-fns (mapv #(compile-expr % env) (:op/args node))
+                 cmp? (comparison-ops op-kw)]
+             (fn [ds]
+               (let [args (map #(% ds) arg-fns)]
+                 (if (some nil? args)
+                   (if cmp?
+                     (dtype/make-reader :boolean (ds/row-count ds) false)
+                     nil)
+                   (apply op-fn args)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Reader tag handler

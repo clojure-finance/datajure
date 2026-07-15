@@ -177,17 +177,19 @@
 
 (defn- compile-agg-fn
   "Compile a window-join agg value to a fn [sub-dataset] -> scalar.
-  For #dt/e expr-nodes: wraps with nil-on-empty guard (dfn functions like
+  For #dt/e expr-nodes and data-form vectors (e.g. [:mn :bid], converted via
+  expr/data->ast): wraps with nil-on-empty guard (dfn functions like
   dfn/mean return NaN on empty columns; we return nil instead).
   For plain fns: used as-is (so nrow returns 0 for empty windows naturally)."
   [f]
-  (if (expr/expr-node? f)
-    (let [compiled (expr/compile-expr f)]
-      (fn [sub-ds]
-        (if (zero? (ds/row-count sub-ds))
-          nil
-          (compiled sub-ds))))
-    f))
+  (let [f (if (vector? f) (expr/data->ast f) f)]
+    (if (expr/expr-node? f)
+      (let [compiled (expr/compile-expr f)]
+        (fn [sub-ds]
+          (if (zero? (ds/row-count sub-ds))
+            nil
+            (compiled sub-ds))))
+      f)))
 
 (defn- apply-window-join
   "Window join: for each left row, aggregate all right rows whose asof-key

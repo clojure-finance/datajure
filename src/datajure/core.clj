@@ -9,7 +9,7 @@
             [datajure.math :as math])
   (:import [org.roaringbitmap RoaringBitmap]))
 
-(declare apply-order-by validate-select-cols)
+(declare apply-order-by order-perm validate-select-cols)
 
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
@@ -90,6 +90,42 @@
                        :dt/column col-kw
                        :dt/sibling-refs sibling-refs
                        :dt/derived-cols derived-cols})))))))))
+
+(defn- normalise-expr-value
+  "Convert a data-form vector to its AST at the dt boundary, so data-forms and
+  #dt/e expressions flow through identical validation and dispatch downstream —
+  window-mode detection, win-outside-:set checks, map-:set cross-reference
+  checks, and the fast-path introspection all see one representation."
+  [v]
+  (if (vector? v) (expr/data->ast v) v))
+
+(defn- normalise-derivations
+  "Normalise every value of a :set/:agg map or seq-of-pairs via
+  normalise-expr-value, preserving the container shape (map stays a map —
+  simultaneous semantics; a seq of pairs stays sequential)."
+  [derivations]
+  (cond
+    (nil? derivations) nil
+    (map? derivations) (update-vals derivations normalise-expr-value)
+    :else (mapv (fn [[k v]] [k (normalise-expr-value v)]) derivations)))
+
+(defn- normalise-order-spec
+  "Normalise a sort spec to {:order :asc|:desc :col <kw>}. Accepts a bare column
+  keyword (ascending), the (asc :col)/(desc :col) helper maps, and the data-form
+  spelling [:asc :col]/[:desc :col] — the EDN-friendly variant for
+  programmatically built queries. Anything else passes through for
+  validate-order-specs to reject with a structured error."
+  [s]
+  (cond
+    (keyword? s) {:order :asc :col s}
+    (and (vector? s) (= 2 (count s)) (#{:asc :desc} (first s)))
+    {:order (first s) :col (second s)}
+    :else s))
+
+(defn- order-spec-col
+  "The column keyword a sort spec refers to, accepting all spellings."
+  [s]
+  (:col (normalise-order-spec s)))
 
 (defn- apply-where [dataset predicate]
   (let [node (cond
@@ -307,7 +343,7 @@
     (if (some #{:all} refs)
       dataset
       (let [order-cols (when within-order
-                         (map #(if (keyword? %) % (:col %)) within-order))
+                         (map order-spec-col within-order))
             needed (into (set by) (concat (apply concat refs) order-cols))]
         (ds/select-columns dataset (filterv needed (ds/column-names dataset)))))))
 
@@ -455,10 +491,11 @@
     (dotimes [i n]
       (let [k (mapv #(nth % i) key-rdrs)]
         (.add ^java.util.ArrayList
-         (or (.get groups k) (let [a (java.util.ArrayList.)] (.put groups k a) a))
+         (or (.get groups k)
+             (let [a (java.util.ArrayList.)] (.put groups k a) a))
               (int i))))
     (let [cmp (when within-order
-                (let [specs (mapv #(if (keyword? %) {:order :asc :col %} %) within-order)
+                (let [specs (mapv normalise-order-spec within-order)
                       rdrs (mapv #(dtype/->reader (ds/column dataset (:col %))) specs)
                       dirs (int-array (map #(if (= :desc (:order %)) -1 1) specs))
                       ns (count specs)]
@@ -485,7 +522,7 @@
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
   #{:+ :- :* :div :div0 :sq :log :> :< :>= :<= := :and :or :not :in :between?
-    :asinh :na2zero :neg2na :nonfin2na})
+    :asinh :na2zero :neg2na :nonfin2na :when-finite})
 
 (defn- element-wise-ast?
   "True if `node` is purely element-wise (no aggregation / window / group reduction),
@@ -543,7 +580,15 @@
             ;; scatter each result to its ORIGINAL row position (perm[s+j])
             (dotimes [j len] (aset out (aget p (+ (long s) j)) (nth res j))))))
       (let [refs (some-> (deriv-ast dval) expr/col-refs seq vec)
-            wbase (if refs (ds/select-columns base refs) base)]
+            ;; narrow only to columns that exist — an unknown ref stays absent from
+            ;; the view so derive-column raises the structured :unknown-column error
+            ;; (with suggestions) instead of a raw tech "column not found"
+            present (when refs (filterv (clojure.core/set (ds/column-names base)) refs))
+            ;; only narrow when every ref exists — otherwise keep the full view so
+            ;; the structured error suggests against all available columns
+            wbase (if (and refs (= (count present) (count refs)))
+                    (ds/select-columns base present)
+                    base)]
         (doseq [[s e] bounds]
           (let [len (- (long e) (long s))
                 sub (ds/select-rows wbase (int-array (range s e)))
@@ -593,7 +638,7 @@
   [dataset by derivations within-order off-heap? grouping]
   (when (and within-order (not grouping))
     (let [available (set (ds/column-names dataset))
-          unknown (vec (remove available (map #(if (keyword? %) % (:col %)) within-order)))]
+          unknown (vec (remove available (map order-spec-col within-order)))]
       (when (seq unknown)
         (throw (ex-info (str "Unknown column(s) " unknown " in :within-order expression")
                         {:dt/error :unknown-column :dt/columns unknown
@@ -640,22 +685,41 @@
             (dissoc ::orig-idx))))))
 
 (defn- apply-window-set
-  "Window mode without :by — entire dataset is one partition.
-  Optionally sorts by :within-order before applying derivations."
-  [dataset derivations within-order]
-  (let [sorted (if within-order (apply-order-by dataset within-order :within-order) dataset)]
-    (apply-set sorted derivations)))
+  "Window mode without :by — the entire dataset is one partition. Same output
+  contract as :by window mode (2.7.0): `:within-order` governs only the order
+  the window computation walks the rows; results are scattered back to their
+  original positions, so the output keeps **input row order** (use :order-by to
+  sort). Element-wise derivations are computed directly in input order;
+  window/aggregator derivations run over the (optionally sorted) single
+  partition; sequential (seq-of-pairs) derivations see earlier-derived columns.
+  Numeric derived columns are materialised off-heap by default, like the :by
+  fast path."
+  [dataset derivations within-order off-heap?]
+  (let [n (ds/row-count dataset)]
+    (if (zero? n)
+      dataset
+      (let [perm (or (when within-order (order-perm dataset within-order :within-order))
+                     (int-array (range n)))
+            bounds [[0 n]]]
+        (reduce (fn [d [col-kw dval]]
+                  (let [ast (deriv-ast dval)
+                        raw (if (element-wise-ast? ast)
+                              (derive-column d col-kw dval)
+                              (window-derive (ds/select-rows d perm) perm bounds col-kw dval))]
+                    (ds/add-column d (materialize-derived col-kw raw off-heap?))))
+                dataset
+                (if (map? derivations) (seq derivations) derivations))))))
 
 (defn prepare-grouping
   "Precompute the grouping + `:within-order` permutation for `dataset` so it can be
   reused across many `:set` + `:by` passes (e.g. a multi-pass per-entity ETL),
   amortising the grouping + sort that each pass would otherwise repeat. `by` is a
   non-empty vector of keyword column names; `within-order` is an optional sort spec
-  (same form as `:within-order`). Pass the result as `:grouping` to `dt`, in place of
-  `:by`/`:within-order`:
+  (same form as `:within-order`). Pass the result directly as `:by` to `dt`, in
+  place of the column vector + `:within-order`:
 
       (let [g (prepare-grouping ds [:gvkey] [(asc :datadate)])]
-        (-> ds (dt :set {…} :grouping g) (dt :set {…} :grouping g) …))
+        (-> ds (dt :set {…} :by g) (dt :set {…} :by g) …))
 
   The grouping stays valid for any dataset with the SAME rows in the SAME order —
   adding columns between passes is fine, since `:set :by` preserves input row order.
@@ -668,14 +732,20 @@
    (let [available (set (ds/column-names dataset))
          unknown (vec (remove available
                               (concat by (when within-order
-                                           (map #(if (keyword? %) % (:col %)) within-order)))))]
+                                           (map order-spec-col within-order)))))]
      (when (seq unknown)
        (throw (ex-info (str "Unknown column(s) " unknown " in prepare-grouping")
                        {:dt/error :unknown-column :dt/columns unknown
                         :dt/available (vec (sort available))})))
      (let [{:keys [perm bounds]} (group-perm dataset (vec by) within-order)]
-       {:by (vec by) :within-order within-order :perm perm :bounds bounds
+       {:dt/selector :grouping
+        :by (vec by) :within-order within-order :perm perm :bounds bounds
         :row-count (ds/row-count dataset)}))))
+
+(defn- grouping?
+  "True for a prepared grouping produced by `prepare-grouping` (accepted as :by)."
+  [x]
+  (and (map? x) (= :grouping (:dt/selector x))))
 
 (def ^:private shown-notes (atom #{}))
 
@@ -952,9 +1022,6 @@
   [col]
   {:order :desc :col col})
 
-(defn- normalise-order-spec [s]
-  (if (keyword? s) {:order :asc :col s} s))
-
 (defn- validate-order-specs
   "Validates :order-by / :within-order specs and returns them normalised. Each
   spec must be a bare column keyword or a map {:order :asc|:desc :col <col>}, and
@@ -974,18 +1041,16 @@
     (validate-select-cols dataset (map :col normalised) context)
     normalised))
 
-(defn- apply-order-by
-  "Sort `dataset` by `specs` (per-key :asc/:desc). Reads only the sort-key columns
-  and stable-sorts an index permutation with `clojure.core/compare` (nils first,
-  mixed asc/desc), then gathers via `ds/select-rows`. Avoids tech's row-map
-  `sort-by` path, which materialises a full row object per row even though only
-  the key columns are compared — catastrophic for wide datasets. `context` labels
+(defn- order-perm
+  "Stable sort permutation of `dataset`'s rows by `specs` (per-key :asc/:desc),
+  as an int-array, or nil when sorting is a no-op (fewer than 2 rows or no
+  specs). Reads only the sort-key columns and compares with
+  `clojure.core/compare` (nils first, mixed asc/desc). `context` labels
   validation errors (:order-by or :within-order)."
   [dataset specs context]
   (let [normalised (validate-order-specs dataset specs context)
         n          (ds/row-count dataset)]
-    (if (or (< n 2) (empty? normalised))
-      dataset
+    (when-not (or (< n 2) (empty? normalised))
       (let [key-vals (mapv (fn [{:keys [col]}] (vec (ds/column dataset col))) normalised)
             descs    (mapv #(= :desc (:order %)) normalised)
             nk       (count normalised)
@@ -998,7 +1063,17 @@
                                    c   (if (nth descs k) (- raw) raw)]
                                (if (zero? c) (recur (inc k)) c))
                              0))))]
-        (ds/select-rows dataset (sort cmp (range n)))))))
+        (int-array (sort cmp (range n)))))))
+
+(defn- apply-order-by
+  "Sort `dataset` by `specs` via `order-perm` + a single `ds/select-rows` gather.
+  Avoids tech's row-map `sort-by` path, which materialises a full row object per
+  row even though only the key columns are compared — catastrophic for wide
+  datasets."
+  [dataset specs context]
+  (if-let [p (order-perm dataset specs context)]
+    (ds/select-rows dataset p)
+    dataset))
 
 (defn- apply-take
   "Row limit. Positive `n` keeps the first `n` rows (head); negative keeps the
@@ -1092,25 +1167,82 @@
       :else
       (throw (ex-info "Invalid :select argument" {:selector selector})))))
 
+(def ^:private dt-query-keys
+  #{:where :set :agg :by :select :order-by :within-order :take :off-heap})
+
+(defn- dt-query-map
+  "Normalise dt's arguments to a single query map. Accepts kwargs
+  (:where p :by [...]), a single query map ({:where p :by [...]}), or kwargs
+  with a trailing map — and rejects unknown query keys with a structured
+  error + suggestion, instead of silently ignoring a typo like :wehre."
+  [args]
+  (let [query (cond
+                (and (= 1 (count args)) (map? (first args)))
+                (first args)
+
+                (even? (count args))
+                (apply array-map args)
+
+                (map? (last args))
+                (merge (apply array-map (butlast args)) (last args))
+
+                :else
+                (throw (ex-info "dt takes keyword/value pairs and/or a query map after the dataset."
+                                {:dt/error :invalid-dt-args :dt/args (vec args)})))
+        unknown (remove dt-query-keys (keys query))]
+    (when (seq unknown)
+      (let [suggestions (into {}
+                              (keep (fn [k]
+                                      (when (keyword? k)
+                                        (let [[best d] (->> dt-query-keys
+                                                            (map (fn [q] [q (expr/damerau-levenshtein (name k) (name q))]))
+                                                            (sort-by second)
+                                                            first)]
+                                          (when (<= d 2) [k best])))))
+                              unknown)]
+        (throw (ex-info (str "Unknown dt query key(s) " (vec unknown) "."
+                             (when (seq suggestions)
+                               (str " Did you mean: "
+                                    (clojure.string/join ", " (map (fn [[k v]] (str k " -> " v)) suggestions))
+                                    "?"))
+                             " Supported: " (vec (sort dt-query-keys)) ".")
+                        {:dt/error :unknown-query-key
+                         :dt/keys (vec unknown)
+                         :dt/suggestions suggestions
+                         :dt/supported (vec (sort dt-query-keys))}))))
+    query))
+
 (defn dt
-  "Query a dataset. Supported keywords: :where, :set, :agg, :by, :select, :order-by, :within-order, :take.
+  "Query a dataset. Supported keywords: :where, :set, :agg, :by, :select,
+  :order-by, :within-order, :take, :off-heap.
+
+  Arguments may be given as keyword/value pairs or as a single query map —
+  (dt ds :where p :by [:g] :agg {...}) and (dt ds {:where p :by [:g] :agg {...}})
+  are equivalent. With data-form expressions, a whole query is plain EDN data
+  that can be stored, merged, and built programmatically. Unknown query keys
+  throw a structured :unknown-query-key error (with a typo suggestion) instead
+  of being silently ignored.
 
   :where         - filter rows. Accepts a #dt/e expression, a runtime data-form
                    vector (e.g. [:= :tic ticker] — keywords are columns, anything
                    else is a literal value, so runtime values flow in without a
                    row-map), or a plain fn of the row map.
-  :set           - derive/update columns. Accepts map or vector-of-pairs.
+  :set           - derive/update columns. Accepts a map (simultaneous) or any
+                   seq of pairs (sequential — later pairs see earlier-derived columns).
                    When :set contains win/* functions, window mode is activated —
                    with :by, computes within groups; without :by, whole dataset is one partition.
-  :agg           - collapse to summary. Accepts map or vector-of-pairs. Use N for row count.
-  :by            - grouping for :agg or :set (partitioned window mode). Vector of keywords or fn of row.
-  :within-order  - sort within each partition (or whole dataset) before :set or :agg runs.
-                   Useful for window functions (win/lag, win/cumsum, ...) and for
-                   order-sensitive aggregations (first-val, last-val, OHLC patterns).
-                   With :set and :by: sorts within each group before window computation.
-                   With :set and no :by: sorts whole dataset before window computation.
-                   With :agg and :by: sorts within each group before aggregation.
-                   With :agg and no :by: sorts whole dataset before aggregation.
+  :agg           - collapse to summary. Accepts map or seq-of-pairs. Use (nrow)/[:nrow] for row count.
+  :by            - grouping for :agg or :set (partitioned window mode). A vector of
+                   keywords, a fn of the row, or (for :set) a prepared grouping from
+                   `prepare-grouping` — which bundles the group keys and the
+                   :within-order sort, amortising them across multi-pass transforms.
+  :within-order  - the order rows are WALKED within each partition (or across the
+                   whole dataset when :by is absent) while :set or :agg computes —
+                   for window functions (win/lag, win/cumsum, ...) and
+                   order-sensitive aggregations (first-val, last-val, OHLC).
+                   It never affects output row order: a :set query returns rows in
+                   input order regardless (use :order-by to sort output); an :agg
+                   query returns one row per group as usual.
   :select        - keep columns. Accepts: vector of kws, single kw, [:not kw ...],
                    regex, predicate fn, or map {old-kw new-kw} for rename-on-select.
   :order-by      - sort rows. Accepts a vector of (asc :col)/(desc :col) specs,
@@ -1119,72 +1251,74 @@
                    negative keeps the last |n| (tail), 0 yields no rows. |n| beyond
                    the row count returns all rows. Evaluated last, after :order-by —
                    e.g. :order-by [(asc :date)] :take -20 is \"the last 20 by date\".
-  :off-heap      - boolean, default true. For :set + :by (keyword-only :by, the fast
-                   window path), materialise numeric derived columns in off-heap native
-                   buffers (freed on GC, type-preserving int/float) instead of on the
-                   JVM heap — for wide per-group transforms this takes the result from
+  :off-heap      - boolean, default true. For window-mode :set (keyword-only :by
+                   fast path, prepared-grouping :by, or whole-dataset windows),
+                   materialise numeric derived columns in off-heap native buffers
+                   (freed on GC, type-preserving int/float) instead of on the JVM
+                   heap — for wide per-group transforms this takes the result from
                    gigabytes of heap to ~0. Pass :off-heap false for on-heap output.
-                   No effect on other query shapes or non-numeric derived columns.
-  :grouping      - a value from `prepare-grouping`, used in place of :by/:within-order
-                   for a :set. Reuses a precomputed grouping + sort permutation across
-                   many passes (a multi-pass per-entity ETL), amortising the per-call
-                   grouping. Must be reused on the same rows in the same order (adding
-                   columns is fine); mutually exclusive with :by/:within-order."
-  [dataset & {:keys [where set agg by select order-by within-order take off-heap grouping]
-              :or {off-heap true}}]
-  (when (and set agg)
-    (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
-                    {:dt/error :set-agg-conflict})))
-  (when (and (some? take) (not (integer? take)))
-    (throw (ex-info (str ":take requires an integer (got " (pr-str take)
-                         "). Positive = first n rows, negative = last n.")
-                    {:dt/error :invalid-take :dt/value take})))
-  (when (and within-order (not set) (not agg))
-    (throw (ex-info ":within-order requires :set or :agg."
-                    {:dt/error :within-order-invalid})))
-  (when grouping
-    (when (or agg (not set))
-      (throw (ex-info ":grouping requires :set (and is not for :agg)." {:dt/error :grouping-requires-set})))
-    (when (or by within-order)
-      (throw (ex-info ":grouping already encodes :by and :within-order — don't pass them alongside it."
-                      {:dt/error :grouping-conflict})))
-    (when (not= (:row-count grouping) (ds/row-count dataset))
-      (throw (ex-info (str ":grouping was prepared for " (:row-count grouping) " rows but the dataset has "
-                           (ds/row-count dataset) " — it must be reused on the same rows in the same order.")
-                      {:dt/error :grouping-row-mismatch
-                       :dt/expected (:row-count grouping) :dt/actual (ds/row-count dataset)}))))
-  (let [eff-by (if grouping (:by grouping) by)
-        eff-wo (if grouping (:within-order grouping) within-order)
-        set-has-win? (and set (derivations-have-win? set))
-        window-mode? (and eff-by set (not agg))]
-    (when (and where (expr-node? where))
-      (validate-no-win where :where))
-    (when (and set (not window-mode?) (not set-has-win?))
-      (validate-win-in-derivations set :set)
-      (validate-map-set-cross-refs set))
-    (when (and set window-mode?)
-      (validate-map-set-cross-refs set))
-    (when (and set set-has-win? (not by))
-      (validate-map-set-cross-refs set))
-    (when agg
-      (validate-win-in-derivations agg :agg))
-    (when (and agg (not by))
-      (info-note :agg-no-by "Aggregating over entire dataset. Use :by for group aggregation."))
-    (when window-mode?
-      (info-note :window-mode "Window mode: computing within groups, keeping all rows in input order.")
-      (when (not eff-wo)
-        (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
-    (when (and set-has-win? (not eff-by))
-      (info-note :window-mode-no-by "Window mode (whole dataset): computing over entire dataset, keeping all rows.")
-      (when (not within-order)
-        (info-note :window-no-order "Window mode using current row order. Use :within-order to sort.")))
-    (cond-> dataset
-      where (apply-where where)
-      (and set eff-by) (apply-group-set eff-by set eff-wo off-heap grouping)
-      (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order)
-      (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
-      (and agg by) (apply-group-agg by agg within-order)
-      (and agg (not by)) (apply-agg agg within-order)
-      select (apply-select select)
-      order-by (apply-order-by order-by :order-by)
-      (some? take) (apply-take take))))
+                   No effect on other query shapes or non-numeric derived columns."
+  [dataset & args]
+  (let [{:keys [where set agg by select order-by within-order take off-heap]
+         :or {off-heap true}} (dt-query-map args)
+        grouping (when (grouping? by) by)]
+    (when (and set agg)
+      (throw (ex-info "Cannot combine :set and :agg in the same dt call. Use -> threading for multi-step queries."
+                      {:dt/error :set-agg-conflict})))
+    (when (and (some? take) (not (integer? take)))
+      (throw (ex-info (str ":take requires an integer (got " (pr-str take)
+                           "). Positive = first n rows, negative = last n.")
+                      {:dt/error :invalid-take :dt/value take})))
+    (when (and within-order (not set) (not agg))
+      (throw (ex-info ":within-order requires :set or :agg."
+                      {:dt/error :within-order-invalid})))
+    (when grouping
+      (when (or agg (not set))
+        (throw (ex-info "a prepared grouping as :by requires :set (it is not for :agg)."
+                        {:dt/error :grouping-requires-set})))
+      (when within-order
+        (throw (ex-info "a prepared grouping already encodes :within-order — don't pass it alongside."
+                        {:dt/error :grouping-conflict})))
+      (when (not= (:row-count grouping) (ds/row-count dataset))
+        (throw (ex-info (str "the prepared grouping was built for " (:row-count grouping) " rows but the dataset has "
+                             (ds/row-count dataset) " — it must be reused on the same rows in the same order.")
+                        {:dt/error :grouping-row-mismatch
+                         :dt/expected (:row-count grouping) :dt/actual (ds/row-count dataset)}))))
+    (let [where (if (vector? where) (expr/data->ast where) where)
+          set (normalise-derivations set)
+          agg (normalise-derivations agg)
+          eff-by (if grouping (:by grouping) by)
+          eff-wo (if grouping (:within-order grouping) within-order)
+          set-has-win? (and set (derivations-have-win? set))
+          window-mode? (and eff-by set (not agg))]
+      (when (and where (expr-node? where))
+        (validate-no-win where :where))
+      (when (and set (not window-mode?) (not set-has-win?))
+        (validate-win-in-derivations set :set)
+        (validate-map-set-cross-refs set))
+      (when (and set window-mode?)
+        (validate-map-set-cross-refs set))
+      (when (and set set-has-win? (not by))
+        (validate-map-set-cross-refs set))
+      (when agg
+        (validate-win-in-derivations agg :agg))
+      (when (and agg (not by))
+        (info-note :agg-no-by "Aggregating over entire dataset. Use :by for group aggregation."))
+      (when window-mode?
+        (info-note :window-mode "Window mode: computing within groups, keeping all rows in input order.")
+        (when (not eff-wo)
+          (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
+      (when (and set-has-win? (not eff-by))
+        (info-note :window-mode-no-by "Window mode (whole dataset): computing over entire dataset, keeping all rows in input order.")
+        (when (not within-order)
+          (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
+      (cond-> dataset
+        where (apply-where where)
+        (and set eff-by) (apply-group-set eff-by set eff-wo off-heap grouping)
+        (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order off-heap)
+        (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
+        (and agg by) (apply-group-agg by agg within-order)
+        (and agg (not by)) (apply-agg agg within-order)
+        select (apply-select select)
+        order-by (apply-order-by order-by :order-by)
+        (some? take) (apply-take take)))))

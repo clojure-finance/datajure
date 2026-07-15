@@ -1027,14 +1027,15 @@
       (is (= 10 (nth (vec (:prev result)) 1)))
       (is (= 20 (nth (vec (:prev result)) 2)))))
 
-  (testing "win/rank without :by with :within-order"
+  (testing "win/rank without :by with :within-order — output keeps INPUT order (2.7.0)"
     (core/reset-notes!)
     (let [ds (ds/->dataset {:val [30 10 20]})
           result (core/dt ds
                           :within-order [(core/asc :val)]
                           :set {:rank #dt/e (win/rank :val)})]
-      (is (= [1 2 3] (vec (:rank result))))
-      (is (= [10 20 30] (vec (:val result))))))
+      ;; ranks computed over the sorted walk, scattered back to original rows
+      (is (= [3 1 2] (vec (:rank result))))
+      (is (= [30 10 20] (vec (:val result))))))
 
   (testing "composite win expression without :by"
     (core/reset-notes!)
@@ -1046,14 +1047,15 @@
       (is (= 10 (nth (vec (:chg result)) 1)))
       (is (= -5 (nth (vec (:chg result)) 2)))))
 
-  (testing ":within-order without :by works (sorts then applies set)"
+  (testing ":within-order without :by sets the computation order; output keeps input order (2.7.0)"
     (core/reset-notes!)
     (let [ds (ds/->dataset {:date [3 1 2] :price [105 100 110]})
           result (core/dt ds
                           :within-order [(core/asc :date)]
                           :set {:cum #dt/e (win/cumsum :price)})]
-      (is (= [100.0 210.0 315.0] (vec (:cum result))))
-      (is (= [1 2 3] (vec (:date result))))))
+      ;; cumsum walks by date (100, 110, 105 → 100, 210, 315), scattered back
+      (is (= [315.0 100.0 210.0] (vec (:cum result))))
+      (is (= [3 1 2] (vec (:date result))))))
 
   (testing ":within-order without :set or :agg throws"
     (is (thrown-with-msg? Exception #"requires :set or :agg"
@@ -1318,7 +1320,8 @@
           result (core/dt ds
                           :within-order [(core/asc :date)]
                           :set {:chg #dt/e (win/differ :signal)})]
-      (is (= [true false true] (vec (:chg result)))))))
+      ;; walked by date (A A B -> true false true), scattered to input order (2.7.0)
+      (is (= [true true false] (vec (:chg result)))))))
 
 (deftest win-ratio-zero-guard
   (testing "zero denominator produces nil, not Infinity"
@@ -1438,7 +1441,8 @@
           result (core/dt ds
                           :within-order [(core/asc :date)]
                           :set {:ma #dt/e (win/mavg :x 2)})]
-      (is (= [10.0 15.0 25.0] (vec (:ma result))))))
+      ;; walked by date (10 20 30 -> 10 15 25), scattered to input order (2.7.0)
+      (is (= [25.0 10.0 15.0] (vec (:ma result))))))
 
   (testing "composite: mavg used in arithmetic expression"
     (core/reset-notes!)
@@ -1533,9 +1537,10 @@
                           :within-order [(core/asc :date)]
                           :set {:f #dt/e (win/fills :x)})
           vals (vec (:f result))]
-      (is (nil? (first vals)))
+      ;; walked by date (nil nil 10 -> nil nil 10), scattered to input order (2.7.0)
+      (is (= 10.0 (first vals)))
       (is (nil? (second vals)))
-      (is (= 10.0 (nth vals 2))))))
+      (is (nil? (nth vals 2))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Aggregation helpers: first-val, last-val, wavg, wsum
@@ -1823,7 +1828,8 @@
     (core/reset-notes!)
     (let [ds (ds/->dataset {:x [3.0 1.0 2.0]})
           result (core/dt ds :within-order [(core/asc :x)] :set {:cs #dt/e (win/scan + :x)})]
-      (is (= [1.0 3.0 6.0] (vec (:cs result)))))))
+      ;; walked sorted (1 2 3 -> 1 3 6), scattered to input order (2.7.0)
+      (is (= [6.0 1.0 3.0] (vec (:cs result)))))))
 
 (deftest win-each-prior-ast-parsing
   (testing "subtraction op -> :each-prior node with op :- "
@@ -2491,11 +2497,10 @@
         (is (== 6.0 (:y_med r)))))
     (testing ":set data-form is element-wise (like :where)"
       (is (= [1.0 4.0 100.0] (vec ((core/dt d :set {:x2 [:* :x :x]}) :x2)))))
-    (testing "an aggregator is rejected in a :where data-form but allowed in :agg"
-      (is (= :unknown-data-op
-             (-> (try (core/dt d :where [:qnt :x 0.5]) nil
-                      (catch clojure.lang.ExceptionInfo e e))
-                 ex-data :dt/error))))))
+    (testing "aggregators compose in a :where data-form (parity with #dt/e)"
+      ;; rows above the column mean — inexpressible in the pre-2.7.0 data-form
+      (is (= [10.0]
+             (vec ((core/dt d :where [:> :x [:mn :x]]) :x)))))))
 
 (deftest cleaner-and-asinh-ops
   ;; §2.9 + §2.2: element-wise non-finite cleaners + stable asinh in #dt/e.
@@ -2553,21 +2558,21 @@
   (let [d (ds/->dataset {:k [:a :b :a :b :a] :t [1 1 2 2 3] :x [10.0 100.0 20.0 200.0 30.0]})
         g (core/prepare-grouping d [:k] [(core/asc :t)])
         derivs {:lg #dt/e (win/lag :x 1) :gm #dt/e (mn :x) :x2 #dt/e (* :x 2)}
-        via-g  (core/dt d :set derivs :grouping g)
+        via-g  (core/dt d :set derivs :by g)
         via-by (core/dt d :by [:k] :within-order [(core/asc :t)] :set derivs)]
-    (testing ":grouping gives identical results to :by/:within-order (original order)"
+    (testing "a prepared grouping as :by gives identical results to :by/:within-order (original order)"
       (is (= (mapv #(vec (via-by %)) [:k :lg :gm :x2])
              (mapv #(vec (via-g %)) [:k :lg :gm :x2]))))
     (testing "reusable across passes, including references to earlier-derived columns"
-      (let [p1 (core/dt d  :set {:lg #dt/e (win/lag :x 1)} :grouping g)
-            p2 (core/dt p1 :set {:lg2 #dt/e (win/lag :lg 1)} :grouping g)]
+      (let [p1 (core/dt d  :set {:lg #dt/e (win/lag :x 1)} :by g)
+            p2 (core/dt p1 :set {:lg2 #dt/e (win/lag :lg 1)} :by g)]
         (is (= [nil nil nil nil 10.0] (vec (p2 :lg2))))))
-    (testing "guards: row-count mismatch and :by/:within-order conflict throw"
+    (testing "guards: row-count mismatch and :within-order conflict throw"
       (is (= :grouping-row-mismatch
-             (try (core/dt (ds/head d 3) :set {:y #dt/e (* :x 2)} :grouping g) nil
+             (try (core/dt (ds/head d 3) :set {:y #dt/e (* :x 2)} :by g) nil
                   (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e))))))
       (is (= :grouping-conflict
-             (try (core/dt d :by [:k] :set {:y #dt/e (* :x 2)} :grouping g) nil
+             (try (core/dt d :by g :within-order [(core/asc :t)] :set {:y #dt/e (* :x 2)}) nil
                   (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
     (testing "prepare-grouping validates by/within-order columns"
       (is (thrown? clojure.lang.ExceptionInfo (core/prepare-grouping d [:nope] nil)))
@@ -2768,7 +2773,7 @@
            (-> (try (core/dt penguins :where [:= :tikker "x"]) nil
                     (catch clojure.lang.ExceptionInfo e e))
                ex-data :dt/error))))
-  (testing "unknown op → :unknown-data-op (aggregations / win etc. stay #dt/e-only)"
+  (testing "unknown op → :unknown-data-op (with suggestions)"
     (is (= :unknown-data-op
            (-> (try (core/dt penguins :where [:gt :mass 4000]) nil
                     (catch clojure.lang.ExceptionInfo e e))
@@ -2779,4 +2784,260 @@
                     (catch clojure.lang.ExceptionInfo e e))
                ex-data :dt/error)))))
 
+;; ---------------------------------------------------------------------------
+;; 2.7.0 step 1: nrow/N nullary op, seq-of-pairs :set/:agg, [:asc :col] specs
+;; ---------------------------------------------------------------------------
 
+(deftest nrow-nullary-op
+  (testing "#dt/e (nrow) / (N) is a real op: group count, whole-table, composed arithmetic"
+    (is (= [["Adelie" 2] ["Gentoo" 2] ["Chinstrap" 1]]
+           (mapv vec (ds/rowvecs (core/dt penguins :by [:species] :agg {:n #dt/e (nrow)})))))
+    (is (= [[5]] (mapv vec (ds/rowvecs (core/dt penguins :agg {:n #dt/e (N)})))))
+    (is (= [["Adelie" 1] ["Gentoo" 1] ["Chinstrap" 0]]
+           (mapv vec (ds/rowvecs (core/dt penguins :by [:species]
+                                          :agg {:n-peers #dt/e (- (nrow) 1)}))))))
+  (testing "data-form spellings [:nrow] and [:N]"
+    (is (= [["Adelie" 2 2] ["Gentoo" 2 2] ["Chinstrap" 1 1]]
+           (mapv vec (ds/rowvecs (core/dt penguins :by [:species]
+                                          :agg {:n [:nrow] :n2 [:N]}))))))
+  (testing "bare value-marker core/nrow still works alongside"
+    (is (= [["Adelie" 2] ["Gentoo" 2] ["Chinstrap" 1]]
+           (mapv vec (ds/rowvecs (core/dt penguins :by [:species] :agg {:n core/nrow}))))))
+  (testing "(nrow :col) is a read-time :wrong-arity error"
+    (is (= :wrong-arity
+           (-> (try (datajure.expr/read-expr '(nrow :mass)) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
+(deftest set-and-agg-accept-seq-of-pairs
+  (testing ":set accepts a lazy seq of pairs (programmatic generation, no `into {}`)"
+    (let [r (core/dt penguins :set (for [c [:mass :year]]
+                                     [(keyword (str (name c) "2")) [:sq c]]))]
+      (is (= [:species :mass :year :mass2 :year2] (vec (ds/column-names r))))
+      (is (= (mapv #(* % %) (vec (penguins :mass))) (vec (r :mass2))))))
+  (testing "seq-of-pairs :set keeps sequential semantics (later pair references earlier)"
+    (let [r (core/dt penguins :set (list [:m10 [:* :mass 10]]
+                                         [:m10+1 [:+ :m10 1]]))]
+      (is (= (mapv #(inc (* % 10)) (vec (penguins :mass))) (vec (r :m10+1))))))
+  (testing ":agg accepts a lazy seq of pairs"
+    (is (= [["Adelie" 3775.0 2007.5] ["Gentoo" 4900.0 2007.5] ["Chinstrap" 3500.0 2007.0]]
+           (mapv vec (ds/rowvecs
+                      (core/dt penguins :by [:species]
+                               :agg (for [c [:mass :year]]
+                                      [(keyword (str "mean-" (name c))) [:mn c]]))))))))
+
+(deftest order-specs-accept-data-form-vectors
+  (testing ":order-by accepts [:asc :col]/[:desc :col] alongside (asc …)/(desc …)"
+    (is (= [5000 4800 3800 3750 3500]
+           (vec ((core/dt penguins :order-by [[:desc :mass]]) :mass))))
+    (is (= (vec ((core/dt penguins :order-by [(core/desc :species) (core/asc :mass)]) :mass))
+           (vec ((core/dt penguins :order-by [[:desc :species] [:asc :mass]]) :mass)))))
+  (testing ":within-order accepts data-form specs (agg path and window fast path)"
+    (is (= [["Adelie" 3800] ["Gentoo" 5000] ["Chinstrap" 3500]]
+           (mapv vec (ds/rowvecs
+                      (core/dt penguins :by [:species] :within-order [[:desc :mass]]
+                               :agg {:top #dt/e (first-val :mass)})))))
+    (is (= (vec ((core/dt penguins :by [:species] :within-order [(core/asc :year)]
+                          :set {:r #dt/e (win/row-number :mass)}) :r))
+           (vec ((core/dt penguins :by [:species] :within-order [[:asc :year]]
+                          :set {:r #dt/e (win/row-number :mass)}) :r)))))
+  (testing "prepare-grouping accepts data-form specs"
+    (let [g1 (core/prepare-grouping penguins [:species] [(core/asc :year)])
+          g2 (core/prepare-grouping penguins [:species] [[:asc :year]])]
+      (is (= (vec ((core/dt penguins :set {:cs #dt/e (win/cumsum :mass)} :by g1) :cs))
+             (vec ((core/dt penguins :set {:cs #dt/e (win/cumsum :mass)} :by g2) :cs))))))
+  (testing "malformed data-form spec still throws :invalid-order-spec"
+    (is (= :invalid-order-spec
+           (-> (try (core/dt penguins :order-by [[:ascending :mass]]) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
+;; ---------------------------------------------------------------------------
+;; 2.7.0 step 2: data-form full parity with #dt/e — one expression language,
+;; two spellings. Every #dt/e op / special form has a keyword-vector spelling.
+;; ---------------------------------------------------------------------------
+
+(def ^:private parity-ds
+  (ds/->dataset {:g ["a" "a" "a" "b" "b"]
+                 :t [1 2 3 1 2]
+                 :x [1.0 2.0 4.0 10.0 20.0]
+                 :y [1.0 nil 3.0 ##Inf 5.0]}))
+
+(deftest data-form-window-op-parity
+  (testing "win/* data-forms == the #dt/e forms (incl. options maps and composition)"
+    (doseq [[df dfe] [[[:win/lag :x 1]                  #dt/e (win/lag :x 1)]
+                      [[:win/lag :x 1 {:fill 0}]        #dt/e (win/lag :x 1 {:fill 0})]
+                      [[:win/mavg :x 2 {:min-periods 2}] #dt/e (win/mavg :x 2 {:min-periods 2})]
+                      [[:win/rank :x]                   #dt/e (win/rank :x)]
+                      [[:- [:win/ratio :x] 1]           #dt/e (- (win/ratio :x) 1)]
+                      [[:win/grr :x]                    #dt/e (win/grr :x)]]]
+      (is (= (vec ((core/dt parity-ds :by [:g] :within-order [[:asc :t]] :set {:r df}) :r))
+             (vec ((core/dt parity-ds :by [:g] :within-order [[:asc :t]] :set {:r dfe}) :r)))
+          (pr-str df))))
+  (testing "[:win/scan] and [:win/each-prior] take the operator as a keyword"
+    (is (= (vec ((core/dt parity-ds :by [:g] :set {:w [:win/scan :* [:+ 1 [:div0 :x 10]]]}) :w))
+           (vec ((core/dt parity-ds :by [:g] :set {:w #dt/e (win/scan * (+ 1 (div0 :x 10)))}) :w))))
+    (is (= (vec ((core/dt parity-ds :by [:g] :set {:u [:win/each-prior :> :x]}) :u))
+           (vec ((core/dt parity-ds :by [:g] :set {:u #dt/e (win/each-prior > :x)}) :u)))))
+  (testing "a win/* data-form triggers window mode: whole-dataset and prepared-grouping paths"
+    (is (= (vec ((core/dt parity-ds :within-order [[:asc :t]] :set {:cs [:win/cumsum :x]}) :cs))
+           (vec ((core/dt parity-ds :within-order [(core/asc :t)] :set {:cs #dt/e (win/cumsum :x)}) :cs))))
+    (let [g (core/prepare-grouping parity-ds [:g] [[:asc :t]])]
+      (is (= (vec ((core/dt parity-ds :set {:l [:win/lag :x 1]} :by g) :l))
+             (vec ((core/dt parity-ds :by [:g] :within-order [[:asc :t]]
+                            :set {:l #dt/e (win/lag :x 1)}) :l))))))
+  (testing "a win/* data-form in :where is rejected like #dt/e (:win-outside-window)"
+    (is (= :win-outside-window
+           (-> (try (core/dt parity-ds :where [:> [:win/lag :x 1] 1]) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
+(deftest data-form-special-form-parity
+  (testing "if / cond / let / coalesce-finite / cut / xbar / row / stat data-forms == #dt/e"
+    (is (= (vec ((core/dt parity-ds :set {:c [:if [:> :x 3] "hi" "lo"]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (if (> :x 3) "hi" "lo")}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:cond [:> :x 15] "big" [:> :x 3] "mid" :else "sm"]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (cond (> :x 15) "big" (> :x 3) "mid" :else "sm")}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:let [:z [:* :x 2]] [:+ :z 1]]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (let [z (* :x 2)] (+ z 1))}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:coalesce-finite :y 0.0]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (coalesce-finite :y 0.0)}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:cut :x 2 :from [:= :g "a"]]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (cut :x 2 :from (= :g "a"))}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:xbar :x 3]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (xbar :x 3)}) :c))))
+    (is (= (vec ((core/dt parity-ds :set {:c [:row/sum :x :y]}) :c))
+           (vec ((core/dt parity-ds :set {:c #dt/e (row/sum :x :y)}) :c))))
+    (is (= (vec ((core/dt parity-ds :by [:g] :set {:c [:stat/demean :x]}) :c))
+           (vec ((core/dt parity-ds :by [:g] :set {:c #dt/e (stat/demean :x)}) :c))))))
+
+(deftest data-form-alias-parity
+  (testing "every full-name/concise alias works as a data-form op keyword"
+    (is (= (ds/rowvecs (core/dt parity-ds :by [:g]
+                                :agg {:f [:fst :x] :l [:lst :x] :m [:mean :x] :s [:sum :x]}))
+           (ds/rowvecs (core/dt parity-ds :by [:g]
+                                :agg {:f [:first-val :x] :l [:last-val :x] :m [:mn :x] :s [:sm :x]}))))
+    (is (= (vec ((core/dt parity-ds :by [:g] :agg {:n [:count-distinct :g]}) :n))
+           (vec ((core/dt parity-ds :by [:g] :agg {:n [:nuniq :g]}) :n))))))
+
+(deftest data-form-map-set-cross-reference
+  (testing "map-form :set cross-references are caught for data-forms too"
+    (is (= :map-set-cross-reference
+           (-> (try (core/dt parity-ds :set {:a [:* :x 2] :b [:+ :a 1]}) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error))))
+  (testing "vector-of-pairs data-forms are sequential (later refs earlier)"
+    (is (= [3.0 5.0 9.0 21.0 41.0]
+           (vec ((core/dt parity-ds :set [[:a [:* :x 2]] [:b [:+ :a 1]]]) :b))))))
+
+(deftest data-form-unknown-op-suggestions
+  (testing "unknown data-form op error carries Damerau-Levenshtein suggestions"
+    (let [e (try (core/dt parity-ds :where [:betwen? :x 1 2]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-data-op (:dt/error (ex-data e))))
+      (is (some #(= "between?" (str %)) (:dt/suggestions (ex-data e)))))))
+
+;; ---------------------------------------------------------------------------
+;; 2.7.0 step 3: dt accepts a query map; unknown query keys are rejected
+;; ---------------------------------------------------------------------------
+
+(deftest dt-query-map-form
+  (testing "a single query map is equivalent to kwargs"
+    (is (= (ds/rowvecs (core/dt penguins :where [:> :mass 3700] :by [:species] :agg {:n [:nrow]}))
+           (ds/rowvecs (core/dt penguins {:where [:> :mass 3700] :by [:species] :agg {:n [:nrow]}})))))
+  (testing "kwargs with a trailing map merge (CLJ-2603 style)"
+    (is (= (ds/rowvecs (core/dt penguins {:where [:> :mass 3700] :by [:species] :agg {:n [:nrow]}}))
+           (ds/rowvecs (core/dt penguins :where [:> :mass 3700] {:by [:species] :agg {:n [:nrow]}})))))
+  (testing "a query round-trips through EDN — queries are pure data"
+    (let [q (clojure.edn/read-string
+             "{:where [:> :mass 3700] :by [:species] :agg {:top [:first-val :mass]}
+               :within-order [[:desc :mass]] :order-by [[:asc :species]]}")]
+      (is (= [["Adelie" 3800] ["Gentoo" 5000]]
+             (mapv vec (ds/rowvecs (core/dt penguins q))))))))
+
+(deftest dt-unknown-query-key
+  (testing "a typo'd query key throws :unknown-query-key with a suggestion"
+    (let [e (try (core/dt penguins :wehre [:> :mass 3700]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :unknown-query-key (:dt/error (ex-data e))))
+      (is (= {:wehre :where} (:dt/suggestions (ex-data e))))))
+  (testing "same validation applies to the map form"
+    (is (= :unknown-query-key
+           (-> (try (core/dt penguins {:wehre [:> :mass 3700]}) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error))))
+  (testing "odd args without a trailing map → :invalid-dt-args"
+    (is (= :invalid-dt-args
+           (-> (try (core/dt penguins :where) nil
+                    (catch clojure.lang.ExceptionInfo e e))
+               ex-data :dt/error)))))
+
+;; ---------------------------------------------------------------------------
+;; 2.7.0 step 4: when-finite — NA-propagating guard (R ifelse(NA→NA) / p-ind)
+;; ---------------------------------------------------------------------------
+
+(deftest when-finite-guard
+  (let [d (ds/->dataset {:g [-2.0 0.0 3.0 nil ##Inf ##-Inf]})]
+    (testing "body where guard is finite; nil where guard is nil/NaN/±Inf"
+      (is (= [0.0 1.0 1.0 nil nil nil]
+             (vec ((core/dt d :set {:p #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))}) :p)))))
+    (testing "data-form spelling"
+      (is (= [0.0 1.0 1.0 nil nil nil]
+             (vec ((core/dt d :set {:p [:when-finite :g [:if [:>= :g 0] 1.0 0.0]]}) :p)))))
+    (testing "guard can be a computed expression via let (Piotroski P4 pattern)"
+      (is (= [0.0 nil 1.0]
+             (vec ((core/dt (ds/->dataset {:a [1.0 nil 5.0] :b [3.0 1.0 2.0]})
+                            :set {:p #dt/e (let [dd (- :a :b)]
+                                             (when-finite dd (if (> dd 0) 1.0 0.0)))}) :p)))))
+    (testing "element-wise in the :by fast path — computed in input order"
+      (is (= [1.0 nil 0.0]
+             (vec ((core/dt (ds/->dataset {:k ["a" "a" "b"] :g [1.0 nil -1.0]})
+                            :by [:k] :set {:p #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))}) :p)))))
+    (testing "wrong arity → read-time :wrong-arity"
+      (is (= :wrong-arity
+             (-> (try (datajure.expr/read-expr '(when-finite :g)) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
+
+;; ---------------------------------------------------------------------------
+;; 2.7.0 step 5 (BREAKING): whole-dataset window mode preserves input row order;
+;; a prepared grouping is passed as :by (the :grouping keyword is gone)
+;; ---------------------------------------------------------------------------
+
+(deftest whole-dataset-window-preserves-input-order
+  (let [d (ds/->dataset {:date [3 1 2] :price [105.0 100.0 110.0]})]
+    (testing "passthrough columns untouched; results scattered to original rows"
+      (let [r (core/dt d :within-order [[:asc :date]] :set {:cum #dt/e (win/cumsum :price)})]
+        (is (= [3 1 2] (vec (r :date))))
+        (is (= [315.0 100.0 210.0] (vec (r :cum))))))
+    (testing "identical to the single-group :by result (uniform semantics)"
+      (let [whole (core/dt d :within-order [[:asc :date]] :set {:l #dt/e (win/lag :price 1)})
+            grouped (core/dt (ds/add-column d (ds/new-column :one (repeat 3 1)))
+                             :by [:one] :within-order [[:asc :date]]
+                             :set {:l #dt/e (win/lag :price 1)})]
+        (is (= (vec (whole :l)) (vec (grouped :l))))))
+    (testing "sequential pairs still see earlier-derived window columns"
+      (is (= [630.0 200.0 420.0]
+             (vec ((core/dt d :within-order [[:asc :date]]
+                            :set [[:cum [:win/cumsum :price]] [:cum2 [:* :cum 2]]]) :cum2)))))
+    (testing "an order-sensitive aggregator broadcasts in input order"
+      (is (= [105.0 105.0 105.0]
+             (vec ((core/dt d :within-order [[:asc :date]]
+                            :set {:last #dt/e (last-val :price)}) :last)))))))
+
+(deftest prepared-grouping-as-by
+  (let [d (ds/->dataset {:k [:a :b :a] :t [2 1 1] :x [10.0 100.0 20.0]})
+        g (core/prepare-grouping d [:k] [(core/asc :t)])]
+    (testing "the grouping rides :by directly"
+      (is (= (vec ((core/dt d :by [:k] :within-order [(core/asc :t)] :set {:l #dt/e (win/lag :x 1)}) :l))
+             (vec ((core/dt d :by g :set {:l #dt/e (win/lag :x 1)}) :l)))))
+    (testing "the removed :grouping keyword is rejected with a structured error"
+      (is (= :unknown-query-key
+             (-> (try (core/dt d :set {:y [:* :x 2]} :grouping g) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))
+    (testing "a prepared grouping with :agg is rejected"
+      (is (= :grouping-requires-set
+             (-> (try (core/dt d :by g :agg {:n [:nrow]}) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
