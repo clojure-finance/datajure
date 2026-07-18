@@ -130,3 +130,78 @@
                (ds/update-column ds col-kw #(dtype/elemwise-cast % target-type)))
              dataset
              col-type-map))
+
+(defn blank->nil
+  "Convert empty and whitespace-only strings to missing values (mbmisc `emq2na`).
+  By default cleans every :string/:text column; an optional second arg restricts
+  the cleaning to specific columns (a keyword or vector of keywords). Non-string
+  values in the selected columns pass through unchanged."
+  ([dataset]
+   (blank->nil dataset
+               (filterv (fn [c] (contains? #{:string :text}
+                                           (dtype/elemwise-datatype (ds/column dataset c))))
+                        (ds/column-names dataset))))
+  ([dataset cols]
+   (let [cols (if (keyword? cols) [cols] cols)]
+     (reduce (fn [d c]
+               (let [rdr (dtype/->reader (ds/column d c))
+                     vals (mapv (fn [v] (when-not (and (string? v) (str/blank? v)) v))
+                                rdr)]
+                 (ds/add-or-update-column d (ds/new-column c vals))))
+             dataset
+             cols))))
+
+(defn- parse-numeric-value
+  "Leniently parse one value to a finite Double, or nil (mbmisc `destring`).
+  Numbers pass through as doubles. Strings are first tried verbatim (which
+  handles clean values including exponent notation like \"1.23e+5\"); on
+  failure, irrelevant characters (currency symbols, thousands separators,
+  units, footnote letters) are stripped and the remainder parsed. A string
+  that mixes exponent notation with junk is nil rather than silently
+  mangled, as are non-finite spellings (\"Inf\", \"NaN\") and strings with
+  no digits at all."
+  [v]
+  (cond
+    (nil? v) nil
+    (number? v) (double v)
+    :else
+    (let [s (str/trim (str v))
+          direct (try (Double/parseDouble s) (catch Exception _ nil))
+          d (or direct
+                ;; stripping would corrupt an exponent ("1.23e+5x" → "1.235") —
+                ;; refuse instead of guessing
+                (when-not (re-find #"[0-9][eE][+-]?[0-9]" s)
+                  (let [cleaned (-> s
+                                    (str/replace #"[^0-9.\-]" "")
+                                    (str/replace #"\.{2,}" "."))]
+                    (when (re-find #"[0-9]" cleaned)
+                      (try (Double/parseDouble cleaned) (catch Exception _ nil))))))]
+      (when (and d (Double/isFinite d)) d))))
+
+(defn parse-numeric
+  "Leniently parse string columns to numbers (mbmisc `destring`): strips
+  currency symbols, thousands separators, and trailing junk (\"$50,762.83a\"
+  → 50762.83), leaving unparseable values missing. `cols` is a keyword or
+  vector of keywords; already-numeric columns are left unchanged. A column
+  whose parsed values are all whole numbers becomes an integer column,
+  otherwise float.
+  Example: (parse-numeric ds [:price :volume])"
+  [dataset cols]
+  (let [cols (if (keyword? cols) [cols] cols)]
+    (reduce
+     (fn [d c]
+       (let [col (ds/column d c)]
+         (if (casting/numeric-type? (dtype/elemwise-datatype col))
+           d
+           (let [parsed (mapv parse-numeric-value (dtype/->reader col))
+                 present (remove nil? parsed)
+                 ;; 2^53: largest range where doubles represent integers exactly
+                 ints? (and (seq present)
+                            (every? (fn [^double x]
+                                      (and (== x (Math/rint x))
+                                           (<= (Math/abs x) 9.007199254740992E15)))
+                                    present))
+                 vals (if ints? (mapv #(some-> ^double % long) parsed) parsed)]
+             (ds/add-or-update-column d (ds/new-column c vals))))))
+     dataset
+     cols)))

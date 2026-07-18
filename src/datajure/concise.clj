@@ -58,7 +58,9 @@
 
 (def ^{:doc "Standardize a column: (x - mean) / sd. Delegates to `stat/stat-standardize`."} standardize stat/stat-standardize)
 (def ^{:doc "Demean a column: x - mean(x). Delegates to `stat/stat-demean`."} demean stat/stat-demean)
-(def ^{:doc "Winsorize a column at tail probability p. Delegates to `stat/stat-winsorize`. Args: col p."} winsorize stat/stat-winsorize)
+(def ^{:doc "Winsorize a column at tail probability p. Delegates to `stat/stat-winsorize`. Args: col p [{:tail :both/:lower/:upper}]."} winsorize stat/stat-winsorize)
+(def ^{:doc "Trim a column at tail probability p (outside values → nil). Delegates to `stat/stat-trim`. Args: col p."} trim stat/stat-trim)
+(def ^{:doc "Min-max rescale a column to [0,1] (or [lo,hi]). Delegates to `stat/stat-rescale`. Args: col [new-lo new-hi]."} rescale stat/stat-rescale)
 
 (def ^{:doc "Between column selector. Re-exported from `datajure.core/between`.
   Returns a selector map for use with :select in dt.

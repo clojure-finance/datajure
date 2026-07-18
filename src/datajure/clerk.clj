@@ -180,7 +180,7 @@
 (def ^:private win-op-display
   {:win/rank "win/rank" :win/dense-rank "win/dense-rank"
    :win/row-number "win/row-number"
-   :win/lag "win/lag" :win/lead "win/lead"
+   :win/lag "win/lag" :win/lead "win/lead" :win/tlag "win/tlag"
    :win/cumsum "win/cumsum" :win/cummin "win/cummin"
    :win/cummax "win/cummax" :win/cummean "win/cummean"
    :win/rleid "win/rleid"})

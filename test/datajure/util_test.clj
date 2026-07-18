@@ -171,3 +171,46 @@
         result (du/coerce-columns ds {:a :float64})]
     (is (= :float64 (dtype/elemwise-datatype (result :a))))
     (is (= :int64 (dtype/elemwise-datatype (result :b))))))
+
+(deftest blank->nil-basic
+  (let [ds (ds/->dataset {:name ["acme" "  " "" "zed"] :n [1 2 3 4]})
+        result (du/blank->nil ds)]
+    (testing "empty and whitespace-only strings become missing"
+      (is (= ["acme" nil nil "zed"] (vec (result :name)))))
+    (testing "non-string columns untouched"
+      (is (= [1 2 3 4] (vec (result :n)))))))
+
+(deftest blank->nil-column-subset
+  ;; whitespace-only strings — a bare "" is already missing at dataset
+  ;; construction (tech.ml.dataset maps it to nil), so it can't distinguish
+  ;; cleaned from untouched columns
+  (let [ds (ds/->dataset {:a ["  " "x"] :b ["  " "y"]})
+        result (du/blank->nil ds :a)]
+    (is (= [nil "x"] (vec (result :a))))
+    (is (= ["  " "y"] (vec (result :b))))))
+
+(deftest parse-numeric-basic
+  (let [ds (ds/->dataset {:px ["$1,234.50" "8" "n/a" "2.5e3"]})
+        result (du/parse-numeric ds :px)]
+    (testing "currency symbols / separators / junk stripped, unparseable → missing"
+      (is (= [1234.5 8.0 nil 2500.0] (vec (result :px)))))
+    (testing "mixed whole and fractional values give a float column"
+      (is (= :float64 (dtype/elemwise-datatype (result :px)))))))
+
+(deftest parse-numeric-integer-column
+  (let [ds (ds/->dataset {:n ["1,200" "8" "-3"]})
+        result (du/parse-numeric ds :n)]
+    (is (= [1200 8 -3] (vec (result :n))))
+    (is (= :int64 (dtype/elemwise-datatype (result :n))))))
+
+(deftest parse-numeric-edge-cases
+  (let [ds (ds/->dataset {:x ["hello" "-Inf" "NaN" "1.23e+5x" "2015-06-01" nil]})
+        result (du/parse-numeric ds :x)]
+    (testing "no-digit, non-finite, mangled-exponent, and date-like strings → missing"
+      (is (= [nil nil nil nil nil nil] (vec (result :x)))))))
+
+(deftest parse-numeric-numeric-column-unchanged
+  (let [ds (ds/->dataset {:x [1.5 2.5]})
+        result (du/parse-numeric ds :x)]
+    (is (= [1.5 2.5] (vec (result :x))))
+    (is (= :float64 (dtype/elemwise-datatype (result :x))))))

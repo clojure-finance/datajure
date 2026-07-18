@@ -853,6 +853,12 @@
   Delegates to `expr/col-min` (see `max*` for the `dfn/reduce-min` caveat)."
   expr/col-min)
 
+(def prod
+  "Product of the non-nil values in a column; nil for an all-missing column
+  (an empty product of 1 would be misleading when every observation is missing).
+  Delegates to `expr/col-prod` (shared with the #dt/e `prod` op)."
+  expr/col-prod)
+
 (def count*
   "Count of non-nil values in a column.
   Asterisk-suffixed to avoid shadowing `clojure.core/count`.

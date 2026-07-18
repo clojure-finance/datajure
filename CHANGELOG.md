@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`win/tlag` — date-value-aware lag window op** (mbmisc `lbd` / statar `tlag`). `#dt/e (win/tlag :x :year)` gives row *i* the value of `:x` at the row whose date equals `date − shift` — a **gap in the panel yields nil** instead of `win/lag`'s silent reach-back to the wrong period. Shift defaults to 1; a negative shift is a lead. Dates may be numbers (years, `xbar` buckets — plain subtraction) or `java.time` temporals shifted per a trailing options map (`{:unit :day}` default, `:week`, `:month`, `:quarter`, `:year`). Temporal matching is exact, so monthly panels keyed on month-end dates should tlag on a normalised month column (e.g. an `xbar` bucket). Duplicate dates within a partition throw a structured `:tlag-duplicate-dates` error; an unknown `:unit` throws `:tlag-unknown-unit`. Works in both partitioned (`:by`) and whole-dataset window mode, in `#dt/e` and data-forms (`[:win/tlag :x :date 1 {:unit :month}]`).
+- **`stat/trim` — quantile-based trimming.** `#dt/e (stat/trim :ret 0.01)` nils out values below the p-th or above the (1−p)-th percentile — the removal counterpart of `stat/winsorize` (mbmisc `trim`). nil-safe; NaN/±Inf are trimmed.
+- **`stat/rescale` — min-max rescaling.** `#dt/e (stat/rescale :x)` maps a column linearly to [0,1]; `(stat/rescale :x -1 1)` to an explicit range (mbmisc `mb.rescale` / scales::rescale). A constant column returns all nil (no defined scale, matching `standardize`'s zero-sd rule).
+- **One-sided winsorization.** `stat/winsorize` accepts a trailing options map: `{:tail :upper}` clips only the top tail, `{:tail :lower}` only the bottom (mbmisc `winsor.tp`/`winsor.bm`); default `{:tail :both}` is unchanged. Unknown `:tail` values throw a structured `:invalid-tail` error. `stat/trim` and `stat/rescale` get `trim`/`rescale` aliases in `datajure.concise`.
+- **`prod` — product aggregation** (mbmisc `mb.prod`). Skips nil; an all-missing column yields nil, **not** the empty-product 1. Available as `core/prod`, the `#dt/e` `prod` op, and the `[:prod :col]` data-form. The compounding idiom: `:agg {:gross #dt/e (prod (+ 1.0 :ret))}`.
+- **`util/blank->nil`** (mbmisc `emq2na`): empty and whitespace-only strings → missing, across all `:string`/`:text` columns by default or an explicit column subset. (A bare `""` is already missing at dataset construction; this catches the whitespace-only strings that survive it.)
+- **`util/parse-numeric`** (mbmisc `destring`): lenient string→number column parsing — strips currency symbols, thousands separators, and trailing junk (`"$1,234.50a"` → `1234.5`), leaves unparseable/non-finite values missing, refuses to mangle exponent-plus-junk strings (`"1.23e+5x"` → missing) rather than guessing, and produces an integer column when every parsed value is whole.
+
 ## [2.7.1] - 2026-07-15
 
 ### Changed

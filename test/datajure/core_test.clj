@@ -3087,3 +3087,86 @@
              (-> (try (core/dt d :by g :agg {:n [:nrow]}) nil
                       (catch clojure.lang.ExceptionInfo e e))
                  ex-data :dt/error))))))
+
+;; ---------------------------------------------------------------------------
+;; win/tlag — date-value-aware lag (mbmisc lbd / statar tlag)
+;; ---------------------------------------------------------------------------
+
+(deftest win-tlag-numeric-dates
+  (testing "lag by date value: gaps yield nil, row order is irrelevant"
+    (let [d (ds/->dataset {:id [:a :a :a :b :b]
+                           :year [2015 2016 2017 2015 2017]
+                           :x [1.0 2.0 3.0 10.0 30.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :year)} :by [:id])]
+      ;; firm b has no 2016, so 2017 gets nil (win/lag would wrongly reach 2015)
+      (is (= [nil 1.0 2.0 nil nil] (vec (:l r))))))
+  (testing "scrambled input order gives the same match"
+    (let [d (ds/->dataset {:id [:a :a :a] :year [2017 2015 2016] :x [3.0 1.0 2.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :year)} :by [:id])]
+      (is (= [2.0 nil 1.0] (vec (:l r))))))
+  (testing "explicit shift and negative shift (lead)"
+    (let [d (ds/->dataset {:id [:a :a :a] :year [2015 2016 2017] :x [1.0 2.0 3.0]})]
+      (is (= [nil nil 1.0] (vec (:l2 (core/dt d :set {:l2 #dt/e (win/tlag :x :year 2)} :by [:id])))))
+      (is (= [2.0 3.0 nil] (vec (:ld (core/dt d :set {:ld #dt/e (win/tlag :x :year -1)} :by [:id]))))))))
+
+(deftest win-tlag-temporal-dates
+  (testing "LocalDate with {:unit :month}: a gap month yields nil"
+    (let [dts (mapv #(java.time.LocalDate/parse %)
+                    ["2020-01-01" "2020-02-01" "2020-04-01" "2020-05-01"])
+          d (ds/->dataset {:id [:a :a :a :a] :date dts :x [1.0 2.0 3.0 4.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :date 1 {:unit :month})} :by [:id])]
+      (is (= [nil 1.0 nil 3.0] (vec (:l r))))))
+  (testing "default unit is :day"
+    (let [dts (mapv #(java.time.LocalDate/parse %) ["2020-01-01" "2020-01-02" "2020-01-04"])
+          d (ds/->dataset {:id [:a :a :a] :date dts :x [1.0 2.0 3.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :date)} :by [:id])]
+      (is (= [nil 1.0 nil] (vec (:l r)))))))
+
+(deftest win-tlag-nil-and-errors
+  (testing "nil dates yield nil and are never matched"
+    (let [d (ds/->dataset {:id [:a :a :a] :year [2015 nil 2016] :x [1.0 2.0 3.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :year)} :by [:id])]
+      (is (= [nil nil 1.0] (vec (:l r))))))
+  (testing "nil value at the matched date stays nil"
+    (let [d (ds/->dataset {:id [:a :a] :year [2015 2016] :x [nil 2.0]})
+          r (core/dt d :set {:l #dt/e (win/tlag :x :year)} :by [:id])]
+      (is (= [nil nil] (vec (:l r))))))
+  (testing "duplicate dates in a partition throw a structured error"
+    (let [d (ds/->dataset {:id [:a :a] :year [2015 2015] :x [1.0 2.0]})]
+      (is (= :tlag-duplicate-dates
+             (-> (try (core/dt d :set {:l #dt/e (win/tlag :x :year)} :by [:id]) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error)))))
+  (testing "unknown :unit throws a structured error"
+    (let [d (ds/->dataset {:id [:a] :date [(java.time.LocalDate/parse "2020-01-01")] :x [1.0]})]
+      (is (= :tlag-unknown-unit
+             (-> (try (core/dt d :set {:l #dt/e (win/tlag :x :date 1 {:unit :fortnight})} :by [:id]) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
+
+(deftest win-tlag-data-form
+  (testing "[:win/tlag …] data-form matches #dt/e, including the opts map"
+    (let [dts (mapv #(java.time.LocalDate/parse %) ["2020-01-01" "2020-02-01"])
+          d (ds/->dataset {:id [:a :a] :date dts :x [1.0 2.0]})]
+      (is (= (vec (:l (core/dt d :set {:l #dt/e (win/tlag :x :date 1 {:unit :month})} :by [:id])))
+             (vec (:l (core/dt d :set [[:l [:win/tlag :x :date 1 {:unit :month}]]] :by [:id]))))))))
+
+;; ---------------------------------------------------------------------------
+;; prod — product aggregation (mbmisc mb.prod)
+;; ---------------------------------------------------------------------------
+
+(deftest prod-aggregation
+  (testing "core/prod skips nil; all-missing column is nil, not 1"
+    (is (= 24 (core/prod [2 3 4])))
+    (is (= 8 (core/prod [2 nil 4])))
+    (is (nil? (core/prod [nil nil]))))
+  (testing "prod in :agg with :by, and the compounding use case"
+    (let [d (ds/->dataset {:g [:a :a :b] :x [2.0 3.0 5.0]})
+          r (core/dt d :agg {:p #dt/e (prod :x)} :by [:g])]
+      (is (= [6.0 5.0] (vec (:p r)))))
+    (let [d (ds/->dataset {:g [:a :a :a] :ret [0.10 -0.05 0.02]})
+          r (core/dt d :agg {:gross #dt/e (prod (+ 1.0 :ret))} :by [:g])]
+      (is (< (Math/abs (- (* 1.10 0.95 1.02) (double (first (:gross r))))) 1e-12))))
+  (testing "prod as an :agg data-form"
+    (let [d (ds/->dataset {:g [:a :a] :x [2.0 4.0]})]
+      (is (= [8.0] (vec (:p (core/dt d :agg [[:p [:prod :x]]] :by [:g]))))))))

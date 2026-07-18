@@ -84,6 +84,87 @@
                             fill
                             (nth rdr target)))))))
 
+(def ^:private tlag-units
+  "Temporal units accepted by win-tlag's `:unit` option, mapped to ChronoUnit.
+  `:quarter` has no ChronoUnit — it is handled as 3 months."
+  {:day java.time.temporal.ChronoUnit/DAYS
+   :week java.time.temporal.ChronoUnit/WEEKS
+   :month java.time.temporal.ChronoUnit/MONTHS
+   :year java.time.temporal.ChronoUnit/YEARS})
+
+(defn- tlag-shifted-key
+  "The date-key a row must match to be `shift` periods before `v`.
+  Numbers shift by plain subtraction (normalised to double, matching the
+  index keys); temporal values shift via java.time arithmetic per `unit`."
+  [v shift unit]
+  (if (number? v)
+    (- (double v) (double shift))
+    (let [n (long shift)]
+      (if (= unit :quarter)
+        (.minus ^java.time.temporal.Temporal v (* 3 n) java.time.temporal.ChronoUnit/MONTHS)
+        (.minus ^java.time.temporal.Temporal v n ^java.time.temporal.ChronoUnit (tlag-units unit))))))
+
+(defn win-tlag
+  "Date-value-aware lag (mbmisc `lbd` / statar `tlag`): row i gets the value of
+  `col` at the row whose `date-col` equals date[i] minus `shift` periods — nil
+  when no such row exists. Unlike the positional `win/lag`, a gap in the panel
+  yields nil instead of silently reaching back to the wrong period. A negative
+  `shift` is a lead. `shift` defaults to 1.
+
+  `date-col` values may be numbers (plain subtraction — years, xbar buckets,
+  encoded periods) or java.time temporals, shifted per the `:unit` option
+  (`:day` default, `:week`, `:month`, `:quarter`, `:year`). Exact-match caveat:
+  calendar arithmetic must land on a date present in the data — for monthly
+  panels keyed on month-END dates, tlag on a normalised month column (e.g. an
+  `xbar` bucket) rather than the raw date.
+
+  Dates must be unique within the partition (aggregate duplicates first, e.g.
+  `:agg` by the keys); duplicates throw a structured :tlag-duplicate-dates
+  error. nil dates yield nil and are never matched against.
+
+  #dt/e: (win/tlag :x :year) / (win/tlag :ret :date 1 {:unit :month})"
+  ([col date-col] (win-tlag col date-col 1 nil))
+  ([col date-col shift] (win-tlag col date-col shift nil))
+  ([col date-col shift opts]
+   (let [rdr (dtype/->reader col)
+         drdr (dtype/->reader date-col)
+         n (dtype/ecount rdr)
+         unit (:unit opts :day)]
+     (when (not= n (dtype/ecount drdr))
+       (throw (ex-info (str "win/tlag: value column and date column have different "
+                            "lengths (" n " vs " (dtype/ecount drdr) ").")
+                       {:dt/error :unequal-column-lengths
+                        :dt/lengths [n (dtype/ecount drdr)]})))
+     (when-not (number? shift)
+       (throw (ex-info (str "win/tlag: shift must be a number; got " (pr-str shift) ".")
+                       {:dt/error :tlag-invalid-shift :dt/shift shift})))
+     (when-not (contains? tlag-units (if (= unit :quarter) :month unit))
+       (throw (ex-info (str "win/tlag: unknown :unit " (pr-str unit)
+                            ". Supported: :day :week :month :quarter :year.")
+                       {:dt/error :tlag-unknown-unit :dt/unit unit})))
+     (let [key-of (fn [v] (if (number? v) (double v) v))
+           idx-map (loop [i 0 m (transient {})]
+                     (if (= i n)
+                       (persistent! m)
+                       (let [dv (nth drdr i)]
+                         (if (nil? dv)
+                           (recur (inc i) m)
+                           (let [k (key-of dv)]
+                             (if (some? (get m k))
+                               (throw (ex-info
+                                       (str "win/tlag: duplicate date value " (pr-str dv)
+                                            " in partition — dates must be unique per "
+                                            "partition. Aggregate duplicates first "
+                                            "(e.g. :agg by the id/date keys).")
+                                       {:dt/error :tlag-duplicate-dates
+                                        :dt/date-value dv}))
+                               (recur (inc i) (assoc! m k i))))))))]
+       (dtype/make-reader :object n
+                          (let [dv (nth drdr idx)]
+                            (when (some? dv)
+                              (when-let [j (get idx-map (tlag-shifted-key dv shift unit))]
+                                (nth rdr j)))))))))
+
 (defn win-cumsum
   "Cumulative sum. nil values treated as 0.
   [10 20 30] -> [10 30 60]

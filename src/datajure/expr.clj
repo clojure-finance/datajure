@@ -43,6 +43,7 @@
    'win/row-number :win/row-number
    'win/lag :win/lag
    'win/lead :win/lead
+   'win/tlag :win/tlag
    'win/cumsum :win/cumsum
    'win/cummin :win/cummin
    'win/cummax :win/cummax
@@ -68,6 +69,7 @@
    :win/row-number win/win-row-number
    :win/lag win/win-lag
    :win/lead win/win-lead
+   :win/tlag win/win-tlag
    :win/cumsum win/win-cumsum
    :win/cummin win/win-cummin
    :win/cummax win/win-cummax
@@ -115,13 +117,17 @@
   "Maps stat/* source symbols to canonical keyword op names."
   {'stat/standardize :stat/standardize
    'stat/demean :stat/demean
-   'stat/winsorize :stat/winsorize})
+   'stat/winsorize :stat/winsorize
+   'stat/trim :stat/trim
+   'stat/rescale :stat/rescale})
 
 (def ^:private stat-op-table
   "Maps stat op keywords to runtime functions from datajure.stat."
   {:stat/standardize stat/stat-standardize
    :stat/demean stat/stat-demean
-   :stat/winsorize stat/stat-winsorize})
+   :stat/winsorize stat/stat-winsorize
+   :stat/trim stat/stat-trim
+   :stat/rescale stat/stat-rescale})
 
 (defn count-distinct
   "Count of distinct non-nil values in a column."
@@ -206,6 +212,14 @@
   [col]
   (count (remove nil? (dtype/->reader col))))
 
+(defn col-prod
+  "Product of the non-nil values in a column; nil for an all-missing column
+  (mbmisc `mb.prod` — NOT `prod`'s empty-product 1, which is misleading when
+  every observation is missing). Backs the #dt/e `:prod` op and `core/prod`."
+  [col]
+  (let [vs (remove nil? (dtype/->reader col))]
+    (when (seq vs) (reduce * vs))))
+
 (defn div0
   "Nil-safe scalar division: returns nil when the numerator or denominator is nil,
   or the denominator is zero; otherwise `num` / `den` as a double. Non-numeric
@@ -288,6 +302,7 @@
    :sd dfn/standard-deviation
    :mx col-max
    :mi col-min
+   :prod col-prod
    :variance dfn/variance
    :ct count-non-nil
    :in (fn [col s]
@@ -311,7 +326,7 @@
    ;; full-name aliases for the aggregation ops (datajure.core names), so both
    ;; (mn :x) and (mean :x) work inside #dt/e
    'mean :mn, 'sum :sm, 'median :md, 'stddev :sd, 'variance :variance
-   'max* :mx, 'min* :mi, 'count* :ct, 'ct :ct
+   'max* :mx, 'min* :mi, 'count* :ct, 'ct :ct, 'prod :prod
    ;; concise aliases for the remaining aggregation ops, so the full datajure.concise
    ;; vocabulary works inside #dt/e (e.g. both (count-distinct :x) and (nuniq :x))
    'nuniq :nuniq, 'fst :first-val, 'lst :last-val, 'wa :wavg, 'ws :wsum

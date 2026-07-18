@@ -308,7 +308,26 @@ Available via `win/*` inside `#dt/e`. Work in `:set` context — with `:by` for 
         :prev   #dt/e (win/lag :price 1)})
 ```
 
-Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`, `win/grr`.
+Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/tlag`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`, `win/grr`.
+
+### Date-Aware Lag (`win/tlag`)
+
+`win/lag` is positional — in a panel with gaps it silently reaches back to the wrong period. `win/tlag` lags by **date value**: row *i* gets the value at the row whose date equals `date - shift`, and a missing period yields `nil`:
+
+```clojure
+;; firm B has no 2016 → its 2017 row gets nil (win/lag would return the 2015 value)
+(dt ds :by [:gvkey] :set {:l-at #dt/e (win/tlag :at :fyear)})       ;; shift defaults to 1
+(dt ds :by [:gvkey] :set {:l4 #dt/e (win/tlag :saleq :qtr 4)})      ;; 4 periods back
+(dt ds :by [:id] :set {:nxt #dt/e (win/tlag :x :year -1)})          ;; negative shift = lead
+```
+
+Dates may be numbers (years, `xbar` buckets, encoded periods — plain subtraction) or `java.time` temporals, shifted per an options map: `{:unit :day}` (default), `:week`, `:month`, `:quarter`, `:year`:
+
+```clojure
+(dt ds :by [:permno] :set {:l-ret #dt/e (win/tlag :ret :month-start 1 {:unit :month})})
+```
+
+Temporal matching is exact — calendar arithmetic must land on a date present in the data. For monthly panels keyed on month-*end* dates (last trading day), tlag on a normalised month column (e.g. an `xbar` bucket) instead of the raw date. Dates must be unique within each partition; duplicates throw a structured `:tlag-duplicate-dates` error (aggregate them first).
 
 ### Adjacent-Element Ops
 
@@ -411,6 +430,16 @@ Column-level transforms via `stat/*` inside `#dt/e`. All are nil-safe — nil va
 ;; Winsorize at 1% tails — clips to [p, 1-p] percentile bounds
 (dt ds :set {:wr #dt/e (stat/winsorize :ret 0.01)})
 
+;; One-sided winsorization — clip only the top (or bottom) tail
+(dt ds :set {:wr #dt/e (stat/winsorize :ret 0.01 {:tail :upper})})
+
+;; Trim at 1% tails — outside values become nil (removed, not clipped)
+(dt ds :set {:tr #dt/e (stat/trim :ret 0.01)})
+
+;; Min-max rescale to [0,1] (or an explicit [lo hi])
+(dt ds :set {:r01 #dt/e (stat/rescale :score)
+             :r11 #dt/e (stat/rescale :score -1 1)})
+
 ;; Compose with arithmetic
 (dt ds :set {:scaled #dt/e (* 2 (stat/demean :x))})
 
@@ -418,7 +447,7 @@ Column-level transforms via `stat/*` inside `#dt/e`. All are nil-safe — nil va
 (dt ds :by [:date] :set {:z #dt/e (stat/standardize :signal)})
 ```
 
-Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`.
+Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`, `stat/trim`, `stat/rescale`. A constant column has no defined scale, so `rescale` returns all nil (matching `standardize`'s zero-sd behavior).
 
 ## Joins
 
@@ -593,6 +622,8 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 (du/mark-duplicates ds [:id :date])             ;; adds :duplicate? column
 (du/drop-constant-columns ds)                   ;; remove zero-variance
 (du/coerce-columns ds {:year :int64 :mass :float64})
+(du/blank->nil ds)                              ;; ""/whitespace-only strings → missing
+(du/parse-numeric ds [:price :volume])          ;; "$1,234.50a" → 1234.5, "n/a" → missing
 ```
 
 `clean-column-names` preserves non-ASCII characters (CJK, accented Latin, Cyrillic, Greek) — `"市值 (HKD millions)!"` becomes `:市值-hkd-millions`.
@@ -914,7 +945,7 @@ The DSL adds only parsing and dispatch overhead; all computation is delegated to
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `qnt`, `stddev`, `variance`, `max*`, `min*`, `count*`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `qnt`, `stddev`, `variance`, `max*`, `min*`, `count*`, `prod`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |

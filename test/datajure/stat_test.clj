@@ -232,3 +232,86 @@
                   :stat/args [{:node/type :col :col/name :x}]}]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown stat op"
                           (expr/compile-expr bad-node)))))
+
+;; ---------------------------------------------------------------------------
+;; stat/trim — quantile-based trimming (mbmisc trim)
+;; ---------------------------------------------------------------------------
+
+(deftest stat-trim-basic
+  (let [col (-> (ds/->dataset {:x [1.0 2.0 3.0 4.0 100.0]}) :x)
+        r (col->vec (stat/stat-trim col 0.2))]
+    (testing "values outside the [p, 1-p] quantiles become nil; the middle survives"
+      (is (nil? (first r)))
+      (is (nil? (last r)))
+      (is (= [2.0 3.0 4.0] (subvec r 1 4))))))
+
+(deftest stat-trim-nil-handling
+  (testing "nil preserved, all-nil column stays all-nil"
+    (is (= [nil nil 2.0 3.0 nil nil]
+           (col->vec (stat/stat-trim [nil 1.0 2.0 3.0 100.0 nil] 0.25))))
+    (is (= [nil nil] (col->vec (stat/stat-trim [nil nil] 0.1))))))
+
+(deftest stat-trim-in-dt
+  (let [d (ds/->dataset {:x [1.0 2.0 3.0 4.0 100.0]})
+        r (core/dt d :set {:t #dt/e (stat/trim :x 0.2)})]
+    (is (= [nil 2.0 3.0 4.0 nil] (col->vec (:t r))))
+    (testing "data-form spelling matches"
+      (is (= (col->vec (:t r))
+             (col->vec (:t (core/dt d :set [[:t [:stat/trim :x 0.2]]]))))))))
+
+;; ---------------------------------------------------------------------------
+;; stat/rescale — min-max rescaling (mbmisc mb.rescale / scales::rescale)
+;; ---------------------------------------------------------------------------
+
+(deftest stat-rescale-basic
+  (testing "default target range [0,1]"
+    (is (= [0.0 0.5 1.0] (col->vec (stat/stat-rescale [0.0 5.0 10.0])))))
+  (testing "explicit target range"
+    (is (= [-1.0 0.0 1.0] (col->vec (stat/stat-rescale [0.0 5.0 10.0] -1.0 1.0)))))
+  (testing "nil preserved"
+    (is (= [0.0 nil 1.0] (col->vec (stat/stat-rescale [0.0 nil 10.0])))))
+  (testing "constant column → all nil (no defined scale)"
+    (is (= [nil nil nil] (col->vec (stat/stat-rescale [5.0 5.0 5.0])))))
+  (testing "all-nil column stays all-nil"
+    (is (= [nil nil] (col->vec (stat/stat-rescale [nil nil]))))))
+
+(deftest stat-rescale-in-dt
+  (let [d (ds/->dataset {:x [2.0 4.0 6.0]})]
+    (is (= [0.0 0.5 1.0] (col->vec (:r (core/dt d :set {:r #dt/e (stat/rescale :x)})))))
+    (is (= [0.0 50.0 100.0]
+           (col->vec (:r (core/dt d :set {:r #dt/e (stat/rescale :x 0 100)})))))))
+
+;; ---------------------------------------------------------------------------
+;; stat/winsorize :tail option (mbmisc winsor.bm / winsor.tp)
+;; ---------------------------------------------------------------------------
+
+(deftest stat-winsorize-tail-option
+  (let [col (-> (ds/->dataset {:x [1.0 2.0 3.0 4.0 100.0]}) :x)]
+    (testing ":upper clips only the top tail"
+      (is (= [1.0 2.0 3.0 4.0 4.0]
+             (col->vec (stat/stat-winsorize col 0.25 {:tail :upper})))))
+    (testing ":lower clips only the bottom tail"
+      (is (= [2.0 2.0 3.0 4.0 100.0]
+             (col->vec (stat/stat-winsorize col 0.25 {:tail :lower})))))
+    (testing ":both (and the 2-arity default) clip both tails identically"
+      (is (= (col->vec (stat/stat-winsorize col 0.25))
+             (col->vec (stat/stat-winsorize col 0.25 {:tail :both})))))
+    (testing "unknown :tail throws a structured error"
+      (is (= :invalid-tail
+             (-> (try (stat/stat-winsorize col 0.25 {:tail :top}) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
+
+(deftest stat-winsorize-tail-in-dt
+  (let [d (ds/->dataset {:x [1.0 2.0 3.0 4.0 100.0]})]
+    (is (= [1.0 2.0 3.0 4.0 4.0]
+           (col->vec (:w (core/dt d :set {:w #dt/e (stat/winsorize :x 0.25 {:tail :upper})})))))))
+
+;; ---------------------------------------------------------------------------
+;; Concise aliases for the new transforms
+;; ---------------------------------------------------------------------------
+
+(deftest concise-trim-rescale-aliases
+  (let [col (-> (ds/->dataset {:x [1.0 2.0 3.0 4.0 100.0]}) :x)]
+    (is (= (col->vec (stat/stat-trim col 0.2)) (col->vec (c/trim col 0.2))))
+    (is (= (col->vec (stat/stat-rescale col)) (col->vec (c/rescale col))))))
