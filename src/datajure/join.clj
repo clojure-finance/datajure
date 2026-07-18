@@ -37,6 +37,18 @@
   [k]
   (when k (if (keyword? k) [k] (vec k))))
 
+(defn- semi-anti-indices
+  "Row indices of `left` whose key tuple is present (`keep-present?` true — semi)
+  or absent (false — anti) in `right`, preserving left row order."
+  [left right left-keys right-keys keep-present?]
+  (let [r-tuples (key-tuples right right-keys)
+        readers (mapv #(ds/column left %) left-keys)
+        n (ds/row-count left)]
+    (int-array (filter (fn [i]
+                         (= keep-present?
+                            (contains? r-tuples (mapv #(nth % i) readers))))
+                       (range n)))))
+
 (defn- col-datatype [dataset col-kw]
   (some-> (ds/column dataset col-kw) meta :datatype))
 
@@ -223,7 +235,8 @@
     :on        — column keyword or vector of keywords (same name in both datasets)
     :left-on   — column keyword(s) for left dataset (use with :right-on)
     :right-on  — column keyword(s) for right dataset (use with :left-on)
-    :how       — join type: :inner (default), :left, :right, :outer, :asof, :window
+    :how       — join type: :inner (default), :left, :right, :outer, :asof, :window,
+                 :semi, :anti, :cross
     :validate  — cardinality check: :1:1, :1:m, :m:1, :m:m (not for :window)
     :report    — if true, print merge diagnostics (not for :window)
     :direction — (asof only) :backward (default), :forward, or :nearest.
@@ -247,7 +260,23 @@
                  Empty windows return nil for #dt/e exprs; plain fns receive a
                  0-row sub-dataset and return their natural result (e.g. nrow -> 0).
 
-  Must provide either :on or both :left-on and :right-on.
+  Must provide either :on or both :left-on and :right-on (except :how :cross,
+  which takes no keys).
+
+  Semi / anti join (:how :semi / :anti):
+    Filtering joins (dplyr semi_join/anti_join): the result has left's columns
+    only, in left row order, each left row at most once. :semi keeps left rows
+    whose key tuple exists in right; :anti keeps those whose key tuple does not.
+    The canonical keep-groups-with-≥-N-rows idiom:
+      (join ds (dt ds :by [:permno] :agg {:n [:nrow]} :where [:>= :n 24])
+            :on :permno :how :semi)
+    Key matching uses value equality — a long 1 and a double 1.0 do not match;
+    coerce key columns to a common type first (util/coerce-columns).
+
+  Cross join (:how :cross):
+    Cartesian product — every left row paired with every right row (row count
+    multiplies; no explosion guard). Right columns whose names collide with
+    left are prefixed right. (e.g. :right.x), matching the as-of convention.
 
   As-of join (:how :asof):
     The last column in :on (or :left-on/:right-on) is the asof column;
@@ -267,18 +296,57 @@
         right-keys (or (normalize-keys on) (normalize-keys right-on))]
 
     ;; --- shared validation ---
+    (when-not (#{:inner :left :right :outer :asof :window :semi :anti :cross} how-kw)
+      (throw (ex-info (str "Unknown join type: " how-kw
+                           ". Must be :inner, :left, :right, :outer, :asof, :window, "
+                           ":semi, :anti, or :cross.")
+                      {:dt/error :join-unknown-how :dt/how how-kw})))
     (when (and on (or left-on right-on))
       (throw (ex-info "Cannot combine :on with :left-on/:right-on"
                       {:dt/error :join-invalid-keys})))
-    (when (and (not on) (not (and left-on right-on)))
-      (throw (ex-info "Must provide either :on or both :left-on and :right-on"
-                      {:dt/error :join-missing-keys})))
-    (when-not (#{:inner :left :right :outer :asof :window} how-kw)
-      (throw (ex-info (str "Unknown join type: " how-kw
-                           ". Must be :inner, :left, :right, :outer, :asof, or :window.")
-                      {:dt/error :join-unknown-how :dt/how how-kw})))
+    (if (= how-kw :cross)
+      (when (or on left-on right-on)
+        (throw (ex-info ":how :cross is a Cartesian product and takes no join keys — omit :on/:left-on/:right-on."
+                        {:dt/error :join-invalid-keys :dt/how :cross})))
+      (when (and (not on) (not (and left-on right-on)))
+        (throw (ex-info "Must provide either :on or both :left-on and :right-on"
+                        {:dt/error :join-missing-keys}))))
 
     (cond
+      ;; --- :cross dispatch ---
+      (= how-kw :cross)
+      (do
+        (when (or validate report)
+          (throw (ex-info ":validate/:report are key-based and do not apply to :how :cross."
+                          {:dt/error :join-invalid-option :dt/how :cross})))
+        (ds-join/pd-merge left right {:how :cross}))
+
+      ;; --- :semi / :anti dispatch ---
+      (#{:semi :anti} how-kw)
+      (do
+        (when validate
+          (when-not (#{:1:1 :1:m :m:1 :m:m} validate)
+            (throw (ex-info (str "Unknown :validate value: " validate
+                                 ". Must be :1:1, :1:m, :m:1, or :m:m.")
+                            {:dt/error :join-unknown-validate :dt/validate validate})))
+          (when (and (#{:1:1 :1:m} validate) (has-duplicate-keys? left left-keys))
+            (throw (ex-info (str "Cardinality violation: left dataset has duplicate keys "
+                                 "(expected " validate ", left side must be unique).")
+                            {:dt/error :join-cardinality-violation
+                             :dt/validate validate
+                             :dt/side :left
+                             :dt/keys left-keys})))
+          (when (and (#{:1:1 :m:1} validate) (has-duplicate-keys? right right-keys))
+            (throw (ex-info (str "Cardinality violation: right dataset has duplicate keys "
+                                 "(expected " validate ", right side must be unique).")
+                            {:dt/error :join-cardinality-violation
+                             :dt/validate validate
+                             :dt/side :right
+                             :dt/keys right-keys}))))
+        (when report
+          (print-report left right left-keys right-keys))
+        (ds/select-rows left (semi-anti-indices left right left-keys right-keys
+                                                (= how-kw :semi))))
       ;; --- :asof dispatch ---
       (= how-kw :asof)
       (let [tol (resolve-tolerance tolerance left right left-keys right-keys)]

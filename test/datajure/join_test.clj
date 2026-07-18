@@ -58,8 +58,9 @@
                         (join lhs rhs :how :inner))))
 
 (deftest error-unknown-how-test
+  ;; :cross used to be the "unknown type" example here — it's a real join type now
   (is (thrown-with-msg? Exception #"Unknown join type"
-                        (join lhs rhs :on :id :how :cross))))
+                        (join lhs rhs :on :id :how :diagonal))))
 
 (deftest composable-with-dt-test
   (let [result (-> (join lhs rhs :on :id :how :left)
@@ -391,3 +392,74 @@
       (is (= ["A" "B"] (vec (:sym result))))
       (is (= [20.0 200.0] (vec (:mean-bid result))))
       (is (= [3 3] (vec (:n result)))))))
+
+;; ---------------------------------------------------------------------------
+;; Semi / anti / cross joins
+;; ---------------------------------------------------------------------------
+
+(deftest semi-join-basic
+  (let [l (ds/->dataset {:id ["a" "b" "c" "a"] :x [1 2 3 4]})
+        r (ds/->dataset {:id ["a" "c" "c"] :y [10 30 31]})
+        s (join l r :on :id :how :semi)]
+    (testing "keeps left rows with a matching key — left columns only, left order, no duplication"
+      (is (= [:id :x] (vec (ds/column-names s))))
+      (is (= [["a" 1] ["c" 3] ["a" 4]] (ds/rowvecs s))))
+    (testing "empty right → empty result"
+      (is (zero? (ds/row-count (join l (ds/->dataset {:id [] :y []}) :on :id :how :semi)))))))
+
+(deftest anti-join-basic
+  (let [l (ds/->dataset {:id ["a" "b" "c" "a"] :x [1 2 3 4]})
+        r (ds/->dataset {:id ["a" "c" "c"] :y [10 30 31]})]
+    (testing "keeps left rows WITHOUT a matching key"
+      (is (= [["b" 2]] (ds/rowvecs (join l r :on :id :how :anti)))))
+    (testing "empty right → left unchanged"
+      (is (= (ds/rowvecs l)
+             (ds/rowvecs (join l (ds/->dataset {:id [] :y []}) :on :id :how :anti)))))))
+
+(deftest semi-anti-multi-key-and-left-on
+  (let [l (ds/->dataset {:id ["a" "a" "b"] :yr [1 2 1] :x [10 20 30]})
+        r (ds/->dataset {:id ["a" "b"] :yr [2 2] :y [1 2]})]
+    (testing "multi-column keys match as tuples"
+      (is (= [["a" 2 20]] (ds/rowvecs (join l r :on [:id :yr] :how :semi))))
+      (is (= [["a" 1 10] ["b" 1 30]] (ds/rowvecs (join l r :on [:id :yr] :how :anti))))))
+  (testing ":left-on/:right-on spelling"
+    (let [l (ds/->dataset {:id ["a" "b"] :x [1 2]})
+          r (ds/->dataset {:key ["b"] :y [9]})]
+      (is (= [["b" 2]] (ds/rowvecs (join l r :left-on :id :right-on :key :how :semi)))))))
+
+(deftest semi-join-group-filter-idiom
+  (testing "keep groups with >= n rows: agg + where + semi-join back"
+    (let [d (ds/->dataset {:id ["a" "a" "a" "b" "c" "c"] :x [1 2 3 4 5 6]})
+          big (core/dt (core/dt d :by [:id] :agg {:n [:nrow]}) :where [:>= :n 2])
+          r (join d big :on :id :how :semi)]
+      (is (= ["a" "a" "a" "c" "c"] (vec (:id r)))))))
+
+(deftest semi-anti-validate
+  (let [l (ds/->dataset {:id ["a"] :x [1]})
+        r (ds/->dataset {:id ["a" "a"] :y [1 2]})]
+    (testing ":validate applies (duplicate right keys violate :m:1)"
+      (is (= :join-cardinality-violation
+             (try (join l r :on :id :how :semi :validate :m:1) nil
+                  (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error))))))
+    (testing "result itself is unaffected by right-side duplicates"
+      (is (= [["a" 1]] (ds/rowvecs (join l r :on :id :how :semi)))))))
+
+(deftest cross-join-basic
+  (let [l (ds/->dataset {:x [1 2] :z [10 20]})
+        r (ds/->dataset {:x [:p :q]})
+        c (join l r :how :cross)]
+    (testing "Cartesian product; colliding right columns prefixed right."
+      (is (= 4 (ds/row-count c)))
+      (is (= [:x :z :right.x] (vec (ds/column-names c))))
+      (is (= [[1 10 :p] [1 10 :q] [2 20 :p] [2 20 :q]] (ds/rowvecs c)))))
+  (testing "keys with :cross throw; :validate/:report with :cross throw"
+    (let [l (ds/->dataset {:x [1]}) r (ds/->dataset {:y [1]})
+          err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error))))]
+      (is (= :join-invalid-keys (err #(join l r :on :x :how :cross))))
+      (is (= :join-invalid-option (err #(join l r :how :cross :validate :1:1))))
+      (is (= :join-invalid-option (err #(join l r :how :cross :report true)))))))
+
+(deftest join-unknown-how-lists-new-types
+  (is (= :join-unknown-how
+         (try (join (ds/->dataset {:x [1]}) (ds/->dataset {:x [1]}) :on :x :how :smei) nil
+              (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error))))))

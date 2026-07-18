@@ -60,6 +60,7 @@
    'win/mmax :win/mmax
    'win/ema :win/ema
    'win/fills :win/fills
+   'win/bfill :win/bfill
    'win/grr :win/grr})
 
 (def ^:private win-op-table
@@ -86,6 +87,7 @@
    :win/mmax win/win-mmax
    :win/ema win/win-ema
    :win/fills win/win-fills
+   :win/bfill win/win-bfill
    :win/grr win/win-grr})
 
 (defn win-op-fn

@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.1"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.2"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -308,7 +308,7 @@ Available via `win/*` inside `#dt/e`. Work in `:set` context — with `:by` for 
         :prev   #dt/e (win/lag :price 1)})
 ```
 
-Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/tlag`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/scan`, `win/each-prior`, `win/grr`.
+Functions: `win/rank`, `win/dense-rank`, `win/row-number`, `win/lag`, `win/lead`, `win/tlag`, `win/cumsum`, `win/cummin`, `win/cummax`, `win/cummean`, `win/rleid`, `win/delta`, `win/ratio`, `win/differ`, `win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`, `win/ema`, `win/fills`, `win/bfill`, `win/scan`, `win/each-prior`, `win/grr`.
 
 ### Date-Aware Lag (`win/tlag`)
 
@@ -370,12 +370,17 @@ For a **multi-pass** per-entity transform (many sequential `:set :by` passes ove
 
 It's valid for any dataset with the same rows in the same order (adding columns is fine). On a real 2.1M-row × 45k-firm 10-pass transform this cut the run ~2.6×.
 
-### Forward-Fill
+### Fills (Forward / Backward)
 
 ```clojure
 (dt ds :by [:permno] :within-order [(asc :date)]
-    :set {:price #dt/e (win/fills :price)})       ;; carry forward last known
+    :set {:price #dt/e (win/fills :price)             ;; carry forward last known
+          :capped #dt/e (win/fills :price {:limit 3}) ;; carry at most 3 rows into a gap
+          :next  #dt/e (win/bfill :price)             ;; carry backward (NOCB)
+          :both  #dt/e (win/fills (win/bfill :price))}) ;; NOCB then LOCF, by nesting
 ```
+
+`:limit` (bare number shorthand: `(win/fills :price 3)`) is a **partial** fill — the value is carried up to n positions into each nil run and the rest of the run stays nil, matching pandas `ffill(limit=n)` (deliberately *not* zoo's all-or-nothing `maxgap`). The finance use case: quarterly data carried at most 4 periods, then it goes stale. Both directions take the same option; combos compose by nesting, no combo API needed.
 
 ### Cumulative Scan
 
@@ -451,7 +456,7 @@ Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`, `stat/trim`, `st
 
 ## Joins
 
-Standalone function with cardinality validation and merge diagnostics. Supports regular joins (`:inner`, `:left`, `:right`, `:outer`), as-of joins (`:asof`, with `:direction` and `:tolerance`), and window joins (`:window`, aggregates over matched sub-datasets).
+Standalone function with cardinality validation and merge diagnostics. Supports regular joins (`:inner`, `:left`, `:right`, `:outer`), filtering joins (`:semi`, `:anti`), the Cartesian product (`:cross`), as-of joins (`:asof`, with `:direction` and `:tolerance`), and window joins (`:window`, aggregates over matched sub-datasets).
 
 ```clojure
 (require '[datajure.join :refer [join]])
@@ -465,6 +470,24 @@ Standalone function with cardinality validation and merge diagnostics. Supports 
 (-> (join X Y :on :id :how :left :validate :m:1)
     (dt :where #dt/e (> :year 2008)
         :agg {:total #dt/e (sm :revenue)}))
+```
+
+Filtering joins (dplyr `semi_join`/`anti_join`) keep or drop left rows by key existence in the right dataset — left columns only, left row order, no duplication:
+
+```clojure
+(join X universe :on :permno :how :semi)      ;; keep rows in the universe
+(join X blacklist :on :permno :how :anti)     ;; drop blacklisted rows
+
+;; The keep-groups-with-≥-N-rows idiom: agg → where → semi-join back
+(-> (dt X :by [:permno] :agg {:n [:nrow]})
+    (dt :where [:>= :n 24])
+    (as-> big (join X big :on :permno :how :semi)))
+```
+
+`:cross` takes no keys and pairs every left row with every right row (colliding right columns are prefixed `right.`):
+
+```clojure
+(join firms scenarios :how :cross)
 ```
 
 ## As-of Joins
@@ -610,6 +633,21 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
 ```
 
 `cast` options: `:id` (required), `:from` (required), `:value` (required), `:agg` (fn applied to a vector of values when multiple rows share the same id+from combination; default: first value), `:fill` (value for missing cells; default: nil).
+
+### Panel Gap-Filling (`tsfill`)
+
+Stata's `tsfill` — essentially tidyr's `complete` for panel time series. Expands each group to a regular date grid, inserting missing rows (nil everywhere except the keys), so positional windows and `win/fills`-style carrying become safe:
+
+```clojure
+(require '[datajure.reshape :refer [tsfill]])
+
+(tsfill ds {:by [:gvkey] :date :fyear})                            ;; yearly, step 1
+(tsfill ds {:by [:permno] :date :month-start :every :month
+            :carry [:ticker]})                                     ;; carry IDs across inserted rows
+(tsfill ds {:by [:permno] :date :date :grid trading-days})         ;; explicit grid (e.g. trading days)
+```
+
+Semantics: the grid spans each group's own min..max date (no rows before a group's first or after its last observation); **union** with existing rows — off-grid rows are kept, never dropped; nil-date rows are dropped (they can't be placed); nil group keys and duplicate (key, date) combinations throw structured errors; `:carry` columns are backward- then forward-filled per group (NOCB→LOCF). Output is sorted by [keys, date]. Temporal grids match exactly, so month-end-keyed panels should be normalised first (an `xbar` bucket) — same caveat as `win/tlag`.
 
 ## Utilities
 
@@ -825,6 +863,8 @@ Short aliases for power users (q / data.table users in particular):
 | `standardize` | stat/stat-standardize |
 | `demean`      | stat/stat-demean |
 | `winsorize`   | stat/stat-winsorize |
+| `trim`        | stat/stat-trim |
+| `rescale`     | stat/stat-rescale |
 | `between`     | positional range selector |
 
 Both `nrow` (discoverable) and `N` (terse, q/data.table style) live in `datajure.core`; `N` is also re-exported from `datajure.concise`. Since 2.7.0 row count is also a real nullary op — `#dt/e (nrow)` / `#dt/e (N)` / data-form `[:nrow]` — so it composes in arithmetic: `#dt/e (- (nrow) 1)` for peer counts.

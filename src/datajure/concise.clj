@@ -21,6 +21,8 @@
     standardize = stat/stat-standardize
     demean      = stat/stat-demean
     winsorize   = stat/stat-winsorize
+    trim        = stat/stat-trim
+    rescale     = stat/stat-rescale
 
   Column selectors:
     between = positional range selector (core/between)

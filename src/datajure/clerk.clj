@@ -183,7 +183,8 @@
    :win/lag "win/lag" :win/lead "win/lead" :win/tlag "win/tlag"
    :win/cumsum "win/cumsum" :win/cummin "win/cummin"
    :win/cummax "win/cummax" :win/cummean "win/cummean"
-   :win/rleid "win/rleid"})
+   :win/rleid "win/rleid"
+   :win/fills "win/fills" :win/bfill "win/bfill"})
 
 (def ^:private row-op-display
   {:row/sum "row/sum" :row/mean "row/mean"

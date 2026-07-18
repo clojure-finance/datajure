@@ -3170,3 +3170,51 @@
   (testing "prod as an :agg data-form"
     (let [d (ds/->dataset {:g [:a :a] :x [2.0 4.0]})]
       (is (= [8.0] (vec (:p (core/dt d :agg [[:p [:prod :x]]] :by [:g]))))))))
+
+;; ---------------------------------------------------------------------------
+;; win/fills :limit + win/bfill (mbmisc h.locf / h.nocb; pandas ffill limit)
+;; ---------------------------------------------------------------------------
+
+(deftest win-fills-limit
+  (let [ds (ds/->dataset {:g [:a :a :a :a :a :a] :x [1.0 nil nil nil 4.0 nil]})]
+    (testing "unlimited fill unchanged (back-compat)"
+      (is (= [1.0 1.0 1.0 1.0 4.0 4.0]
+             (vec (:f (core/dt ds :set {:f #dt/e (win/fills :x)} :by [:g]))))))
+    (testing "partial fill: carry at most :limit positions into a run (NOT zoo all-or-nothing)"
+      (is (= [1.0 1.0 1.0 nil 4.0 4.0]
+             (vec (:f (core/dt ds :set {:f #dt/e (win/fills :x {:limit 2})} :by [:g]))))))
+    (testing "bare number shorthand"
+      (is (= [1.0 1.0 nil nil 4.0 4.0]
+             (vec (:f (core/dt ds :set {:f #dt/e (win/fills :x 1)} :by [:g]))))))
+    (testing "invalid limit / misspelled options key → structured error"
+      (doseq [bad [{:lmit 3} 0 -1 "3"]]
+        (is (= :fills-invalid-limit
+               (try (vec (datajure.window/win-fills [1 nil] bad)) nil
+                    (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error)))))))))
+
+(deftest win-bfill-basic
+  (let [ds (ds/->dataset {:g [:a :a :a :a :a] :x [nil 1.0 nil nil 4.0]})]
+    (testing "backward fill; leading gap filled from the next value"
+      (is (= [1.0 1.0 4.0 4.0 4.0]
+             (vec (:b (core/dt ds :set {:b #dt/e (win/bfill :x)} :by [:g]))))))
+    (testing ":limit applies backwards"
+      (is (= [1.0 1.0 nil 4.0 4.0]
+             (vec (:b (core/dt ds :set {:b #dt/e (win/bfill :x {:limit 1})} :by [:g]))))))
+    (testing "trailing nils remain nil"
+      (let [d (ds/->dataset {:g [:a :a :a] :x [1.0 nil nil]})]
+        (is (= [1.0 nil nil]
+               (vec (:b (core/dt d :set {:b #dt/e (win/bfill :x)} :by [:g])))))))
+    (testing "per-partition: fill does not leak across groups"
+      (let [d (ds/->dataset {:g [:a :a :b :b] :x [nil 1.0 nil 2.0]})]
+        (is (= [1.0 1.0 2.0 2.0]
+               (vec (:b (core/dt d :set {:b #dt/e (win/bfill :x)} :by [:g])))))))))
+
+(deftest win-fills-bfill-nesting
+  (testing "NOCB→LOCF combo by nesting — no combo API needed"
+    (let [d (ds/->dataset {:g [:a :a :a :a] :x [nil 2.0 nil nil]})]
+      (is (= [2.0 2.0 2.0 2.0]
+             (vec (:f (core/dt d :set {:f #dt/e (win/fills (win/bfill :x))} :by [:g])))))))
+  (testing "data-form spelling with options map"
+    (let [d (ds/->dataset {:g [:a :a :a] :x [1.0 nil nil]})]
+      (is (= (vec (:f (core/dt d :set {:f #dt/e (win/fills :x {:limit 1})} :by [:g])))
+             (vec (:f (core/dt d :set [[:f [:win/fills :x {:limit 1}]]] :by [:g]))))))))

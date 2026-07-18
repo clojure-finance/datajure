@@ -4,7 +4,7 @@
             [tech.v3.dataset :as ds]
             [tech.v3.datatype.functional :as dfn]
             [datajure.core :as core]
-            [datajure.reshape :refer [melt cast]]))
+            [datajure.reshape :as reshape :refer [melt cast]]))
 
 (def ^:private wide-ds
   (ds/->dataset {:species ["Adelie" "Gentoo"]
@@ -162,3 +162,77 @@
 (deftest cast-missing-value-error
   (is (thrown? clojure.lang.ExceptionInfo
                (cast (ds/->dataset {:a [1]}) {:id [:a] :from :a}))))
+
+;; ---------------------------------------------------------------------------
+;; tsfill — panel gap-filling (Stata tsfill / tidyr complete)
+;; ---------------------------------------------------------------------------
+
+(deftest tsfill-numeric-basic
+  (let [d (ds/->dataset {:id ["b" "a" "a" "b"] :year [2019 2015 2018 2017] :x [9.0 1.0 4.0 7.0]})
+        r (reshape/tsfill d {:by :id :date :year})]
+    (testing "per-group grid from each group's own min..max, default step 1"
+      (is (= ["a" "a" "a" "a" "b" "b" "b"] (vec (:id r))))
+      (is (= [2015 2016 2017 2018 2017 2018 2019] (vec (:year r))))
+      (is (= [1.0 nil nil 4.0 7.0 nil 9.0] (vec (:x r)))))
+    (testing "column order preserved"
+      (is (= [:id :year :x] (vec (ds/column-names r)))))))
+
+(deftest tsfill-temporal-and-carry
+  (let [ld #(java.time.LocalDate/parse %)
+        d (ds/->dataset {:id ["a" "a" "a"]
+                         :m [(ld "2020-01-01") (ld "2020-04-01") (ld "2020-02-15")]
+                         :name ["acme" "acme" "acme2"]
+                         :x [1.0 4.0 99.0]})
+        r (reshape/tsfill d {:by [:id] :date :m :every :month :carry [:name]})]
+    (testing "union semantics: the off-grid 02-15 row is KEPT, grid rows inserted"
+      (is (= [(ld "2020-01-01") (ld "2020-02-01") (ld "2020-02-15") (ld "2020-03-01") (ld "2020-04-01")]
+             (vec (:m r))))
+      (is (= [1.0 nil 99.0 nil 4.0] (vec (:x r)))))
+    (testing ":carry fills the inserted rows (NOCB→LOCF)"
+      (is (= ["acme" "acme2" "acme2" "acme" "acme"] (vec (:name r)))))))
+
+(deftest tsfill-quarter-and-float-step
+  (let [ld #(java.time.LocalDate/parse %)]
+    (testing ":quarter unit (3 months)"
+      (let [d (ds/->dataset {:q [(ld "2020-01-01") (ld "2020-10-01")] :x [1.0 4.0]})]
+        (is (= [(ld "2020-01-01") (ld "2020-04-01") (ld "2020-07-01") (ld "2020-10-01")]
+               (vec (:q (reshape/tsfill d {:date :q :every :quarter})))))))
+    (testing "fractional numeric step (yearqtr-style), no accumulation drift"
+      (let [d (ds/->dataset {:q [2020.0 2020.75] :x [1.0 4.0]})]
+        (is (= [2020.0 2020.25 2020.5 2020.75]
+               (vec (:q (reshape/tsfill d {:date :q :every 0.25})))))))))
+
+(deftest tsfill-explicit-grid
+  (testing ":grid clipped to each group's [min,max]; whole dataset when no :by"
+    (let [d (ds/->dataset {:t [1 5] :x [10.0 50.0]})
+          r (reshape/tsfill d {:date :t :grid [1 2 3 5 8]})]
+      (is (= [1 2 3 5] (vec (:t r))))
+      (is (= [10.0 nil nil 50.0] (vec (:x r)))))))
+
+(deftest tsfill-nil-dates-and-empty
+  (testing "nil-date rows are dropped (documented); empty dataset passes through"
+    (let [d (ds/->dataset {:id ["a" "a" "a"] :y [1 nil 3] :x [1.0 2.0 3.0]})]
+      (is (= [1 2 3] (vec (:y (reshape/tsfill d {:by :id :date :y}))))))
+    (is (zero? (ds/row-count (reshape/tsfill (ds/->dataset {:id [] :y []}) {:by :id :date :y}))))))
+
+(deftest tsfill-errors
+  (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error))))]
+    (testing "duplicate (key, date) throws"
+      (is (= :tsfill-duplicate-dates
+             (err #(reshape/tsfill (ds/->dataset {:id ["a" "a"] :y [1 1] :x [1 2]})
+                                   {:by :id :date :y})))))
+    (testing "nil group key throws"
+      (is (= :tsfill-nil-key
+             (err #(reshape/tsfill (ds/->dataset {:id ["a" nil] :y [1 2] :x [1 2]})
+                                   {:by :id :date :y})))))
+    (testing ":every type mismatches throw"
+      (is (= :tsfill-invalid-every
+             (err #(reshape/tsfill (ds/->dataset {:y [1 2] :x [1 2]}) {:date :y :every :month}))))
+      (is (= :tsfill-invalid-every
+             (err #(reshape/tsfill (ds/->dataset {:m [(java.time.LocalDate/now)] :x [1]})
+                                   {:date :m :every 2})))))
+    (testing "missing :date and unknown columns throw"
+      (is (= :tsfill-missing-date
+             (err #(reshape/tsfill (ds/->dataset {:y [1]}) {}))))
+      (is (= :unknown-column
+             (err #(reshape/tsfill (ds/->dataset {:y [1]}) {:date :z})))))))

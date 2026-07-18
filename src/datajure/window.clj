@@ -530,22 +530,75 @@
                   :else (let [e (+ (* a (double v)) (* (- 1.0 a) prev))]
                           (recur (inc i) e (conj acc e)))))))))))
 
+(defn- fill-limit
+  "Normalise a fill op's optional trailing arg to a positive long carry limit.
+  A bare number or {:limit n} → n; nil/absent → unlimited. A non-positive
+  limit, a non-number, or an options map without :limit is an error — a map
+  like {:lmit 3} silently meaning \"unlimited\" would be a footgun."
+  [fn-name opt]
+  (let [limit (cond
+                (nil? opt) Long/MAX_VALUE
+                (number? opt) (long opt)
+                (and (map? opt) (contains? opt :limit)) (long (:limit opt))
+                :else (throw (ex-info (str fn-name ": expected a bare number or an options map "
+                                           "with :limit; got " (pr-str opt) ".")
+                                      {:dt/error :fills-invalid-limit :dt/opt opt})))]
+    (if (pos? limit)
+      limit
+      (throw (ex-info (str fn-name ": :limit must be positive; got " limit ".")
+                      {:dt/error :fills-invalid-limit :dt/limit limit})))))
+
 (defn win-fills
   "Forward-fill nil values with the last non-nil value.
   Leading nils (before the first non-nil) remain nil.
   Matches q's fills convention.
-  [1 nil nil 4 nil] -> [1 1 1 4 4]"
-  [col]
-  (let [n (dtype/ecount col)
-        rdr (dtype/->reader col)]
-    (dtype/->reader
-     (vec (loop [i 0 last-val nil acc []]
-            (if (= i n)
-              acc
-              (let [v (nth rdr i)]
-                (if (some? v)
-                  (recur (inc i) v (conj acc v))
-                  (recur (inc i) last-val (conj acc last-val))))))))))
+
+  An optional limit — a bare number or {:limit n} — carries the value at most
+  n positions into each nil run, leaving the rest of the run nil (partial
+  fill: pandas `ffill(limit=n)` / mbmisc `h.locf`; deliberately NOT zoo's
+  all-or-nothing `maxgap`). Default: unlimited.
+
+  [1 nil nil 4 nil]           -> [1 1 1 4 4]
+  [1 nil nil 4 nil] {:limit 1} -> [1 1 nil 4 4]"
+  ([col] (win-fills col nil))
+  ([col opt]
+   (let [limit (fill-limit "win/fills" opt)
+         n (dtype/ecount col)
+         rdr (dtype/->reader col)]
+     (dtype/->reader
+      (vec (loop [i 0 last-val nil carried 0 acc []]
+             (if (= i n)
+               acc
+               (let [v (nth rdr i)]
+                 (cond
+                   (some? v) (recur (inc i) v 0 (conj acc v))
+                   (and (some? last-val) (< carried limit))
+                   (recur (inc i) last-val (inc carried) (conj acc last-val))
+                   :else (recur (inc i) last-val (inc carried) (conj acc nil)))))))))))
+
+(defn win-bfill
+  "Backward-fill nil values with the next non-nil value (NOCB — the mirror of
+  [[win-fills]]). Trailing nils (after the last non-nil) remain nil. Takes the
+  same optional limit (bare number or {:limit n}) with the same partial-fill
+  semantics. NOCB-then-LOCF combos compose by nesting:
+  #dt/e (win/fills (win/bfill :x)).
+
+  [nil 1 nil nil 4] -> [1 1 4 4 4]"
+  ([col] (win-bfill col nil))
+  ([col opt]
+   (let [limit (fill-limit "win/bfill" opt)
+         n (dtype/ecount col)
+         rdr (dtype/->reader col)]
+     (dtype/->reader
+      (vec (loop [i (dec n) next-val nil carried 0 acc ()]
+             (if (neg? i)
+               acc
+               (let [v (nth rdr i)]
+                 (cond
+                   (some? v) (recur (dec i) v 0 (conj acc v))
+                   (and (some? next-val) (< carried limit))
+                   (recur (dec i) next-val (inc carried) (conj acc next-val))
+                   :else (recur (dec i) next-val (inc carried) (conj acc nil)))))))))))
 
 (def scan-op-table
   "Maps op keywords to binary functions for use in win-scan."

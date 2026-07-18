@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.2] - 2026-07-18
+
+The mbmisc-port release: the general-purpose remainder of Mathias's decade-old R helper
+package, absorbed as datajure-native operations — date-value-aware lagging, panel
+gap-filling, bounded/backward fills, filtering joins, and a set of statistical and
+data-cleaning primitives.
+
 ### Added
+
+- **Semi, anti, and cross joins** (`:how :semi` / `:anti` / `:cross`). Semi/anti are filtering
+  joins (dplyr `semi_join`/`anti_join`): the result has left's columns only, in left row order,
+  each left row at most once — `:semi` keeps rows whose key tuple exists in right, `:anti` those
+  whose doesn't. They close the keep-groups-with-≥-N-rows idiom: `:agg` row counts → `:where` →
+  semi-join back. `:validate`/`:report` apply as on equi-joins (cardinality is checked even though
+  filtering joins never duplicate rows). `:cross` is the Cartesian product — no join keys (passing
+  `:on` throws), colliding right columns prefixed `right.` matching the as-of convention;
+  `:validate`/`:report` are rejected as key-based. Unknown `:how` errors list the new types.
+
+- **`reshape/tsfill` — panel gap-filling** (Stata `tsfill`; essentially tidyr's `complete` for panel time series). Expands each group to a regular date grid spanning that group's own min..max date, inserting missing rows (nil everywhere but the keys). **Union semantics**: existing rows — including off-grid ones — are always kept; gridding never drops data. Grid spec: `:every` (positive number for numeric date columns, default 1; `:day`/`:week`/`:month`/`:quarter`/`:year` for temporals, default `:day`) or an explicit `:grid` sequence (e.g. actual trading days), deduplicated/sorted/clipped per group. `:carry` columns are backward- then forward-filled per group (NOCB→LOCF — the mbmisc `tsfill` carrycols behavior). nil-date rows are dropped (documented — they cannot be placed on a grid); nil group keys throw `:tsfill-nil-key`; duplicate (key, date) throw `:tsfill-duplicate-dates`; `:every` type mismatches throw `:tsfill-invalid-every`. Output sorted by [keys, date]. Temporal matching is exact — normalise month-end-keyed panels first (`xbar` bucket), same caveat as `win/tlag`.
+- **`win/fills` `:limit` + new `win/bfill` backward fill.** `#dt/e (win/fills :x {:limit 3})` (bare-number shorthand `(win/fills :x 3)`) carries the last value at most n positions into each nil run, leaving the rest nil — **partial fill**, matching pandas `ffill(limit=n)` and mbmisc `h.locf`, deliberately *not* zoo's all-or-nothing `maxgap` (hence the different option name). `win/bfill` is the symmetric backward fill (NOCB; trailing nils stay nil) with the same option. NOCB→LOCF combos compose by nesting — `#dt/e (win/fills (win/bfill :x))` — so there is no combo API. A non-positive limit, a non-number, or an options map without `:limit` (e.g. the misspelled `{:lmit 3}`) throws a structured `:fills-invalid-limit` error instead of silently meaning "unlimited".
 
 - **`win/tlag` — date-value-aware lag window op** (mbmisc `lbd` / statar `tlag`). `#dt/e (win/tlag :x :year)` gives row *i* the value of `:x` at the row whose date equals `date − shift` — a **gap in the panel yields nil** instead of `win/lag`'s silent reach-back to the wrong period. Shift defaults to 1; a negative shift is a lead. Dates may be numbers (years, `xbar` buckets — plain subtraction) or `java.time` temporals shifted per a trailing options map (`{:unit :day}` default, `:week`, `:month`, `:quarter`, `:year`). Temporal matching is exact, so monthly panels keyed on month-end dates should tlag on a normalised month column (e.g. an `xbar` bucket). Duplicate dates within a partition throw a structured `:tlag-duplicate-dates` error; an unknown `:unit` throws `:tlag-unknown-unit`. Works in both partitioned (`:by`) and whole-dataset window mode, in `#dt/e` and data-forms (`[:win/tlag :x :date 1 {:unit :month}]`).
 - **`stat/trim` — quantile-based trimming.** `#dt/e (stat/trim :ret 0.01)` nils out values below the p-th or above the (1−p)-th percentile — the removal counterpart of `stat/winsorize` (mbmisc `trim`). nil-safe; NaN/±Inf are trimmed.
@@ -440,7 +459,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.1...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.2...HEAD
+[2.7.2]: https://github.com/clojure-finance/datajure/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/clojure-finance/datajure/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/clojure-finance/datajure/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/clojure-finance/datajure/compare/v2.5.0...v2.6.0
