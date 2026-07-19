@@ -1,5 +1,5 @@
 {:paths ["src" "resources"]
- :deps {techascent/tech.ml.dataset {:mvn/version "8.007"}
+ :deps {techascent/tech.ml.dataset {:mvn/version "8.024"}
         ;; charred is the JSON/CSV parser tech.ml.dataset already uses; declared
         ;; explicitly because datajure.io requires charred.api directly for JSON Lines.
         com.cnuernber/charred {:mvn/version "1.038"}
