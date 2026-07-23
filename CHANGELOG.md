@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.3] - 2026-07-23
+
+### Added
+
+- **Calendar date-part ops** — `year`, `month`, `day`, `dow` (alias `day-of-week`), `quarter` in `#dt/e` and data-forms (data.table `year()`/`month()`, Polars `.dt.*`). Element-wise long extraction from date / date-time columns via `long-temporal-field`, with a nil guard: a missing date yields nil (`:set` stores it as a missing slot in a typed `:int64` column; predicates compare it `false`) instead of leaking the packed `Long/MIN_VALUE` sentinel. `dow` is ISO/`java.time` (1 = Monday … 7 = Sunday); `quarter` derives 1–4 from the month. Raw `:instant` columns throw (zone-less — no calendar fields); convert to local dates first. Calendar grouping idiom: derive with `:set`, then group `:by` — `(-> rets (dt :set {:m #dt/e (month :date)}) (dt :by [:m] :agg {…}))`. Wrong arity is a read-time `:wrong-arity` error.
+
+### Fixed
+
+- **Ordering comparisons over `:object` readers are nil-safe.** `>`, `<`, `>=`, `<=` (and `between?`) over the object readers produced by nil-producing element-wise ops (date-parts, `nonfin2na`/`neg2na` cleaners) previously NPE'd inside dfn's ordering predicates on the first nil element — e.g. `#dt/e (>= (nonfin2na :x) 1.0)`. A nil element now compares `false`, matching the DSL's nil rule and how the same comparison behaves after a `:set` round-trip. Equality was already nil-tolerant; typed columns and scalars keep the vectorized dfn fast path.
+- **Expressions directly in `:by` now throw a structured `:expr-in-by` error.** A `#dt/e` AST (or data-form vector) in `:by` previously fell into the custom-grouping-fn branch, where invoking the AST map as a function returned nil for every row — the whole dataset silently collapsed into ONE group. The error points at the `:set`-then-`:by` idiom.
+
 ## [2.7.2] - 2026-07-18
 
 The mbmisc-port release: the general-purpose remainder of Mathias's decade-old R helper
@@ -459,7 +470,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.2...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.3...HEAD
+[2.7.3]: https://github.com/clojure-finance/datajure/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/clojure-finance/datajure/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/clojure-finance/datajure/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/clojure-finance/datajure/compare/v2.6.0...v2.7.0

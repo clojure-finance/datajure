@@ -19,7 +19,9 @@
     - Comparison ops with nil arg -> false column (all rows false)
     - Arithmetic ops with nil arg -> nil (becomes missing when stored in dataset)
   These rules only activate when a Clojure nil literal appears in an expression.
-  Dataset columns with missing values are handled natively by dfn."
+  Dataset columns with missing values are handled natively by dfn; :object
+  readers from nil-producing element-wise ops (date-parts, cleaners) get the
+  same treatment via nil-safe-cmp — a nil element compares false."
   (:require [clojure.string :as str]
             [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as dfn]
@@ -231,6 +233,53 @@
   (when (and (some? num) (some? den) (not (zero? den)))
     (/ (double num) (double den))))
 
+(defn- temporal-part
+  "Element-wise nil-safe calendar-field extraction backing the #dt/e date-part
+  ops (`year`/`month`/`day`/`dow`/`quarter`). `dtype-dt/long-temporal-field` alone
+  leaks the packed missing-value sentinel (Long/MIN_VALUE) through missing date
+  slots, so extract per element and yield nil where the date is missing. `xform`
+  post-processes the extracted long (quarter = month -> 1..4). Works on date and
+  date-time columns; raw instants lack calendar fields (zone-less) and throw
+  java.time's UnsupportedTemporalTypeException — convert them to local dates first."
+  ([field] (temporal-part field identity))
+  ([field xform]
+   (fn [col]
+     (if (dtype/reader? col)
+       (dtype/make-reader :object (dtype/ecount col)
+                          (when-some [v (nth col idx)]
+                            (xform (dtype-dt/long-temporal-field field v))))
+       (when (some? col) (xform (dtype-dt/long-temporal-field field col)))))))
+
+(defn- object-reader?
+  "True for a reader/column whose elemwise datatype is :object — the shape the
+  nil-producing element-wise ops (date-parts, non-finite cleaners) return before
+  :set materialises them into a typed column with a missing bitmap."
+  [x]
+  (and (dtype/reader? x) (identical? :object (dtype/elemwise-datatype x))))
+
+(defn- nil-safe-cmp
+  "Ordering comparison that extends the DSL's nil rule (comparison with nil ->
+  false) to :object readers: dfn's ordering predicates NPE on a nil element, so
+  when either operand is an object reader, compare element-wise with nil -> false.
+  Typed columns (where missing is a bitmap/NaN, handled natively by dfn) and
+  scalars keep the vectorized `dfn-op` fast path."
+  [dfn-op scalar-op]
+  (fn [a b]
+    (if (or (object-reader? a) (object-reader? b))
+      (let [a-reader? (dtype/reader? a)
+            b-reader? (dtype/reader? b)
+            n (if a-reader? (dtype/ecount a) (dtype/ecount b))]
+        (dtype/make-reader :boolean n
+                           (let [x (if a-reader? (nth a idx) a)
+                                 y (if b-reader? (nth b idx) b)]
+                             (boolean (and (some? x) (some? y) (scalar-op x y))))))
+      (dfn-op a b))))
+
+(def ^:private gt-op (nil-safe-cmp dfn/> >))
+(def ^:private lt-op (nil-safe-cmp dfn/< <))
+(def ^:private gte-op (nil-safe-cmp dfn/>= >=))
+(def ^:private lte-op (nil-safe-cmp dfn/<= <=))
+
 (def ^:private op-table
   {:+ dfn/+
    :- dfn/-
@@ -278,10 +327,18 @@
                                        (when (math/finite-double? (nth guard idx))
                                          (if (dtype/reader? body) (nth body idx) body)))
                     (when (math/finite-double? guard) body)))
-   :> dfn/>
-   :< dfn/<
-   :>= dfn/>=
-   :<= dfn/<=
+   ;; calendar date-parts (data.table year()/month(), Polars .dt.*): element-wise
+   ;; long extraction from date/date-time columns, nil for missing dates. dow is
+   ;; ISO/java.time (1=Monday..7=Sunday); quarter derives 1..4 from the month.
+   :year (temporal-part :years)
+   :month (temporal-part :months)
+   :day (temporal-part :days)
+   :dow (temporal-part :day-of-week)
+   :quarter (temporal-part :months (fn [m] (inc (quot (dec (long m)) 3))))
+   :> gt-op
+   :< lt-op
+   :>= gte-op
+   :<= lte-op
    := dfn/eq
    ;; dfn/and and dfn/or are binary-only, so fold to support (and a b c ...)
    :and (fn [& args] (reduce dfn/and args))
@@ -310,7 +367,7 @@
    :in (fn [col s]
          (dtype/make-reader :boolean (dtype/ecount col)
                             (boolean (contains? s (nth col idx)))))
-   :between? (fn [col lo hi] (dfn/and (dfn/>= col lo) (dfn/<= col hi)))
+   :between? (fn [col lo hi] (dfn/and (gte-op col lo) (lte-op col hi)))
    :nuniq count-distinct
    :first-val first-val
    :last-val last-val
@@ -322,6 +379,9 @@
   {'+ :+, '- :-, '* :*, '/ :div
    'sq :sq, 'log :log, 'asinh :asinh
    'na2zero :na2zero, 'neg2na :neg2na, 'nonfin2na :nonfin2na
+   ;; calendar date-parts, with a long alias for dow matching java.time naming
+   'year :year, 'month :month, 'day :day, 'dow :dow, 'quarter :quarter
+   'day-of-week :dow
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
    'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi, 'qnt :qnt
@@ -428,6 +488,12 @@
     (throw (ex-info
             (str "`" op-sym "` requires at least one argument in #dt/e. Got 0.")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected :at-least-1 :dt/got n-args}))
+
+    (and (#{:year :month :day :dow :quarter} op-kw) (not= 1 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly one argument (a date column or expression). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
 
     (and (= :when-finite op-kw) (not= 2 n-args))
     (throw (ex-info

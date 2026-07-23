@@ -37,7 +37,7 @@ Datajure is a **syntax layer**, not an engine — it compiles `#dt/e` expression
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.2"}}}
+{:deps {com.github.clojure-finance/datajure {:mvn/version "2.7.3"}}}
 ```
 
 Datajure requires Clojure 1.12+ and Java 21+.
@@ -164,6 +164,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | `div0 num den`                                        | `nil` if denominator is `nil` or zero |
 | `win/ratio :col`                                      | `nil` if previous value is `nil` or zero |
 | `when-finite :g body`                                 | body where `:g` is finite; `nil` where it is nil/`NaN`/`±Inf` (2.7.0) |
+| `year`/`month`/`day`/`dow`/`quarter` on a missing date | `nil` (compares `false` in predicates; stored by `:set` as a missing slot) |
 | Plain Clojure functions                               | **not** automatic; wrap with `pass-nil` |
 
 ```clojure
@@ -716,6 +717,36 @@ Columns are read as keywords by default. `:column-allowlist`/`:column-blocklist`
 (dio/read "data.csv"     {:column-blocklist [:id]})      ;; everything except id
 (dio/read "data.parquet" {:column-allowlist [:a :b]})   ;; same, keyword or string
 ```
+
+## Calendar Date Parts
+
+Element-wise extraction of calendar fields from date / date-time columns — `year`, `month`, `day`, `dow` (alias `day-of-week`), `quarter`. The bread-and-butter of calendar-effect and seasonality queries (data.table's `year()`/`month()`, Polars' `.dt.*`):
+
+```clojure
+;; The april-effect shape: filter + group on calendar fields, all in-DSL
+(-> rets
+    (dt :set {:yr #dt/e (year :date) :month #dt/e (month :date)})
+    (dt :where #dt/e (and (>= :yr 2010) (= :month 4)))
+    (dt :agg {:median #dt/e (md :ret) :mean #dt/e (mn :ret) :n nrow}))
+
+;; Inline in :where — no :set needed when the part is only a filter
+(dt rets :where #dt/e (= (quarter :date) 2))
+
+;; Data-form spelling
+(dt rets :set {:m [:month :date]})
+```
+
+Semantics:
+
+- A missing date yields nil (and compares `false` in predicates) — `long-temporal-field`'s raw sentinel never leaks.
+- `dow` follows ISO / `java.time`: 1 = Monday … 7 = Sunday.
+- `quarter` is 1–4, derived from the month.
+- Works on date and date-time columns. Raw `:instant` columns have no calendar fields (they're zone-less) — convert to local dates first.
+- Grouping goes through `:set` first: expressions directly in `:by` throw a structured `:expr-in-by` error pointing at the idiom above. Note that stored parts become proper typed `:int64` columns with missing bitmaps.
+
+`xbar` (below) is complementary, not overlapping: `xbar` bins timestamps into consecutive intervals; date-parts extract calendar fields across periods ("all Aprils across decades" is inexpressible with `xbar`).
+
+For data pulled from a SQL source (e.g. WRDS), extracting date parts server-side (`EXTRACT(MONTH FROM ...)`) remains a fine pattern — less data transferred — but it is now a choice, not a necessity.
 
 ## Bucketing with `xbar`
 

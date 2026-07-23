@@ -304,6 +304,23 @@
                                  [col-name (item row)])))
                            resolved))))))
 
+(defn- validate-by-entries
+  "Reject #dt/e ASTs and data-form vectors inside a sequential :by with a
+  structured error. Without this, an AST map lands in by->group-fn's fn branch,
+  where (ast-map row) is a lookup miss -> every row keys to nil -> the whole
+  dataset silently collapses into ONE group. Derive the key with :set first."
+  [by]
+  (when (sequential? by)
+    (doseq [item by]
+      (when (or (expr-node? item) (vector? item))
+        (throw (ex-info
+                (str "Expressions aren't supported directly in :by (got "
+                     (if (expr-node? item) "a #dt/e expression" (pr-str item))
+                     "). Derive the group key with :set first, e.g. "
+                     "(-> ds (dt :set {:m #dt/e (month :date)}) (dt :by [:m] :agg {...})).")
+                {:dt/error :expr-in-by
+                 :dt/entry item}))))))
+
 (defn- needs-per-partition-resolution?
   "True if :by mixes tagged markers (currently qtile) with exact keys — in
   which case markers must be resolved against each exact-key partition
@@ -522,7 +539,8 @@
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
   #{:+ :- :* :div :div0 :sq :log :> :< :>= :<= := :and :or :not :in :between?
-    :asinh :na2zero :neg2na :nonfin2na :when-finite})
+    :asinh :na2zero :neg2na :nonfin2na :when-finite
+    :year :month :day :dow :quarter})
 
 (defn- element-wise-ast?
   "True if `node` is purely element-wise (no aggregation / window / group reduction),
@@ -1271,6 +1289,8 @@
                    keywords, a fn of the row, or (for :set) a prepared grouping from
                    `prepare-grouping` — which bundles the group keys and the
                    :within-order sort, amortising them across multi-pass transforms.
+                   #dt/e expressions / data-form vectors are NOT accepted as entries
+                   (structured :expr-in-by error) — derive the key with :set first.
   :within-order  - the order rows are WALKED within each partition (or across the
                    whole dataset when :by is absent) while :set or :agg computes —
                    for window functions (win/lag, win/cumsum, ...) and
@@ -1323,6 +1343,7 @@
           set (normalise-derivations set)
           agg (normalise-derivations agg)
           eff-by (if grouping (:by grouping) by)
+          _ (validate-by-entries eff-by)
           eff-wo (if grouping (:within-order grouping) within-order)
           set-has-win? (and set (derivations-have-win? set))
           window-mode? (and eff-by set (not agg))]

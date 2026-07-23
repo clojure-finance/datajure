@@ -2521,6 +2521,65 @@
       ;; composed: nonfin2na then arithmetic
       (is (= [2.0 nil nil] (vec ((core/dt d :set {:r [:* [:nonfin2na :y] 2]}) :r)))))))
 
+(deftest date-part-ops
+  ;; calendar date-parts: element-wise long extraction from date columns,
+  ;; nil for missing dates (long-temporal-field alone leaks the packed sentinel).
+  (let [d (ds/->dataset {:date [(java.time.LocalDate/parse "2020-01-31")
+                                (java.time.LocalDate/parse "2020-04-30")
+                                nil
+                                (java.time.LocalDate/parse "2021-12-15")]
+                         :ret [0.01 0.02 0.03 -0.01]})]
+    (testing "year/month/day extract calendar fields; missing date -> nil"
+      (is (= [2020 2020 nil 2021] (vec ((core/dt d :set {:r #dt/e (year :date)}) :r))))
+      (is (= [1 4 nil 12] (vec ((core/dt d :set {:r #dt/e (month :date)}) :r))))
+      (is (= [31 30 nil 15] (vec ((core/dt d :set {:r #dt/e (day :date)}) :r)))))
+    (testing "dow is ISO/java.time: 1=Monday..7=Sunday"
+      ;; 2020-01-31 Friday, 2020-04-30 Thursday, 2021-12-15 Wednesday
+      (is (= [5 4 nil 3] (vec ((core/dt d :set {:r #dt/e (dow :date)}) :r)))))
+    (testing "quarter derives 1..4 from the month"
+      (is (= [1 2 nil 4] (vec ((core/dt d :set {:r #dt/e (quarter :date)}) :r)))))
+    (testing ":set materialises the parts as a typed column with missing"
+      (is (= :int64 (:datatype (meta ((core/dt d :set {:r #dt/e (year :date)}) :r))))))
+    (testing "compose inline in :where; a missing date compares false"
+      (is (= [0.02] (vec ((core/dt d :where #dt/e (and (>= (year :date) 2020)
+                                                       (= (month :date) 4))) :ret)))))
+    (testing "calendar grouping: derive with :set, group :by (missing -> nil group)"
+      (let [r (-> d
+                  (core/dt :set {:m #dt/e (month :date)})
+                  (core/dt :by [:m] :agg {:n core/N}))]
+        (is (= {1 1, 4 1, 12 1, nil 1}
+               (into {} (map (juxt :m :n)) (ds/mapseq-reader r))))))
+    (testing "data-form spellings + the day-of-week long alias"
+      (is (= [2020 2020 nil 2021] (vec ((core/dt d :set {:r [:year :date]}) :r))))
+      (is (= [5 4 nil 3] (vec ((core/dt d :set {:r [:day-of-week :date]}) :r)))))
+    (testing "read-time arity error"
+      (let [ed (try (read-string "#dt/e (month :date :x)") nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :wrong-arity (:dt/error ed)))))))
+
+(deftest nil-safe-ordering-comparisons
+  ;; ordering comparisons over :object readers from nil-producing element-wise
+  ;; ops (date-parts, cleaners): a nil element compares false instead of the
+  ;; dfn ordering predicates' NPE. Equality (dfn/eq) was already nil-tolerant.
+  (let [d (ds/->dataset {:x [1.0 ##Inf 2.0]})]
+    (testing "inline ordering comparison over a cleaner result"
+      (is (= [1.0 2.0] (vec ((core/dt d :where #dt/e (>= (nonfin2na :x) 1.0)) :x)))))
+    (testing "between? over an object reader"
+      (is (= [1.0] (vec ((core/dt d :where #dt/e (between? (nonfin2na :x) 0.5 1.5)) :x)))))))
+
+(deftest expr-in-by-rejected
+  ;; an AST map in :by would otherwise fall into by->group-fn's fn branch, where
+  ;; (ast-map row) is a lookup miss -> every row keys nil -> ONE silent group.
+  (let [d (ds/->dataset {:date [(java.time.LocalDate/parse "2020-01-31")] :ret [0.01]})]
+    (testing "#dt/e in :by throws :expr-in-by pointing at the :set idiom"
+      (let [ed (try (core/dt d :by [#dt/e (month :date)] :agg {:n core/N}) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :expr-in-by (:dt/error ed)))))
+    (testing "data-form vectors in :by are rejected the same way"
+      (let [ed (try (core/dt d :by [[:month :date]] :agg {:n core/N}) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :expr-in-by (:dt/error ed)))))))
+
 (deftest win-grr-op
   ;; §2.2: inverse-hyperbolic-sine growth window op = asinh(x) - asinh(lag x),
   ;; per partition, run-of-zeros -> 0, nil for the first element.
