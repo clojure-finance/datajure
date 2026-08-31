@@ -3397,3 +3397,29 @@
     (is (= [1.0 nil nil 1.0]
            (vec (:y (core/dt (ds/->dataset {:g [1.0 nil ##NaN 2.0]})
                              :set {:y #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))})))))))
+
+;; ---------------------------------------------------------------------------
+;; Misplaced selector markers (pre-release audit): a cut/col-range/grouping
+;; marker in an expression context silently look-up-missed every row (maps are
+;; callable) — all-nil :set column, zero-row :where, one-group :by. Guarded.
+;; ---------------------------------------------------------------------------
+
+(deftest misplaced-selector-markers
+  (let [d (ds/->dataset {:x [10 20 30 40] :g [:a :a :b :b]})
+        err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e
+                                   [(:dt/error (ex-data e)) (:dt/selector (ex-data e))])))]
+    (testing "cut marker (missing #dt/e) in :set/:where/:agg throws :selector-misplaced"
+      (is (= [:selector-misplaced :cut] (err #(core/dt d :set {:q (core/cut :x 2)}))))
+      (is (= [:selector-misplaced :cut] (err #(core/dt d :where (core/cut :x 2)))))
+      (is (= [:selector-misplaced :cut] (err #(core/dt d :agg {:q (core/cut :x 2)})))))
+    (testing "col-range / prepared grouping inside a :by vector throw :selector-misplaced"
+      (is (= [:selector-misplaced :col-range]
+             (err #(core/dt d :by [(core/col-range :x :g)] :agg {:n core/N}))))
+      (is (= [:selector-misplaced :grouping]
+             (err #(core/dt d :by [(core/prepare-grouping d [:g])]
+                            :set {:z #dt/e (win/lag :x 1)})))))
+    (testing "legitimate marker usages are untouched"
+      (is (= 2 (ds/row-count (core/dt d :by [(core/cut :x 2)] :agg {:n core/N}))))
+      (is (= 4 (ds/row-count (core/dt d :set {:z #dt/e (win/lag :x 1)}
+                                      :by (core/prepare-grouping d [:g])))))
+      (is (= [:x :g] (vec (ds/column-names (core/dt d :select (core/col-range :x :g)))))))))

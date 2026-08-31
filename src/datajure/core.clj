@@ -127,7 +127,34 @@
   [s]
   (:col (normalise-order-spec s)))
 
+(defn- check-misplaced-selector!
+  "Reject a tagged selector map ({:dt/selector …} — a standalone cut marker, a
+  col-range selector, a prepared grouping) used as a :set/:agg derivation or a
+  :where predicate. Maps are callable in Clojure, so without this guard a
+  misplaced marker silently look-up-misses every row — an all-nil column from
+  `:set {:q (cut :x 5)}` (missing #dt/e), zero rows from `:where` — instead of
+  erroring. Same silent-collapse class as :expr-in-by."
+  [x context]
+  (when (and (map? x) (:dt/selector x))
+    (throw (ex-info
+            (str (case (:dt/selector x)
+                   :cut (str "Standalone (cut :col n) is a :by grouping marker. In "
+                             context " use the expression form instead: #dt/e (cut :col n) "
+                             "or the data-form [:cut :col n].")
+                   :col-range (str "(col-range start end) is a :select column selector — "
+                                   "it has no meaning in " context ".")
+                   :grouping (str "A prepared grouping is passed directly as :by — "
+                                  "it has no meaning in " context ".")
+                   (str "Selector map " (:dt/selector x) " has no meaning in " context "."))
+                 ;; don't pr-str a :grouping marker — it carries the full row permutation
+                 (when-not (= :grouping (:dt/selector x))
+                   (str " Got: " (pr-str x))))
+            {:dt/error :selector-misplaced
+             :dt/selector (:dt/selector x)
+             :dt/context context}))))
+
 (defn- apply-where [dataset predicate]
+  (check-misplaced-selector! predicate :where)
   (let [node (cond
                (expr-node? predicate) predicate
                ;; a runtime data-form vector (e.g. [:= :tic ticker]) desugars to
@@ -140,6 +167,7 @@
       (ds/filter dataset predicate))))
 
 (defn- derive-column [dataset col-kw col-fn]
+  (check-misplaced-selector! col-fn (str ":set " col-kw))
   (cond
     (expr-node? col-fn)
     (do (validate-expr-cols dataset col-fn (str ":set " col-kw))
@@ -175,6 +203,7 @@
       (instance? tech.v3.dataset.impl.column.Column v)))
 
 (defn- eval-agg [dataset col-kw agg-fn]
+  (check-misplaced-selector! agg-fn (str ":agg " col-kw))
   (cond
     (expr-node? agg-fn)
     (do (validate-expr-cols dataset agg-fn (str ":agg " col-kw))
@@ -319,7 +348,19 @@
                      "). Derive the group key with :set first, e.g. "
                      "(-> ds (dt :set {:m #dt/e (month :date)}) (dt :by [:m] :agg {...})).")
                 {:dt/error :expr-in-by
-                 :dt/entry item}))))))
+                 :dt/entry item})))
+      ;; a non-grouping selector map in :by would silently collapse everything
+      ;; into one group (map-as-fn lookup miss) — reject it like :expr-in-by.
+      ;; cut markers are the one selector kind :by accepts.
+      (when (and (map? item) (:dt/selector item) (not= :cut (:dt/selector item)))
+        (throw (ex-info
+                (str (if (= :grouping (:dt/selector item))
+                       "Pass a prepared grouping directly as :by — (dt ds :set {…} :by g) — not inside a vector."
+                       (str "Selector map " (:dt/selector item) " isn't a grouping — it has no meaning in :by."
+                            " Got: " (pr-str item))))
+                {:dt/error :selector-misplaced
+                 :dt/selector (:dt/selector item)
+                 :dt/context :by}))))))
 
 (defn- needs-per-partition-resolution?
   "True if :by mixes tagged markers (currently cut) with exact keys — in

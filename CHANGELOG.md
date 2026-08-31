@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The syntax-review release: two vocabulary gaps filled and three consistency
-warts removed, from a design review of the DSL against its own principles
-("rich built-in primitives for daily operations", "one name per concept").
-Contains **breaking renames** — no deprecation aliases are kept.
+The syntax-review release: a design review of the DSL against its own
+principles ("rich built-in primitives for daily operations", "one name per
+concept"), plus a second external-review round — vocabulary gaps filled,
+consistency warts removed, and several silent-failure modes converted to
+structured errors. Contains **breaking renames** — no deprecation aliases
+are kept.
 
 ### Added
 
@@ -36,7 +38,6 @@ Contains **breaking renames** — no deprecation aliases are kept.
   `math/ms-per-unit` (one ms-table instead of three copies); genuinely
   unsupported units (e.g. `:month` in a fixed-duration context) still throw
   their structured errors.
-
 - **Bare `max`/`min`/`count` in expression-head position** — `#dt/e (max :x)`
   == `(mx :x)`, `(min :x)` == `(mi :x)`, `(count :x)` == `(ct :x)`, and the
   data-form heads `[:max :x]`/`[:min :x]`/`[:count :x]` likewise (external
@@ -71,6 +72,13 @@ Contains **breaking renames** — no deprecation aliases are kept.
 - **`concise/ct` drift** — it aliased `dtype/ecount` (counting missing slots
   too) while the docs and the `#dt/e` `ct` op both define ct as the non-nil
   count. It now aliases `core/count*`.
+- **Misplaced selector markers throw `:selector-misplaced`** — a standalone
+  `cut` marker used in `:set`/`:where`/`:agg` (i.e. a forgotten `#dt/e`), or a
+  `col-range`/prepared-grouping map inside a `:by` vector, previously
+  look-up-missed every row silently (maps are callable): an all-nil `:set`
+  column, a zero-row `:where`, a one-group `:by`. Each now throws a structured
+  error pointing at the correct form — closing the guard the `cut` unification
+  would otherwise have weakened (the old standalone `cut` stub at least threw).
 
 ### Changed (BREAKING)
 
