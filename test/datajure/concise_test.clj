@@ -16,8 +16,9 @@
       (is (= (double (sm col)) 12550.0))
       (is (number? (md col)))
       (is (number? (sd col)))))
-  (testing "ct returns element count"
-    (is (= 3 (ct (:mass sample)))))
+  (testing "ct counts non-nil values, matching count* and the #dt/e ct op"
+    (is (= 3 (ct (:mass sample))))
+    (is (= 2 (ct [1 nil 3]))))
   (testing "nuniq returns distinct count"
     (is (= 2 (nuniq (:species sample)))))
   (testing "qnt is type-7 and agrees with md at p=0.5"

@@ -177,7 +177,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 
 `div0` works both inside `#dt/e` and as a plain function, so it's usable in plain-fn `:set`/`:agg` and computed `:by`.
 
-**`when-finite` — the NA-propagating guard (2.7.0).** A bare comparison collapses a nil operand to `false` *before* `if` sees it, so `#dt/e (if (>= :g 0) 1.0 0.0)` yields `0.0` at missing rows — R's `ifelse(NA → NA)` was inexpressible. `when-finite` guards on the *input*: the body value where the guard expression is finite, missing where it is nil/`NaN`/`±Inf`. This is the Piotroski-style binary-indicator primitive:
+**`when-finite` — the NA-propagating guard (2.7.0).** A bare comparison collapses a nil operand to `false` *before* `if` sees it, so `#dt/e (if (>= :g 0) 1.0 0.0)` yields `0.0` at missing rows — R's `ifelse(NA → NA)` was inexpressible. `when-finite` guards on the *input*: the body value where the guard expression is finite, missing where it is nil/`NaN`/`±Inf`. This is the Piotroski-style binary-indicator primitive. Note `when-finite` is a *numeric* guard — a non-numeric guard expression throws a structured `:when-finite-non-numeric` error; for a non-numeric presence guard use a plain-fn derivation with `pass-nil`:
 
 ```clojure
 ;; 1/0 indicator that stays missing where the input is missing
@@ -294,7 +294,7 @@ Since 2.7.0 the data-form covers the **entire** `#dt/e` vocabulary — one expre
         :agg {:top [:first-val :mass] :n [:nrow]}})
 ```
 
-Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`, `[:coalesce-finite …]`, `[:cut …]`, `[:xbar …]`, `[:win/scan :op …]`, `[:win/each-prior :op …]`), and `[:nrow]` for row count. Use a set for `:in` (a non-number-headed vector denotes an operation). Context rules match `#dt/e` exactly — e.g. `win/*` outside `:set` throws; unknown ops throw `:unknown-data-op` with a suggestion.
+Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]`, and the bare SQL-style heads `[:max …]`/`[:min …]`/`[:count …]` == `[:mx …]`/`[:mi …]`/`[:ct …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`, `[:coalesce-finite …]`, `[:cut …]`, `[:xbar …]`, `[:win/scan :op …]`, `[:win/each-prior :op …]`), and `[:nrow]` for row count. Use a set for `:in` (a non-number-headed vector denotes an operation). Context rules match `#dt/e` exactly — e.g. `win/*` outside `:set` throws; unknown ops throw `:unknown-data-op` with a suggestion.
 
 ## `:select` — Polymorphic Column Selection
 
@@ -375,7 +375,7 @@ Inspired by q's `deltas` and `ratios` — eliminate verbose lag patterns:
 
 The moving ops (`win/mavg`, `win/msum`, `win/mdev`, `win/mdowndev`, `win/mmin`, `win/mmax`) use an **expanding** window at the start (a value from the first row, q convention). Pass a trailing `{:min-periods n}` options map for a **non-expanding** window — `#dt/e (win/mavg :price 20 {:min-periods 20})` emits nil until a full 20-row window exists (R's `zoo::rollapplyr`). `win/mdev` also reads `:ddof` from the map (`{:ddof 0 :min-periods 20}`); the positional `(win/mdev :ret 20 0)` still works.
 
-A few window ops take their own trailing options map: `win/lag`/`win/lead` accept `{:fill v}` to fill the boundary positions (no history/future) instead of nil — `#dt/e (win/lag :price 1 {:fill 0})` collapses the `(coalesce (win/lag …) 0)` two-step into one. `win/ema` accepts `{:alpha 0.18}` or `{:period 10}` as a self-documenting alternative to its numeric `>= 1` → period / `< 1` → alpha shorthand.
+A few window ops take their own trailing options map: `win/lag`/`win/lead` accept `{:fill v}` to fill the boundary positions (no history/future) instead of nil — `#dt/e (win/lag :price 1 {:fill 0})` collapses the `(coalesce (win/lag …) 0)` two-step into one. `win/ema` accepts `{:alpha 0.18}` or `{:period 10}` as a self-documenting alternative to its numeric `>= 1` → period / `< 1` → alpha shorthand; parameters are domain-checked (`:alpha` ∈ (0, 1], `:period` ≥ 1, shorthand finite and positive) with structured errors, since an out-of-range value would otherwise produce a silently frozen or divergent series.
 
 For a `:set` + keyword-only `:by` query, numeric derived columns are materialised in **off-heap native buffers by default** (freed on GC, Arrow-exportable, type-preserving int/float) rather than on the JVM heap — for wide per-group transforms this is the difference between gigabytes of heap and near-zero (a 270-column per-firm transform drops from ~6 GB to ~90 MB). Output is identical to on-heap by construction. Pass `:off-heap false` to keep derived columns on the JVM heap.
 
@@ -893,10 +893,12 @@ Use `:by` when the bins are a grouping key; use `#dt/e` when the bins are a colu
 Short aliases for power users (q / data.table users in particular):
 
 ```clojure
-(require '[datajure.concise :refer [mn sm md sd ct nuniq fst lst wa ws mx mi N between]])
+(require '[datajure.concise :refer [mn sm md sd ct nuniq fst lst wa ws mx mi N col-range]])
 
 (dt ds :by [:species] :agg {:n N :avg #dt/e (mn :mass)})
 ```
+
+Inside `#dt/e` (and data-forms) every aggregation accepts its full name, its concise alias, **and** — for the three whose full names would shadow `clojure.core` as vars — the bare SQL-style spelling: `(max :x)`/`(min :x)`/`(count :x)` == `(mx :x)`/`(mi :x)`/`(ct :x)`. The star names (`max*`, `min*`, `count*`) remain the callable-fn spellings in `datajure.core`. All are unary; `(max :a :b)` is a read-time error pointing at `row/max`. In the `win/scan`/`win/each-prior` operator slot, bare `max`/`min` keep their element-wise binary meaning.
 
 | Symbol | Full name |
 |--------|-----------|
@@ -907,7 +909,7 @@ Short aliases for power users (q / data.table users in particular):
 | `sd`   | stddev |
 | `mx`   | max (column maximum) |
 | `mi`   | min (column minimum) |
-| `ct`   | element count |
+| `ct`   | non-nil count (= `count*`) |
 | `nuniq`| count-distinct |
 | `fst`  | first-val |
 | `lst`  | last-val |

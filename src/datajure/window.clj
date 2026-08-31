@@ -508,6 +508,12 @@
                        implicit numeric dispatch.
   Seeded at first non-nil value. nil values carry forward last EMA.
   Leading nils remain nil.
+
+  Domain checks (structured errors, since an out-of-range parameter silently
+  produces plausible-looking garbage — a frozen series for alpha 0, a divergent
+  one for alpha > 1): :alpha must be a finite number in (0, 1]
+  (:ema-invalid-alpha), :period a finite number >= 1 (:ema-invalid-period), and
+  the numeric shorthand a finite positive number (:ema-invalid-param).
   ema 2 [10 20 30]            -> [10.0 16.67 25.56]
   ema {:alpha 0.18} [10 …]    -> same as ema 0.18 …"
   [col period-or-alpha]
@@ -516,10 +522,31 @@
         a (double (cond
                     (map? period-or-alpha)
                     (let [{:keys [alpha period]} period-or-alpha]
-                      (cond (some? alpha) (double alpha)
-                            (some? period) (/ 2.0 (inc (double period)))
-                            :else (throw (ex-info "win/ema options map requires :alpha or :period"
-                                                  {:dt/error :ema-opts :opts period-or-alpha}))))
+                      (cond
+                        (some? alpha)
+                        (if (and (number? alpha) (math/finite-double? alpha)
+                                 (< 0.0 (double alpha)) (<= (double alpha) 1.0))
+                          (double alpha)
+                          (throw (ex-info (str "win/ema :alpha must be a finite number in (0, 1]; got "
+                                               (pr-str alpha) ".")
+                                          {:dt/error :ema-invalid-alpha :dt/alpha alpha})))
+                        (some? period)
+                        (if (and (number? period) (math/finite-double? period)
+                                 (>= (double period) 1.0))
+                          (/ 2.0 (inc (double period)))
+                          (throw (ex-info (str "win/ema :period must be a finite number >= 1; got "
+                                               (pr-str period) ".")
+                                          {:dt/error :ema-invalid-period :dt/period period})))
+                        :else (throw (ex-info "win/ema options map requires :alpha or :period"
+                                              {:dt/error :ema-opts :opts period-or-alpha}))))
+                    (not (and (number? period-or-alpha)
+                              (math/finite-double? period-or-alpha)
+                              (pos? (double period-or-alpha))))
+                    (throw (ex-info (str "win/ema smoothing parameter must be a finite positive "
+                                         "number (< 1 = alpha, >= 1 = period) or an "
+                                         "{:alpha a}/{:period p} map; got "
+                                         (pr-str period-or-alpha) ".")
+                                    {:dt/error :ema-invalid-param :dt/param period-or-alpha}))
                     (>= (double period-or-alpha) 1.0) (/ 2.0 (inc (double period-or-alpha)))
                     :else (double period-or-alpha)))]
     (dtype/->reader

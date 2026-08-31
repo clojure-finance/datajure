@@ -7,7 +7,7 @@
     sm    = sum
     md    = median
     sd    = standard-deviation
-    ct    = count (element count)
+    ct    = count* (non-nil count)
     nuniq = count-distinct
     fst   = first-val (first element)
     lst   = last-val (last element)
@@ -29,8 +29,7 @@
 
   Everything else re-exported from datajure.core:
     N, dt, asc, desc, rename, pass-nil"
-  (:require [tech.v3.datatype :as dtype]
-            [datajure.core :as core]
+  (:require [datajure.core :as core]
             [datajure.expr :as expr]
             [datajure.stat :as stat]))
 
@@ -39,7 +38,9 @@
 (def ^{:doc "Column median. Short alias for `core/median`."} md core/median)
 (def ^{:doc "Type-7 p-quantile. Short alias for `core/qnt`. Args: col p [min-n]."} qnt core/qnt)
 (def ^{:doc "Column standard deviation. Short alias for `core/stddev`."} sd core/stddev)
-(def ^{:doc "Element count. Short alias for `dtype/ecount`."} ct dtype/ecount)
+(def ^{:doc "Count of non-nil values. Short alias for `core/count*` — matching the
+  #dt/e `ct` op and the documented concise vocabulary (was `dtype/ecount`, which
+  counted missing slots too; that drift from the docs/DSL is fixed)."} ct core/count*)
 
 (def ^{:doc "Count of distinct values. Delegates to `expr/count-distinct`."} nuniq expr/count-distinct)
 

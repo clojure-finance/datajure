@@ -3334,3 +3334,66 @@
       (is (= :xbar-unknown-unit
              (try (vec (:b (core/dt d :set {:b #dt/e (xbar :t 5 :months)}))) nil
                   (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Bare max/min/count expression-head aliases (external-review follow-up)
+;; ---------------------------------------------------------------------------
+
+(deftest bare-max-min-count-aliases
+  (let [d (ds/->dataset {:x [3.0 nil 7.0 1.0] :g [:a :a :b :b]})]
+    (testing "(max/min/count :x) aggregate like mx/mi/ct — SQL MAX(x)/COUNT(x) muscle memory"
+      (is (= [7.0] (vec (:m (core/dt d :agg {:m #dt/e (max :x)})))))
+      (is (= [1.0] (vec (:m (core/dt d :agg {:m #dt/e (min :x)})))))
+      (is (= [3] (vec (:m (core/dt d :agg {:m #dt/e (count :x)})))))
+      (is (= (vec (:m (core/dt d :by [:g] :agg {:m #dt/e (max :x)})))
+             (vec (:m (core/dt d :by [:g] :agg {:m #dt/e (mx :x)}))))))
+    (testing "data-form head spellings match"
+      (is (= [7.0] (vec (:m (core/dt d :agg {:m [:max :x]})))))
+      (is (= [3] (vec (:m (core/dt d :agg {:m [:count :x]}))))))
+    (testing "regression: scan/each-prior operator slots keep the element-wise :max/:min meaning"
+      (is (= [3.0 3.0 7.0 7.0] (vec (:s (core/dt d :set {:s #dt/e (win/scan max :x)})))))
+      (is (= [3.0 3.0 7.0 7.0] (vec (:s (core/dt d :set {:s [:win/scan :max :x]})))))
+      (is (= [nil nil nil 7.0] (vec (:s (core/dt d :set {:s #dt/e (win/each-prior max :x)}))))))
+    (testing "unary-only: 2+ args is a read-time :wrong-arity with the row/max hint"
+      (let [e (try (read-string "#dt/e (max :a :b)") nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :wrong-arity (:dt/error (ex-data e))))
+        (is (re-find #"row/max" (.getMessage e))))
+      (is (= :wrong-arity (try (datajure.expr/data->ast [:count :a :b]) nil
+                               (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
+    (testing "the unary check covers the existing aggregator spellings too (was a runtime ArityException)"
+      (is (= :wrong-arity (try (read-string "#dt/e (mx :a :b)") nil
+                               (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e))))))
+      (is (= :wrong-arity (try (read-string "#dt/e (mean :a :b)") nil
+                               (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))))
+
+;; ---------------------------------------------------------------------------
+;; win/ema domain validation (external-review follow-up)
+;; ---------------------------------------------------------------------------
+
+(deftest win-ema-domain-validation
+  (testing "out-of-range parameters throw structured errors instead of silent garbage"
+    (is (= [:ema-invalid-param :ema-invalid-param :ema-invalid-param
+            :ema-invalid-period :ema-invalid-alpha :ema-invalid-alpha]
+           (mapv (fn [p] (try (vec (datajure.window/win-ema [10.0 20.0] p)) nil
+                              (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))
+                 [0 -0.5 ##NaN {:period 0} {:alpha 2} {:alpha 0}]))))
+  (testing "boundary and normal parameters still work"
+    (is (= [10.0 20.0 30.0] (vec (datajure.window/win-ema [10.0 20.0 30.0] {:alpha 1.0}))))
+    (is (= 10.0 (first (datajure.window/win-ema [10.0 20.0 30.0] 2))))))
+
+;; ---------------------------------------------------------------------------
+;; when-finite non-numeric guard (external-review follow-up)
+;; ---------------------------------------------------------------------------
+
+(deftest when-finite-non-numeric-guard
+  (testing "a non-numeric guard throws :when-finite-non-numeric (was a raw ClassCastException)"
+    (is (= :when-finite-non-numeric
+           (try (vec (:y (core/dt (ds/->dataset {:c ["US" nil "HK"]})
+                                  :set {:y #dt/e (when-finite :c 1.0)})))
+                nil
+                (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
+  (testing "numeric and nil guards keep the established semantics"
+    (is (= [1.0 nil nil 1.0]
+           (vec (:y (core/dt (ds/->dataset {:g [1.0 nil ##NaN 2.0]})
+                             :set {:y #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))})))))))

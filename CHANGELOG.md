@@ -37,6 +37,41 @@ Contains **breaking renames** — no deprecation aliases are kept.
   unsupported units (e.g. `:month` in a fixed-duration context) still throw
   their structured errors.
 
+- **Bare `max`/`min`/`count` in expression-head position** — `#dt/e (max :x)`
+  == `(mx :x)`, `(min :x)` == `(mi :x)`, `(count :x)` == `(ct :x)`, and the
+  data-form heads `[:max :x]`/`[:min :x]`/`[:count :x]` likewise (external
+  review follow-up). Inside `#dt/e` symbols are a closed vocabulary — the
+  clojure.core-shadowing rationale for the star names doesn't apply there —
+  and the SQL mapping is exact: `COUNT(x)`/`COUNT(*)`/`COUNT(DISTINCT x)` ≅
+  `(count :x)`/`(nrow)`/`(count-distinct :x)`. Unary only: 2+ args throw a
+  read-time `:wrong-arity` pointing at `row/max`/`row/min` for the row-wise
+  case. Implemented as a **separate expression-head alias table** so the
+  `win/scan`/`win/each-prior` operator slots (where bare `max`/`min` mean the
+  element-wise binary `:max`/`:min`) and their data-form spellings
+  (`[:win/scan :max …]`) are untouched. The star names remain the canonical
+  callable-fn spellings.
+
+### Fixed
+
+- **`win/ema` domain validation** — out-of-range smoothing parameters
+  previously produced silent plausible-looking garbage: `(win/ema :x 0)`
+  froze at the seed, a negative shorthand oscillated, `{:period 0}` computed
+  α = 2 and diverged. Now structured errors: `:alpha` must be a finite number
+  in (0, 1] (`:ema-invalid-alpha`), `:period` finite ≥ 1
+  (`:ema-invalid-period`), the numeric shorthand finite and positive
+  (`:ema-invalid-param`).
+- **`when-finite` on a non-numeric guard** threw a raw `ClassCastException`;
+  it now throws a structured `:when-finite-non-numeric` error stating that
+  `when-finite` is a *numeric* guard and pointing at the plain-fn + `pass-nil`
+  route for non-numeric presence guards.
+- **Single-column aggregators get read-time arity checks** — `(mx :a :b)`,
+  `(mean :a :b)`, etc. (all spellings of `mn`/`sm`/`md`/`sd`/`variance`/`mx`/
+  `mi`/`ct`/`nuniq`/`prod`/`first-val`/`last-val`) previously failed at
+  runtime with a raw `ArityException`; now a read-time `:wrong-arity`.
+- **`concise/ct` drift** — it aliased `dtype/ecount` (counting missing slots
+  too) while the docs and the `#dt/e` `ct` op both define ct as the non-nil
+  count. It now aliases `core/count*`.
+
 ### Changed (BREAKING)
 
 - **`cut` unified across contexts; `qtile` removed.** `cut` is now one name

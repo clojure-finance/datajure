@@ -332,11 +332,27 @@
    ;; so `(if (>= :g 0) 1.0 0.0)` alone can't yield nil; guard on the input:
    ;;   #dt/e (when-finite :g (if (>= :g 0) 1.0 0.0))
    :when-finite (fn [guard body]
-                  (if (dtype/reader? guard)
-                    (dtype/make-reader :object (dtype/ecount guard)
-                                       (when (math/finite-double? (nth guard idx))
-                                         (if (dtype/reader? body) (nth body idx) body)))
-                    (when (math/finite-double? guard) body)))
+                  ;; a non-numeric non-nil guard element would ClassCastException
+                  ;; inside finite-double? — surface a structured error instead:
+                  ;; when-finite is a NUMERIC guard, not a general presence guard
+                  (let [finite? (fn [v]
+                                  (cond
+                                    (nil? v) false
+                                    (number? v) (math/finite-double? v)
+                                    :else
+                                    (throw (ex-info
+                                            (str "when-finite requires a NUMERIC guard "
+                                                 "expression (nil/NaN/±Inf → missing); got a "
+                                                 (.getName (class v)) " (" (pr-str v) "). "
+                                                 "For a non-numeric presence guard, use a "
+                                                 "plain-fn derivation with pass-nil.")
+                                            {:dt/error :when-finite-non-numeric
+                                             :dt/value-class (.getName (class v))}))))]
+                    (if (dtype/reader? guard)
+                      (dtype/make-reader :object (dtype/ecount guard)
+                                         (when (finite? (nth guard idx))
+                                           (if (dtype/reader? body) (nth body idx) body)))
+                      (when (finite? guard) body))))
    ;; calendar date-parts (data.table year()/month(), Polars .dt.*): element-wise
    ;; long extraction from date/date-time columns, nil for missing dates. dow is
    ;; ISO/java.time (1=Monday..7=Sunday); quarter derives 1..4 from the month.
@@ -413,6 +429,25 @@
    ;; arithmetic (e.g. (- (nrow) 1)) instead of needing the bare value marker
    'nrow :nrow, 'N :nrow})
 
+(def ^:private expr-head-aliases
+  "Aggregation aliases valid ONLY in expression-head position: (max :x) == (mx :x),
+  (min :x) == (mi :x), (count :x) == (ct :x). Inside #dt/e symbols are a closed
+  vocabulary (never resolved as vars), so the clojure.core-shadowing rationale for
+  the star names does not apply — SQL's COUNT(x)/MAX(x) muscle memory does.
+
+  Deliberately a SEPARATE table from sym->op: the win/scan & win/each-prior
+  operator slots (and their kw->op-derived data-form spellings, via data-scan-op)
+  rely on bare max/min falling through sym->op to stay the element-wise binary
+  ops :max/:min. Head position and operator position are different grammar; keep
+  the vocabularies separate rather than special-casing one shared table."
+  {'max :mx, 'min :mi, 'count :ct})
+
+(def ^:private expr-head-kw-aliases
+  "Keyword spellings of expr-head-aliases for data-form heads ([:max :x] ==
+  [:mx :x]) — consulted by data-op->kw only, never by data-scan-op, so
+  [:win/scan :max …] keeps its operator meaning."
+  (into {} (map (fn [[s k]] [(keyword (str s)) k])) expr-head-aliases))
+
 (defn damerau-levenshtein
   "Damerau-Levenshtein edit distance: insertions, deletions, substitutions,
   and single adjacent transpositions each cost 1. Used by both the #dt/e
@@ -449,6 +484,7 @@
   (delay
     (into (sorted-set)
           (concat (keys sym->op)
+                  (keys expr-head-aliases)
                   (keys win-sym->op)
                   (keys row-sym->op)
                   (keys stat-sym->op)
@@ -471,6 +507,7 @@
   At read time, ops arrive as plain symbols ('and, '>, etc.)."
   [op]
   (or (sym->op op)
+      (expr-head-aliases op)
       (when (keyword? op) op)
       (let [suggestions (when (symbol? op) (suggest-op op))]
         (throw (ex-info
@@ -520,6 +557,16 @@
             (str "`" op-sym "` takes exactly two arguments (base, exponent). Got "
                  n-args ".")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
+    (and (#{:mn :sm :md :sd :variance :mx :mi :ct :nuniq :prod
+            :first-val :last-val} op-kw)
+         (not= 1 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` is a column aggregation and takes exactly one argument. Got "
+                 n-args "."
+                 (when (#{:mx :mi} op-kw)
+                   " For a row-wise max/min across columns, use `row/max`/`row/min`."))
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
 
     (and (= :when-finite op-kw) (not= 2 n-args))
     (throw (ex-info
@@ -721,6 +768,7 @@
                          (pr-str op) ".")
                     {:dt/error :invalid-data-op :dt/op op}))
     (or (when-let [k (get @kw->op op)] [:op k])
+        (when-let [k (get expr-head-kw-aliases op)] [:op k])
         (when (contains? win-op-table op) [:win op])
         (when (contains? row-op-table op) [:row op])
         (when (contains? stat-op-table op) [:stat op])
