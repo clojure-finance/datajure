@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.4] - 2026-08-31
+
 The syntax-review release: a design review of the DSL against its own
 principles ("rich built-in primitives for daily operations", "one name per
 concept"), plus a second external-review round — vocabulary gaps filled,
@@ -564,7 +566,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.3...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.4...HEAD
+[2.7.4]: https://github.com/clojure-finance/datajure/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/clojure-finance/datajure/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/clojure-finance/datajure/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/clojure-finance/datajure/compare/v2.7.0...v2.7.1
