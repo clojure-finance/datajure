@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The syntax-review release: two vocabulary gaps filled and three consistency
+warts removed, from a design review of the DSL against its own principles
+("rich built-in primitives for daily operations", "one name per concept").
+Contains **breaking renames** — no deprecation aliases are kept.
+
+### Added
+
+- **Elementary math ops** — `abs`, `exp`, `sqrt`, `pow`, `floor`, `ceil`,
+  `round`, `signum` as element-wise ops in `#dt/e` and data-forms, completing
+  the arithmetic vocabulary around the existing `sq`/`log`/`asinh` (`log`
+  finally has its inverse; `abs` unlocks nearest-date idioms like
+  `(abs (- (day :date) 15))`). One-for-one `dfn` delegations with the same
+  nil story as `sq`/`log`; `round` returns longs. All are window-fast-path
+  eligible (element-wise), guarded by read-time `:wrong-arity` checks (unary,
+  `pow` binary — the same checks now also cover `sq`/`log`/`asinh` and the
+  cleaners) and the `:arith-nil-literal` nil-literal rejection.
+- **`util/distinct-rows`** — one-call dedup (data.table `unique(DT)` / dplyr
+  `distinct`): keeps the FIRST occurrence per duplicate group, preserves input
+  row order, keeps all columns; optional column subset restricts the key.
+  Complements `duplicate-rows`/`mark-duplicates`.
+- **Time units accept singular AND plural spellings everywhere** — `:day` ==
+  `:days` in `xbar` (both contexts), `win/tlag` `{:unit …}`, `tsfill`
+  `:every`, and join `:tolerance` / `:window` specs. Previously the
+  fixed-duration surfaces were plural-only (`:minutes`) while the calendar
+  surfaces were singular-only (`:month`) — a gratuitous spelling split.
+  Normalisation lives in the new shared `math/canonical-unit` +
+  `math/ms-per-unit` (one ms-table instead of three copies); genuinely
+  unsupported units (e.g. `:month` in a fixed-duration context) still throw
+  their structured errors.
+
+### Changed (BREAKING)
+
+- **`cut` unified across contexts; `qtile` removed.** `cut` is now one name
+  for equal-count binning in both contexts, exactly like `xbar`: inside
+  `#dt/e` it derives a column of bins (unchanged); standalone in `:by` it is
+  the grouping marker that `qtile` used to be (was: standalone `cut` threw
+  `:cut-standalone-not-supported`). Everything `qtile` supported carries over
+  verbatim — per-partition breakpoints with exact keys, `:from` reference
+  subpopulations, `<col>-q<n>` auto-naming, `:datajure/col` override — and
+  the two contexts still share breakpoints by construction. Migration:
+  `(qtile :mktcap 5 …)` → `(cut :mktcap 5 …)`. Error keys renamed:
+  `:qtile-invalid-n`/`:qtile-invalid-col`/`:qtile-invalid-from` →
+  `:cut-invalid-n`/`:cut-invalid-col`/`:cut-invalid-from`; the internal
+  marker selector is `:dt/selector :cut`.
+- **`between` (the positional `:select` column-range selector) renamed to
+  `col-range`.** `(dt ds :select (col-range :month-01 :month-12))`. The old
+  name was one character away from the `#dt/e` value predicate `between?`
+  while meaning something entirely different — a near-collision with
+  unrelated semantics. `between?` is unchanged. The marker selector is
+  `:dt/selector :col-range`; `datajure.concise` re-exports `col-range`.
+
 ## [2.7.3] - 2026-07-23
 
 ### Added

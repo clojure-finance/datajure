@@ -5,11 +5,48 @@
   all use it without a require cycle (expr already requires stat, which rules out
   homing these in expr).
 
+  Also home to the shared time-unit vocabulary (`canonical-unit`, `ms-per-unit`):
+  every unit-taking surface (xbar, win/tlag, tsfill, join :tolerance / :window)
+  accepts BOTH singular and plural spellings (:day == :days), normalised here so
+  the two families — fixed millisecond durations vs calendar shifts — differ only
+  in which units they support, never in spelling.
+
   Quantiles use R's default **type-7** estimator everywhere in datajure, chosen
   to match R's `quantile(..., type = 7)` / `median` exactly (the reference
   implementation for the finance workloads datajure is built against). This
   differs from tech.ml.dataset's `dfn/percentiles` / `dfn/median` (Apache Commons
-  Math, a different estimation type) at the tails AND, for some n, the median.")
+  Math, a different estimation type) at the tails AND, for some n, the median."
+  (:require [tech.v3.datatype.datetime :as dtype-dt]))
+
+(def ^:private plural->singular
+  {:seconds :second :minutes :minute :hours :hour :days :day :weeks :week
+   :months :month :quarters :quarter :years :year})
+
+(def ^:private singular->plural
+  (into {} (map (fn [[p s]] [s p])) plural->singular))
+
+(defn canonical-unit
+  "Normalise a time-unit keyword to whichever spelling `table` (a map or set of
+  unit keywords) uses. Both singular (:day) and plural (:days) are accepted for
+  every unit, everywhere in datajure. Returns the table's canonical keyword, or
+  nil when the unit (under either spelling) isn't supported by `table`."
+  [table unit]
+  (cond
+    (contains? table unit) unit
+    (contains? table (plural->singular unit)) (plural->singular unit)
+    (contains? table (singular->plural unit)) (singular->plural unit)))
+
+(def ms-per-unit
+  "Milliseconds per fixed-duration time unit — the unit family for raw-offset
+  arithmetic (xbar temporal buckets, join :tolerance / :window specs). Calendar
+  units (:month/:quarter/:year) have no fixed millisecond length and are
+  deliberately absent; those live in the ChronoUnit tables of win/tlag and
+  tsfill. Keys are the plural spellings; use `canonical-unit` to accept both."
+  {:seconds dtype-dt/milliseconds-in-second
+   :minutes dtype-dt/milliseconds-in-minute
+   :hours dtype-dt/milliseconds-in-hour
+   :days dtype-dt/milliseconds-in-day
+   :weeks dtype-dt/milliseconds-in-week})
 
 (defn finite-double?
   "True for a non-nil, finite number — not nil, NaN, or ±Inf (R's `is.finite`)."

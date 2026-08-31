@@ -500,3 +500,12 @@
       (is (= :asof-index-keys-mismatch
              (:dt/error (try (join trades quotes :on [:sym :time] :how :asof :right-index idx-wrongkeys)
                              nil (catch clojure.lang.ExceptionInfo e (ex-data e)))))))))
+
+(deftest asof-tolerance-unit-spellings
+  (testing "temporal :tolerance accepts singular unit spellings ([30 :day] == [30 :days])"
+    (let [left (ds/->dataset {:k [1 1] :t [(java.time.LocalDate/of 2024 3 1)
+                                           (java.time.LocalDate/of 2024 6 1)]})
+          right (ds/->dataset {:k [1] :t [(java.time.LocalDate/of 2024 2 25)] :val [99]})]
+      (is (= (vec (:val (join left right :on [:k :t] :how :asof :tolerance [30 :days])))
+             (vec (:val (join left right :on [:k :t] :how :asof :tolerance [30 :day])))))
+      (is (= [99 nil] (vec (:val (join left right :on [:k :t] :how :asof :tolerance [30 :day]))))))))

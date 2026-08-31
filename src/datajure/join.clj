@@ -6,7 +6,8 @@
             [tech.v3.datatype.casting :as casting]
             [tech.v3.datatype.datetime :as dtype-dt]
             [datajure.asof :as asof]
-            [datajure.expr :as expr]))
+            [datajure.expr :as expr]
+            [datajure.math :as math]))
 
 (defn- has-duplicate-keys?
   [dataset key-cols]
@@ -66,14 +67,13 @@
   (let [dt (col-datatype dataset col-kw)]
     (boolean (and dt (dtype-dt/datetime-datatype? dt)))))
 
-(def ^:private window-unit-millis
+(defn- window-unit-millis
   "Milliseconds per temporal unit — converts window-join offsets and temporal
-  as-of :tolerance specs to a common numeric (epoch-millisecond) space."
-  {:seconds dtype-dt/milliseconds-in-second
-   :minutes dtype-dt/milliseconds-in-minute
-   :hours dtype-dt/milliseconds-in-hour
-   :days dtype-dt/milliseconds-in-day
-   :weeks dtype-dt/milliseconds-in-week})
+  as-of :tolerance specs to a common numeric (epoch-millisecond) space.
+  Delegates to the shared `math/ms-per-unit` table; both singular and plural
+  spellings are accepted (:day == :days). nil for an unsupported unit."
+  [unit]
+  (some->> unit (math/canonical-unit math/ms-per-unit) math/ms-per-unit))
 
 (defn- resolve-tolerance
   "Validate and normalise :tolerance for an as-of join, returning the numeric
@@ -95,7 +95,8 @@
           (let [[n unit] tolerance
                 ms (or (window-unit-millis unit)
                        (throw (ex-info (str "Unknown :tolerance unit " unit
-                                            ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
+                                            ". Must be :seconds, :minutes, :hours, :days, or :weeks"
+                                            " (singular spellings accepted).")
                                        {:dt/error :join-tolerance-unknown-unit :unit unit})))]
             (* n ms))
           (throw (ex-info (str ":tolerance on a temporal asof key must be a [n unit] spec "
@@ -163,7 +164,8 @@
           resolve-unit (fn [unit]
                          (or (window-unit-millis unit)
                              (throw (ex-info (str "Unknown window unit: " unit
-                                                  ". Must be :seconds, :minutes, :hours, :days, or :weeks.")
+                                                  ". Must be :seconds, :minutes, :hours, :days, or :weeks"
+                                                  " (singular spellings accepted).")
                                              {:dt/error :join-unknown-window-unit :unit unit}))))]
       (cond
         ;; [lo hi]

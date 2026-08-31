@@ -4,6 +4,7 @@
   (:refer-clojure :exclude [cast])
   (:require [tech.v3.dataset :as ds]
             [tech.v3.datatype :as dtype]
+            [datajure.math :as math]
             [datajure.window :as win]))
 
 (defn melt
@@ -157,11 +158,13 @@
             acc
             (recur (inc k) (conj acc (if long-grid? (long p) p)))))))
     (let [unit (or every :day)
-          [mult chrono] (or (and (keyword? unit) (tsfill-chrono-units unit))
+          [mult chrono] (or (and (keyword? unit)
+                                 (some->> (math/canonical-unit tsfill-chrono-units unit)
+                                          tsfill-chrono-units))
                             (throw (ex-info
                                     (str "tsfill: :every for a temporal date column must be one "
-                                         "of :day :week :month :quarter :year; got "
-                                         (pr-str every) ".")
+                                         "of :day :week :month :quarter :year (plural spellings "
+                                         "accepted); got " (pr-str every) ".")
                                     {:dt/error :tsfill-invalid-every :dt/every every})))]
       (loop [k 0 acc []]
         (let [p (.plus ^java.time.temporal.Temporal lo (* (long mult) k) chrono)]

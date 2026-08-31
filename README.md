@@ -188,6 +188,26 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
                          (when-finite d (if (> d 0) 1.0 0.0)))})
 ```
 
+### Element-wise math
+
+Beyond `+ - * /`, the element-wise vocabulary covers the elementary functions a quant pipeline reaches for daily — no dropping to raw `dfn`:
+
+| Ops | Notes |
+|---|---|
+| `sq`, `sqrt`, `pow` | `pow` is binary: `(pow :x 2)` |
+| `log`, `exp` | inverses — `(exp (log :y))` round-trips |
+| `abs`, `signum` | `(abs (- (day :date) 15))` — nearest-date idioms |
+| `floor`, `ceil`, `round` | `round` returns longs |
+| `asinh` | numerically-stable inverse hyperbolic sine (nil for non-finite) |
+| `na2zero`, `nonfin2na`, `neg2na` | non-finite cleaners (mbmisc) |
+
+All work in `#dt/e` and data-forms (`[:abs :x]`), compose freely, and are validated at read time (wrong arity → `:wrong-arity`; a literal nil → `:arith-nil-literal`).
+
+```clojure
+(dt ds :set {:mag   #dt/e (abs :ret)
+             :gross #dt/e (exp (win/cumsum (log (+ 1 :ret))))})
+```
+
 ### Special forms
 
 ```clojure
@@ -285,7 +305,7 @@ Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean
 (dt ds :select #"body-.*")                          ;; regex match
 (dt ds :select [:not :id :timestamp])               ;; exclusion
 (dt ds :select {:species :sp :mass :m})             ;; select + rename
-(dt ds :select (between :month-01 :month-12))       ;; positional range (inclusive)
+(dt ds :select (col-range :month-01 :month-12))     ;; positional range (inclusive)
 ```
 
 ## Window Functions
@@ -541,7 +561,7 @@ The **last column** in `:on` (or `:left-on`/`:right-on`) is the asof column — 
       :how :asof :tolerance [90 :days])
 ```
 
-`:tolerance` is a plain number for a **numeric** asof key, or a `[n unit]` spec (`:seconds`/`:minutes`/`:hours`/`:days`/`:weeks`) for a **temporal** (date/time) one. Matches that exceed the tolerance produce nil for right columns — same as having no match.
+`:tolerance` is a plain number for a **numeric** asof key, or a `[n unit]` spec (`:seconds`/`:minutes`/`:hours`/`:days`/`:weeks`; singular spellings accepted) for a **temporal** (date/time) one. Matches that exceed the tolerance produce nil for right columns — same as having no match.
 
 ## Window Joins
 
@@ -591,7 +611,7 @@ The **last column** in `:on` is the asof column — preceding columns are exact-
 [-5 :minutes 0]   ;; [lo unit hi]  — also accepted
 [-300000 0]       ;; [lo hi]       ;; raw (300000 ms = 5 min)
 ```
-Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`.
+Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks` (singular spellings accepted).
 
 **`:agg` values:**
 - `#dt/e` expressions — apply to the matched sub-dataset; return **nil** for empty windows (avoids NaN from `dfn/mean` on empty columns)
@@ -658,6 +678,8 @@ Semantics: the grid spans each group's own min..max date (no rows before a group
 (du/describe ds)                                ;; summary stats → dataset
 (du/describe ds [:mass :height])                ;; subset of columns
 (du/clean-column-names messy-ds)                ;; "Some Ugly Name!" → :some-ugly-name (Unicode-aware)
+(du/distinct-rows ds)                           ;; dedup — keep first occurrence, input order
+(du/distinct-rows ds [:id :date])               ;; dedup by key subset (first row per key)
 (du/mark-duplicates ds [:id :date])             ;; adds :duplicate? column
 (du/drop-constant-columns ds)                   ;; remove zero-variance
 (du/coerce-columns ds {:year :int64 :mass :float64})
@@ -767,11 +789,11 @@ Floor-division bucketing inspired by q's `xbar`. Primary use case is computed `:
 (dt ds :set {:bucket #dt/e (xbar :price 5)})
 ```
 
-Supported temporal units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks`. Returns nil for nil input.
+Supported temporal units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks` (singular spellings accepted). Returns nil for nil input.
 
 ## Quantile Binning with `cut`
 
-Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask computes breakpoints from a **reference subpopulation** and applies them to **all rows** — the reference and binned populations can be different sizes. This directly models the NYSE-breakpoints pattern used in empirical finance:
+Equal-count (quantile) binning — one name in two contexts, like `xbar`: inside `#dt/e` it derives a *column* of bins; standalone in `:by` it *groups* by bin (next subsection). The optional `:from` mask computes breakpoints from a **reference subpopulation** and applies them to **all rows** — the reference and binned populations can be different sizes. This directly models the NYSE-breakpoints pattern used in empirical finance:
 
 ```clojure
 ;; Basic: 5 equal-count bins across all rows
@@ -791,49 +813,50 @@ Equal-count (quantile) binning inside `#dt/e`. The optional `:from` mask compute
         :set {:size-q #dt/e (cut :mktcap 5 :from (= :exchcd 1))}))
 ```
 
-## Quantile Grouping with `qtile`
+### `cut` in `:by` — quantile grouping
 
-`qtile` is the `:by`-friendly companion to `cut` — produces an equal-count bin assignment from a column's distribution. Use it when you want to *group by* quantile, rather than *derive a column of* quantile bins. Inspired by R's `cut` and Stata's `xtile`; named `qtile` to evoke quintile/decile:
+`cut` is one name in both contexts, exactly like `xbar`: inside `#dt/e` it derives a *column* of bins (above); standalone in `:by` it is a *grouping* — use it when you want to group by quantile directly. Inspired by R's `cut` and Stata's `xtile`:
 
 ```clojure
 ;; Global quintile buckets of market cap
-(dt stocks :by [(qtile :mktcap 5)]
+(dt stocks :by [(cut :mktcap 5)]
     :agg {:n nrow :mean-ret #dt/e (mn :ret)})
 ;; Result column is auto-named :mktcap-q5
 
 ;; Per-date size quintiles — the canonical CRSP / Fama-French pattern.
 ;; Each date gets its own breakpoints.
-(dt stocks :by [:date (qtile :mktcap 5)]
+(dt stocks :by [:date (cut :mktcap 5)]
     :agg {:mean-ret #dt/e (mn :ret)})
 
 ;; Per-date NYSE-style breakpoints applied to all stocks — Fama-French size sort.
 ;; For each date, breakpoints are computed from that date's NYSE stocks only,
 ;; then applied to all stocks (NYSE + AMEX + NASDAQ) on that date.
-(dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+(dt stocks :by [:date (cut :mktcap 5 :from #dt/e (= :exchcd 1))]
     :agg {:mean-ret #dt/e (mn :ret)})
 ```
 
-**Breakpoint population depends on what else is in `:by`:**
+**Breakpoint population in `:by` depends on what else is in `:by`:**
 
 | `:by` shape | Breakpoints |
 |---|---|
-| `qtile` alone | Global — computed once from the whole dataset |
-| `qtile` + exact keys | Per-partition — computed within each exact-key combination (the data.table / dplyr default) |
-| `qtile :from <mask>` | Reference-subpopulation — the mask selects rows for breakpoint computation, applied in whichever population (global or per-partition) the rest of `:by` implies |
+| `cut` alone | Global — computed once from the whole dataset |
+| `cut` + exact keys | Per-partition — computed within each exact-key combination (the data.table / dplyr default) |
+| `cut :from <mask>` | Reference-subpopulation — the mask selects rows for breakpoint computation, applied in whichever population (global or per-partition) the rest of `:by` implies |
 
-For the same bucketing semantics inside `#dt/e` expressions (`:set` / `:where` / `:agg`) rather than `:by`, use `#dt/e (cut :col n)`.
+The two contexts share breakpoints by construction, so `(cut :mktcap 5)` in `:by` and `#dt/e (cut :mktcap 5)` bin identically for the same population:
 
-| | `qtile` | `#dt/e (cut ...)` |
+| | `(cut ...)` in `:by` | `#dt/e (cut ...)` |
 |---|---|---|
-| Context | `:by` (grouping) | `:set` / `:where` / `:agg` (expression) |
 | Result | Integer bin key (1..n, or nil for nil input) | Column of bin integers |
 | Per-partition via | Exact keys in same `:by` | `:by` + `:set` window mode |
 | `:from` option | Supported (reference subpopulation) | Supported (reference subpopulation) |
 | Result column name | Auto `<col>-q<n>` (customise via `:datajure/col` metadata) | Whatever you name it in `:set` |
 
-Pick `qtile` when the bins are a grouping key; pick `cut` when the bins are a column value you want to keep alongside the original rows.
+Use `:by` when the bins are a grouping key; use `#dt/e` when the bins are a column value you want to keep alongside the original rows.
 
 **Note on small partitions.** If a partition has fewer than `n` non-nil values, breakpoints cannot be computed and all non-nil rows in that partition land in bin 1. Filter out thin partitions upstream or use fewer bins.
+
+> Before the syntax-review release this grouping form was a separate function, `qtile` — now removed; `cut` covers both contexts.
 
 ## Computed `:by` — Custom Grouping Functions
 
@@ -896,7 +919,7 @@ Short aliases for power users (q / data.table users in particular):
 | `winsorize`   | stat/stat-winsorize |
 | `trim`        | stat/stat-trim |
 | `rescale`     | stat/stat-rescale |
-| `between`     | positional range selector |
+| `col-range`   | positional column-range selector |
 
 Both `nrow` (discoverable) and `N` (terse, q/data.table style) live in `datajure.core`; `N` is also re-exported from `datajure.concise`. Since 2.7.0 row count is also a real nullary op — `#dt/e (nrow)` / `#dt/e (N)` / data-form `[:nrow]` — so it composes in arithmetic: `#dt/e (- (nrow) 1)` for peer counts.
 
@@ -1016,13 +1039,13 @@ The DSL adds only parsing and dispatch overhead; all computation is delegated to
 
 | Namespace | Purpose |
 |-----------|---------|
-| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `qnt`, `stddev`, `variance`, `max*`, `min*`, `count*`, `prod`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `qtile`, `cut`, `between`, `*dt*` |
+| `datajure.core` | `dt`, `N`, `nrow`, `mean`, `sum`, `median`, `qnt`, `stddev`, `variance`, `max*`, `min*`, `count*`, `prod`, `div0`, `asc`, `desc`, `pass-nil`, `rename`, `xbar`, `cut`, `col-range`, `*dt*` |
 | `datajure.expr` | AST nodes, compiler, `#dt/e` reader tag |
 | `datajure.concise` | Short aliases for power users |
 | `datajure.window` | Window function implementations |
 | `datajure.row` | Row-wise function implementations |
 | `datajure.stat` | Statistical transforms: `stat/standardize`, `stat/demean`, `stat/winsorize` |
-| `datajure.math` | Numeric primitives: `quantile-type7` (R type-7 quantiles, shared by `median`/`qnt`/`qtile`/`cut`/`winsorize`/`describe`) |
+| `datajure.math` | Numeric primitives: `quantile-type7` (R type-7 quantiles, shared by `median`/`qnt`/`cut`/`winsorize`/`describe`) |
 | `datajure.util` | `describe`, `clean-column-names`, `duplicate-rows`, etc. |
 | `datajure.io` | Unified `read`/`write` dispatching on file extension |
 | `datajure.reshape` | `melt` for wide→long, `cast` for long→wide |

@@ -225,8 +225,8 @@
   1-based bin index in [1, n]. Uses left-inclusive comparison: v lands in bin
   i (1-based) if v is <= breakpoints[i-1]. This matches cut-bucket's
   java.util.Arrays/binarySearch exact-match behaviour (exact hits return the
-  lower bin), so qtile and cut produce identical bins for values equal to a
-  breakpoint. Returns nil for nil input."
+  lower bin), so cut-in-:by and cut-in-#dt/e produce identical bins for values
+  equal to a breakpoint. Returns nil for nil input."
   [v breakpoints]
   (when (some? v)
     (loop [i 0]
@@ -235,11 +235,11 @@
         (<= v (nth breakpoints i)) (inc i)
         :else (recur (inc i))))))
 
-(defn- resolve-qtile-marker
-  "Given a {:dt/selector :qtile ...} marker and the dataset, compute
-  breakpoints once and return a metadata-tagged row-fn that bins each row's
-  value. The returned fn carries :datajure/col metadata so the resulting
-  group-key column has a friendly name.
+(defn- resolve-cut-marker
+  "Given a {:dt/selector :cut ...} marker (from the standalone `cut` fn in :by)
+  and the dataset, compute breakpoints once and return a metadata-tagged row-fn
+  that bins each row's value. The returned fn carries :datajure/col metadata so
+  the resulting group-key column has a friendly name.
 
   When :dt/from is present (a #dt/e expr-node or boolean column keyword),
   breakpoints are computed from the reference subpopulation where the mask is
@@ -251,7 +251,7 @@
         result-col (or (:datajure/col marker)
                        (keyword (str (name col-kw) "-q" n)))]
     (when-not (contains? (set (ds/column-names dataset)) col-kw)
-      (throw (ex-info (str "qtile: column " col-kw " not found in dataset")
+      (throw (ex-info (str "cut: column " col-kw " not found in dataset")
                       {:dt/error :unknown-column
                        :dt/columns #{col-kw}
                        :dt/available (vec (sort (ds/column-names dataset)))})))
@@ -261,8 +261,8 @@
                        (cond
                          (expr/expr-node? from) ((expr/compile-expr from) dataset)
                          (keyword? from) (ds/column dataset from)
-                         :else (throw (ex-info "qtile :from must be a #dt/e expression or column keyword"
-                                               {:dt/error :qtile-invalid-from :from from})))))
+                         :else (throw (ex-info "cut :from must be a #dt/e expression or column keyword"
+                                               {:dt/error :cut-invalid-from :from from})))))
           ref-col (if (some? from-mask)
                     (let [rdr (dtype/->reader col)]
                       (filterv some?
@@ -274,12 +274,12 @@
           (bin-via-breakpoints (get row col-kw) breakpoints))
         {:datajure/col result-col}))))
 
-(defn- qtile-marker? [x]
-  (and (map? x) (= :qtile (:dt/selector x))))
+(defn- cut-marker? [x]
+  (and (map? x) (= :cut (:dt/selector x))))
 
 (defn- by->group-fn
   "Produce a row-to-group-key function from a :by spec. The dataset is required
-  so that markers like qtile (which need population-level statistics) can
+  so that markers like cut (which need population-level statistics) can
   precompute their breakpoints once before grouping."
   [dataset by]
   (cond
@@ -289,8 +289,8 @@
     (fn [row] (select-keys row by))
     :else
     (let [resolved (mapv (fn [item]
-                           (if (qtile-marker? item)
-                             (resolve-qtile-marker dataset item)
+                           (if (cut-marker? item)
+                             (resolve-cut-marker dataset item)
                              item))
                          by)]
       (fn [row]
@@ -322,7 +322,7 @@
                  :dt/entry item}))))))
 
 (defn- needs-per-partition-resolution?
-  "True if :by mixes tagged markers (currently qtile) with exact keys — in
+  "True if :by mixes tagged markers (currently cut) with exact keys — in
   which case markers must be resolved against each exact-key partition
   separately so breakpoints are per-group. Pure-marker :by (no exact keys)
   stays global because there is nothing to partition by. Pure-exact-key
@@ -330,12 +330,12 @@
   and opts out of the marker machinery entirely."
   [by]
   (and (sequential? by)
-       (some qtile-marker? by)
+       (some cut-marker? by)
        (some keyword? by)))
 
 (defn- keyword-only-by?
   "True for a :by that is a non-empty sequence of plain column keywords — no
-  qtile/xbar markers and no fn. The fast group-agg path handles exactly this
+  cut/xbar markers and no fn. The fast group-agg path handles exactly this
   (the common Fama-French / peer-bands shape); marker/fn :by uses the general path."
   [by]
   (and (sequential? by) (seq by) (every? keyword? by)))
@@ -466,8 +466,8 @@
          ;; Fast path: plain keyword :by (no markers/fn) — manual row-index group
          ;; + assemble-once, avoiding ds/group-by's eager all-column split.
          (fast-group-agg dataset by (vec pairs) within-order)
-         ;; General path. Compound case (qtile + exact keys): first partition by
-         ;; exact keys so qtile breakpoints are computed per sub-dataset.
+         ;; General path. Compound case (cut marker + exact keys): first partition
+         ;; by exact keys so cut breakpoints are computed per sub-dataset.
          (let [partitions (if (needs-per-partition-resolution? by)
                             (let [exact-keys (filterv keyword? by)]
                               (vals (ds/group-by dataset (fn [row] (select-keys row exact-keys)))))
@@ -539,6 +539,7 @@
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
   #{:+ :- :* :div :div0 :sq :log :> :< :>= :<= := :and :or :not :in :between?
+    :abs :exp :sqrt :pow :floor :ceil :round :signum
     :asinh :na2zero :neg2na :nonfin2na :when-finite
     :year :month :day :dow :quarter})
 
@@ -700,8 +701,8 @@
       (fast-group-set dataset by derivations within-order off-heap? grouping)
       ;; General path. Output stays in original input order: tag each row with an
       ;; index, group/sort/compute/concat (grouped order), then sort back by the index
-      ;; and drop it. Compound case (qtile + exact keys): partition by exact keys first
-      ;; so qtile breakpoints are computed per sub-dataset.
+      ;; and drop it. Compound case (cut marker + exact keys): partition by exact
+      ;; keys first so cut breakpoints are computed per sub-dataset.
       (do
         (when (keyword-only-by? by)
           (info-note :group-set-general-path
@@ -918,6 +919,7 @@
   For temporal columns: (xbar :time 5 :minutes) → floor to nearest 5-minute boundary
 
   Supported temporal units: :seconds, :minutes, :hours, :days, :weeks
+  (singular spellings — :second, :minute, … — are accepted everywhere)
 
   Primary use case: computed :by grouping for time-series bar generation.
 
@@ -944,14 +946,11 @@
            (* width (Math/floorDiv (long v) (long width))))))
      {:xbar/col col-kw}))
   ([col-kw width unit]
-   (let [ms-per-unit (condp = unit
-                       :seconds tech.v3.datatype.datetime/milliseconds-in-second
-                       :minutes tech.v3.datatype.datetime/milliseconds-in-minute
-                       :hours tech.v3.datatype.datetime/milliseconds-in-hour
-                       :days tech.v3.datatype.datetime/milliseconds-in-day
-                       :weeks tech.v3.datatype.datetime/milliseconds-in-week
-                       (throw (ex-info (str "Unknown xbar temporal unit: " unit)
-                                       {:dt/error :xbar-unknown-unit :unit unit})))]
+   (let [ms-per-unit (or (some->> unit (math/canonical-unit math/ms-per-unit) math/ms-per-unit)
+                         (throw (ex-info (str "Unknown xbar temporal unit: " unit
+                                              ". Supported: :seconds :minutes :hours :days :weeks"
+                                              " (singular spellings accepted).")
+                                         {:dt/error :xbar-unknown-unit :unit unit})))]
      (with-meta
        (fn [row]
          (let [v (get row col-kw)]
@@ -961,44 +960,45 @@
                (* width (Math/floorDiv ^long epoch-units ^long width))))))
        {:xbar/col col-kw}))))
 
-(defn qtile
-  "Quantile bucketing — produces a :by grouping that bins each row's value
-  in col-kw into one of n equal-count bins based on its percentile rank among
-  non-nil values. Inspired by R's `cut` and Stata's `xtile`.
+(defn cut
+  "Equal-count (quantile) binning — one name, two contexts, exactly like `xbar`:
 
-  Breakpoints are the 1/n, 2/n, ..., (n-1)/n quantiles (R type-7, matching
-  cut-bucket). Each row is then assigned to a bin in [1, n] via
-  left-inclusive comparison (values equal to a breakpoint go to the lower
-  bin, matching cut-bucket). nil input values produce nil keys (their own
-  group).
+    * Inside #dt/e (`:set`/`:where`/`:agg`): a column of bin integers —
+      `(dt ds :set {:quintile #dt/e (cut :mktcap 5)})`.
+    * Standalone in :by: a grouping marker that bins each row —
+      `(dt ds :by [(cut :mktcap 5)] :agg {...})`.
 
-  Breakpoint population — depends on what else is in :by:
-    * qtile alone in :by               → breakpoints from the WHOLE dataset
-    * qtile + other exact keys in :by  → breakpoints are computed PER
-                                         exact-key partition
+  Both contexts share the same breakpoints (R type-7 quantiles at 1/n .. (n-1)/n,
+  values equal to a breakpoint fall in the lower bin) so they always bin
+  identically for the same population. Inspired by R's `cut` and Stata's `xtile`.
+  nil input values produce nil (their own group in :by).
 
-  So `:by [:date (qtile :mktcap 5)]` does what you would expect in data.table
+  Breakpoint population in :by — depends on what else is in :by:
+    * cut alone in :by               → breakpoints from the WHOLE dataset
+    * cut + other exact keys in :by  → breakpoints are computed PER
+                                       exact-key partition
+
+  So `:by [:date (cut :mktcap 5)]` does what you would expect in data.table
   or dplyr: each date's rows are binned against that date's own quintiles.
   This is the canonical CRSP / Fama-French pattern — per-date cross-sectional
   size quintiles.
 
   The optional :from keyword accepts a #dt/e boolean expression or a boolean
   column keyword selecting a reference subpopulation for breakpoint
-  computation. When combined with other exact keys in :by, the mask is
-  applied within each partition. Classic NYSE use case:
+  computation (same as :from inside #dt/e). When combined with other exact
+  keys in :by, the mask is applied within each partition. Classic NYSE use case:
 
-      (dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+      (dt stocks :by [:date (cut :mktcap 5 :from #dt/e (= :exchcd 1))]
           :agg {:mean-ret #dt/e (mn :ret)})
 
   per-date NYSE quintile breakpoints applied to all stocks (NYSE + AMEX +
   NASDAQ) — Fama-French size sort exactly.
 
-  Companion to `xbar` (equal-width bins). For the same semantics inside
-  #dt/e expressions (`:set` / `:where` / `:agg` contexts rather than :by),
-  use `#dt/e (cut :col n :from pred)`.
+  Companion to `xbar` (equal-width bins).
 
-  Result column name defaults to `<col>-q<n>` (e.g. :mktcap-q5 for quintile
-  bins of :mktcap). Override via :datajure/col metadata on the marker.
+  In :by, the result column name defaults to `<col>-q<n>` (e.g. :mktcap-q5).
+  Override via :datajure/col metadata on the marker. Inside #dt/e you name
+  the column yourself in :set.
 
   Note on small partitions: if a partition has fewer than n non-nil values,
   breakpoints cannot be computed and all non-nil rows in that partition
@@ -1006,58 +1006,44 @@
   fewer bins.
 
   Usage:
-    ;; Global quintiles across the whole dataset
-    (dt stocks :by [(qtile :mktcap 5)]
+    ;; Column of quintile bins
+    (dt ds :set {:size-q #dt/e (cut :mktcap 5)})
+
+    ;; Global quintiles as a grouping
+    (dt stocks :by [(cut :mktcap 5)]
         :agg {:n N :mean-ret #dt/e (mn :ret)})
 
     ;; Per-date size quintiles — the canonical CRSP / Fama-French pattern
-    (dt stocks :by [:date (qtile :mktcap 5)]
+    (dt stocks :by [:date (cut :mktcap 5)]
         :agg {:mean-ret #dt/e (mn :ret)})
 
     ;; Per-date NYSE quintile breakpoints applied to all stocks
-    (dt stocks :by [:date (qtile :mktcap 5 :from #dt/e (= :exchcd 1))]
+    (dt stocks :by [:date (cut :mktcap 5 :from #dt/e (= :exchcd 1))]
         :agg {:mean-ret #dt/e (mn :ret)})"
   [col-kw n & {:keys [from]}]
   (when-not (and (integer? n) (pos? n))
-    (throw (ex-info (str "qtile requires a positive integer n, got: " n)
-                    {:dt/error :qtile-invalid-n :n n})))
+    (throw (ex-info (str "cut requires a positive integer n, got: " n)
+                    {:dt/error :cut-invalid-n :n n})))
   (when-not (keyword? col-kw)
-    (throw (ex-info (str "qtile requires a column keyword, got: " col-kw)
-                    {:dt/error :qtile-invalid-col :col col-kw})))
-  (cond-> {:dt/selector :qtile
+    (throw (ex-info (str "cut requires a column keyword, got: " col-kw)
+                    {:dt/error :cut-invalid-col :col col-kw})))
+  (cond-> {:dt/selector :cut
            :dt/col col-kw
            :dt/n n
            :datajure/col (keyword (str (name col-kw) "-q" n))}
     (some? from) (assoc :dt/from from)))
 
-(defn cut
-  "Equal-count (quantile) binning — assigns each value in a column to a bin
-  in 1..n based on its percentile rank among non-nil values.
-
-  Breakpoints are the 1/n, 2/n, ..., (n-1)/n quantiles (R type-7) of the
-  non-nil values. Bin assignment is right-open (binarySearch), so every
-  value lands in exactly one bin in [1, n]. nil values produce nil.
-
-  Complements xbar (equal-width bins). Use inside #dt/e:
-
-    (dt ds :set {:quintile #dt/e (cut :mass 5)})
-    (dt ds :where #dt/e (= (cut :mass 4) 1))   ;; bottom quartile
-
-  Note: cut requires whole-column context and cannot be used as a standalone
-  row-level function in :by. Use #dt/e (cut :col n) for all use cases."
-  [col-kw n]
-  (throw (ex-info "cut requires whole-column context — use inside #dt/e: (cut :col n)"
-                  {:dt/error :cut-standalone-not-supported :col col-kw :n n})))
-
-(defn between
+(defn col-range
   "Returns a column selector that selects all columns positionally between
   start-col and end-col (inclusive). Both endpoints must exist in the dataset.
-  Intended for use with :select in dt.
+  Intended for use with :select in dt. (Named col-range — a POSITIONAL range
+  over column names — to keep it visually distinct from the #dt/e value
+  predicate `between?`.)
 
   Example:
-    (dt ds :select (between :month-01 :month-12))"
+    (dt ds :select (col-range :month-01 :month-12))"
   [start-col end-col]
-  {:dt/selector :between
+  {:dt/selector :col-range
    :dt/start start-col
    :dt/end end-col})
 
@@ -1164,17 +1150,17 @@
         col-dtype (fn [col-kw]
                     (-> (ds/column dataset col-kw) meta :datatype))]
     (cond
-      (and (map? selector) (= :between (:dt/selector selector)))
+      (and (map? selector) (= :col-range (:dt/selector selector)))
       (let [{:dt/keys [start end]} selector
             _ (validate-select-cols dataset [start end])
             all-names (vec all-cols)
             si (.indexOf all-names start)
             ei (.indexOf all-names end)]
         (when (neg? si)
-          (throw (ex-info (str "between: start column " start " not found")
+          (throw (ex-info (str "col-range: start column " start " not found")
                           {:dt/error :unknown-column :dt/columns #{start}})))
         (when (neg? ei)
-          (throw (ex-info (str "between: end column " end " not found")
+          (throw (ex-info (str "col-range: end column " end " not found")
                           {:dt/error :unknown-column :dt/columns #{end}})))
         (let [[lo hi] (if (<= si ei) [si ei] [ei si])]
           (ds/select-columns dataset (subvec all-names lo (inc hi)))))

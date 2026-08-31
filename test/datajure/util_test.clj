@@ -214,3 +214,18 @@
         result (du/parse-numeric ds :x)]
     (is (= [1.5 2.5] (vec (result :x))))
     (is (= :float64 (dtype/elemwise-datatype (result :x))))))
+
+(deftest distinct-rows-basic
+  (let [d (ds/->dataset {:id [1 1 2 2 3] :d [:x :y :x :x :z] :v [10 20 30 40 50]})]
+    (testing "full-row distinct drops only exact duplicate rows, keeps input order"
+      (let [dup (ds/->dataset {:a [1 1 1] :b [2 2 9]})]
+        (is (= [[1 2] [1 9]] (mapv vec (ds/rowvecs (du/distinct-rows dup)))))))
+    (testing "no duplicates → dataset unchanged"
+      (is (= 5 (ds/row-count (du/distinct-rows d)))))
+    (testing "key-subset distinct keeps the FIRST row per key with all columns"
+      (is (= [[1 :x 10] [2 :x 30] [3 :z 50]]
+             (mapv vec (ds/rowvecs (du/distinct-rows d [:id]))))))
+    (testing "single keyword key is accepted"
+      (is (= 3 (ds/row-count (du/distinct-rows d :id)))))
+    (testing "multi-column key"
+      (is (= 4 (ds/row-count (du/distinct-rows d [:id :d])))))))

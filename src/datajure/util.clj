@@ -89,6 +89,23 @@
                           vec)]
      (ds/select-rows dataset dup-indices))))
 
+(defn distinct-rows
+  "Distinct rows, keeping the FIRST occurrence of each duplicate group and
+  preserving input row order (data.table `unique(DT)` / dplyr `distinct`).
+  Optional second arg restricts the duplicate check to a subset of columns
+  (a keyword or vector of keywords) — the kept row is the first row of each
+  key group, with ALL columns retained. Complements `duplicate-rows` (which
+  returns the duplicated rows instead)."
+  ([dataset]
+   (distinct-rows dataset (vec (ds/column-names dataset))))
+  ([dataset cols]
+   (let [cols (if (keyword? cols) [cols] cols)
+         seen (java.util.HashSet.)
+         keep-indices (filterv (fn [idx]
+                                 (.add seen (mapv #(nth (dataset %) idx) cols)))
+                               (range (ds/row-count dataset)))]
+     (ds/select-rows dataset keep-indices))))
+
 (defn mark-duplicates
   "Adds :duplicate? boolean column. Optional second arg specifies
   subset of columns to check for duplicates."

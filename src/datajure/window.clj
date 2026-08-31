@@ -113,7 +113,8 @@
 
   `date-col` values may be numbers (plain subtraction — years, xbar buckets,
   encoded periods) or java.time temporals, shifted per the `:unit` option
-  (`:day` default, `:week`, `:month`, `:quarter`, `:year`). Exact-match caveat:
+  (`:day` default, `:week`, `:month`, `:quarter`, `:year`; plural spellings
+  accepted). Exact-match caveat:
   calendar arithmetic must land on a date present in the data — for monthly
   panels keyed on month-END dates, tlag on a normalised month column (e.g. an
   `xbar` bucket) rather than the raw date.
@@ -129,7 +130,13 @@
    (let [rdr (dtype/->reader col)
          drdr (dtype/->reader date-col)
          n (dtype/ecount rdr)
-         unit (:unit opts :day)]
+         ;; both spellings accepted (:month == :months); nil = not a supported unit
+         unit (or (some->> (:unit opts :day)
+                           (math/canonical-unit #{:day :week :month :quarter :year}))
+                  (throw (ex-info (str "win/tlag: unknown :unit " (pr-str (:unit opts))
+                                       ". Supported: :day :week :month :quarter :year"
+                                       " (plural spellings accepted).")
+                                  {:dt/error :tlag-unknown-unit :dt/unit (:unit opts)})))]
      (when (not= n (dtype/ecount drdr))
        (throw (ex-info (str "win/tlag: value column and date column have different "
                             "lengths (" n " vs " (dtype/ecount drdr) ").")
@@ -138,10 +145,6 @@
      (when-not (number? shift)
        (throw (ex-info (str "win/tlag: shift must be a number; got " (pr-str shift) ".")
                        {:dt/error :tlag-invalid-shift :dt/shift shift})))
-     (when-not (contains? tlag-units (if (= unit :quarter) :month unit))
-       (throw (ex-info (str "win/tlag: unknown :unit " (pr-str unit)
-                            ". Supported: :day :week :month :quarter :year.")
-                       {:dt/error :tlag-unknown-unit :dt/unit unit})))
      (let [key-of (fn [v] (if (number? v) (double v) v))
            idx-map (loop [i 0 m (transient {})]
                      (if (= i n)

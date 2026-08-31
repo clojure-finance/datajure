@@ -25,7 +25,7 @@
     rescale     = stat/stat-rescale
 
   Column selectors:
-    between = positional range selector (core/between)
+    col-range = positional range selector (core/col-range)
 
   Everything else re-exported from datajure.core:
     N, dt, asc, desc, rename, pass-nil"
@@ -64,6 +64,6 @@
 (def ^{:doc "Trim a column at tail probability p (outside values → nil). Delegates to `stat/stat-trim`. Args: col p."} trim stat/stat-trim)
 (def ^{:doc "Min-max rescale a column to [0,1] (or [lo,hi]). Delegates to `stat/stat-rescale`. Args: col [new-lo new-hi]."} rescale stat/stat-rescale)
 
-(def ^{:doc "Between column selector. Re-exported from `datajure.core/between`.
+(def ^{:doc "Positional column-range selector. Re-exported from `datajure.core/col-range`.
   Returns a selector map for use with :select in dt.
-  Example: (dt ds :select (between :month-01 :month-12))"} between core/between)
+  Example: (dt ds :select (col-range :month-01 :month-12))"} col-range core/col-range)

@@ -311,34 +311,34 @@
       (is (= :unknown-column (:dt/error (ex-data e))))
       (is (= #{:maas} (:dt/columns (ex-data e)))))))
 
-(deftest select-between
-  (testing ":select with between — basic forward range"
+(deftest select-col-range
+  (testing ":select with col-range — basic forward range"
     (let [ds (ds/->dataset {:a [1] :b [2] :c [3] :d [4] :e [5]})]
-      (is (= [:b :c :d] (vec (ds/column-names (core/dt ds :select (core/between :b :d))))))))
-  (testing ":select with between — full range"
+      (is (= [:b :c :d] (vec (ds/column-names (core/dt ds :select (core/col-range :b :d))))))))
+  (testing ":select with col-range — full range"
     (let [ds (ds/->dataset {:a [1] :b [2] :c [3]})]
-      (is (= [:a :b :c] (vec (ds/column-names (core/dt ds :select (core/between :a :c))))))))
-  (testing ":select with between — single column (start = end)"
+      (is (= [:a :b :c] (vec (ds/column-names (core/dt ds :select (core/col-range :a :c))))))))
+  (testing ":select with col-range — single column (start = end)"
     (let [ds (ds/->dataset {:a [1] :b [2] :c [3]})]
-      (is (= [:b] (vec (ds/column-names (core/dt ds :select (core/between :b :b))))))))
-  (testing ":select with between — reversed endpoints selects same columns"
+      (is (= [:b] (vec (ds/column-names (core/dt ds :select (core/col-range :b :b))))))))
+  (testing ":select with col-range — reversed endpoints selects same columns"
     (let [ds (ds/->dataset {:a [1] :b [2] :c [3] :d [4]})]
-      (is (= [:b :c] (vec (ds/column-names (core/dt ds :select (core/between :c :b))))))))
-  (testing ":select with between — unknown start column throws"
+      (is (= [:b :c] (vec (ds/column-names (core/dt ds :select (core/col-range :c :b))))))))
+  (testing ":select with col-range — unknown start column throws"
     (let [ds (ds/->dataset {:a [1] :b [2]})
-          e (try (core/dt ds :select (core/between :z :b)) nil
+          e (try (core/dt ds :select (core/col-range :z :b)) nil
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (= :unknown-column (:dt/error (ex-data e))))))
-  (testing ":select with between — unknown end column throws"
+  (testing ":select with col-range — unknown end column throws"
     (let [ds (ds/->dataset {:a [1] :b [2]})
-          e (try (core/dt ds :select (core/between :a :z)) nil
+          e (try (core/dt ds :select (core/col-range :a :z)) nil
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (= :unknown-column (:dt/error (ex-data e)))))))
 
-(deftest select-between-pipeline
-  (testing ":select with between composes with :where and preserves row data"
+(deftest select-col-range-pipeline
+  (testing ":select with col-range composes with :where and preserves row data"
     (let [d (ds/->dataset {:id [1 2 3] :a [10 20 30] :b [40 50 60] :c [70 80 90]})
-          result (core/dt d :where #dt/e (> :a 10) :select (core/between :a :b))]
+          result (core/dt d :where #dt/e (> :a 10) :select (core/col-range :a :b))]
       (is (= [:a :b] (vec (ds/column-names result))))
       (is (= 2 (ds/row-count result)))
       (is (= [20 30] (vec (result :a)))))))
@@ -855,12 +855,12 @@
 
 (deftest unknown-op-in-dt-e-error
   (testing "typo for base op gets structured error with suggestion"
-    (let [ed (try (read-string "#dt/e (sqrt :x)")
+    (let [ed (try (read-string "#dt/e (sqq :x)")
                   nil
                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
       (is (some? ed))
       (is (= :unknown-op (:dt/error ed)))
-      (is (= 'sqrt (:dt/op ed)))
+      (is (= 'sqq (:dt/op ed)))
       (is (contains? (set (:dt/suggestions ed)) 'sq))))
   (testing "typo for win/* op suggests the right namespaced op"
     (let [ed (try (read-string "#dt/e (win/mvag :x 20)")
@@ -2134,11 +2134,13 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (core/dt data :set {:q #dt/e (cut :zzz 4)}))))))
 
-(deftest cut-standalone-throws
-  (testing "calling cut standalone throws :cut-standalone-not-supported"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"cut requires whole-column context"
-                          (core/cut :mass 4)))))
+(deftest cut-standalone-returns-by-marker
+  (testing "standalone cut returns a :by grouping marker (one name, two contexts — like xbar)"
+    (let [m (core/cut :mass 4)]
+      (is (= :cut (:dt/selector m)))
+      (is (= :mass (:dt/col m)))
+      (is (= 4 (:dt/n m)))
+      (is (= :mass-q4 (:datajure/col m))))))
 
 (deftest cut-in-where
   (testing "cut in :where filters to bottom quartile"
@@ -2228,29 +2230,29 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (core/dt data :set {:q #dt/e (cut :x 4 :from (= :zzz 1))}))))))
 
-(deftest qtile-basic
-  (testing "qtile in :by produces equal-count bins with column-named result"
+(deftest cut-by-basic
+  (testing "cut-in-:by in :by produces equal-count bins with column-named result"
     (core/reset-notes!)
     (let [data (ds/->dataset {:species [:A :A :A :B :B :B :C :C :C :D :D :D]
                               :mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
-          result (core/dt data :by [(core/qtile :mass 4)] :agg {:n core/N})]
+          result (core/dt data :by [(core/cut :mass 4)] :agg {:n core/N})]
       (is (= 4 (ds/row-count result)))
       (is (contains? (set (ds/column-names result)) :mass-q4))
       ;; 12 rows / 4 bins = 3 per bin
       (is (every? #(= 3 %) (vec (:n result))))))
-  (testing "qtile is equivalent to #dt/e (cut :col n) on the same column"
+  (testing "cut-in-:by is equivalent to #dt/e (cut :col n) on the same column"
     (core/reset-notes!)
     (let [data (ds/->dataset {:mass [3000 4000 5000 3500 4500 5500 3200 4200 5200 3800 4800 5800]})
           via-cut (-> (core/dt data :set {:q #dt/e (cut :mass 4)})
                       (core/dt :by [:q] :agg {:n core/N}))
-          via-qtile (core/dt data :by [(core/qtile :mass 4)] :agg {:n core/N})]
-      (is (= (vec (:n via-cut)) (vec (:n via-qtile)))))))
+          via-by-marker (core/dt data :by [(core/cut :mass 4)] :agg {:n core/N})]
+      (is (= (vec (:n via-cut)) (vec (:n via-by-marker)))))))
 
-(deftest qtile-combined-with-keyword
-  ;; Phase 62: qtile + exact key produces PER-PARTITION breakpoints (the
+(deftest cut-by-combined-with-keyword
+  ;; Phase 62: cut marker + exact key produces PER-PARTITION breakpoints (the
   ;; canonical CRSP pattern). Prior to phase 62 this used global breakpoints
   ;; and silently mis-binned cross-sectional sorts.
-  (testing "qtile + exact key computes breakpoints per exact-key partition"
+  (testing "cut-in-:by + exact key computes breakpoints per exact-key partition"
     (core/reset-notes!)
     ;; Each species has mass [low mid high] with different scales. Per-species
     ;; median bucketing with left-inclusive comparison must give
@@ -2258,7 +2260,7 @@
     (let [data (ds/->dataset {:species [:A :A :A :B :B :B :C :C :C :D :D :D]
                               :mass [3000 4000 5000 3500 4500 5500
                                      3200 4200 5200 3800 4800 5800]})
-          result (core/dt data :by [:species (core/qtile :mass 2)]
+          result (core/dt data :by [:species (core/cut :mass 2)]
                           :agg {:n core/N})
           by-species (group-by :species (ds/mapseq-reader result))]
       (is (= #{:species :mass-q2 :n} (set (ds/column-names result))))
@@ -2268,13 +2270,13 @@
               q->n (into {} (map (juxt :mass-q2 :n) rows))]
           (is (= 2 (q->n 1)) (str "species " sp " should have 2 rows in q=1 under per-group semantics"))
           (is (= 1 (q->n 2)) (str "species " sp " should have 1 row in q=2 under per-group semantics"))))))
-  (testing "regression: qtile alone (no exact keys) still uses GLOBAL breakpoints"
+  (testing "regression: cut marker alone (no exact keys) still uses GLOBAL breakpoints"
     (core/reset-notes!)
     (let [data (ds/->dataset {:mktcap (range 1 21)})
-          result (core/dt data :by [(core/qtile :mktcap 5)] :agg {:n core/N})]
+          result (core/dt data :by [(core/cut :mktcap 5)] :agg {:n core/N})]
       (is (every? #(= 4 %) (vec (:n result))) "20 rows / 5 bins = 4 each (unchanged)"))))
 
-(deftest qtile-per-group-breakpoints
+(deftest cut-by-per-group-breakpoints
   ;; Separate test for clarity: demonstrates the silent-wrong-answer bug that
   ;; phase 62 fixed. Under the old global semantics, the 8 rows split 4-4
   ;; along the global median (~75), so date=1 rows all fell into q=1 and
@@ -2285,7 +2287,7 @@
     (let [data (ds/->dataset
                 {:date [1 1 1 1 2 2 2 2]
                  :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
-          result (core/dt data :by [:date (core/qtile :mktcap 2)]
+          result (core/dt data :by [:date (core/cut :mktcap 2)]
                           :agg {:n core/N})
           rows (->> (ds/mapseq-reader result)
                     (sort-by (juxt :date :mktcap-q2)))]
@@ -2296,12 +2298,12 @@
               {:date 2 :mktcap-q2 1 :n 2}
               {:date 2 :mktcap-q2 2 :n 2}]
              (mapv #(select-keys % [:date :mktcap-q2 :n]) rows)))))
-  (testing "qtile + exact key also works in :by + :set (window mode)"
+  (testing "cut-in-:by + exact key also works in :by + :set (window mode)"
     (core/reset-notes!)
     (let [data (ds/->dataset
                 {:date [1 1 1 1 2 2 2 2]
                  :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
-          result (core/dt data :by [:date (core/qtile :mktcap 2)]
+          result (core/dt data :by [:date (core/cut :mktcap 2)]
                           :set {:bucket-mean #dt/e (mn :mktcap)})]
       ;; Window mode: all 8 rows preserved; per-date q=1 rows share a
       ;; bucket-mean, and likewise for q=2.
@@ -2319,11 +2321,11 @@
           (is (every? #(= 125.0 (:bucket-mean %)) d2-q1))
           (is (every? #(= 350.0 (:bucket-mean %)) d2-q2)))))))
 
-(deftest qtile-nil-handling
+(deftest cut-by-nil-handling
   (testing "nil values get their own group (nil key), non-nil values bin normally"
     (core/reset-notes!)
     (let [data (ds/->dataset {:mass [100 200 nil 400 nil 600 700]})
-          result (core/dt data :by [(core/qtile :mass 3)] :agg {:n core/N})
+          result (core/dt data :by [(core/cut :mass 3)] :agg {:n core/N})
           rows (ds/mapseq-reader result)
           nil-row (first (filter #(nil? (:mass-q3 %)) rows))]
       ;; 2 nil values form their own group
@@ -2331,46 +2333,46 @@
       ;; 5 non-nil values split into 3 bins
       (is (= 5 (reduce + (map :n (remove #(nil? (:mass-q3 %)) rows))))))))
 
-(deftest qtile-unknown-column-error
-  (testing "qtile with non-existent column throws :unknown-column at dispatch time"
+(deftest cut-by-unknown-column-error
+  (testing "cut-in-:by with non-existent column throws :unknown-column at dispatch time"
     (core/reset-notes!)
     (let [data (ds/->dataset {:mass [1 2 3 4]})
-          e (try (core/dt data :by [(core/qtile :flarg 2)] :agg {:n core/N}) nil
+          e (try (core/dt data :by [(core/cut :flarg 2)] :agg {:n core/N}) nil
                  (catch clojure.lang.ExceptionInfo e e))]
       (is (some? e))
       (is (= :unknown-column (:dt/error (ex-data e))))
       (is (= #{:flarg} (:dt/columns (ex-data e)))))))
 
-(deftest qtile-invalid-arguments
-  (testing "qtile with non-positive n throws :qtile-invalid-n at call time"
-    (let [e (try (core/qtile :mass 0) nil
+(deftest cut-by-invalid-arguments
+  (testing "cut-in-:by with non-positive n throws :cut-invalid-n at call time"
+    (let [e (try (core/cut :mass 0) nil
                  (catch clojure.lang.ExceptionInfo e e))]
-      (is (= :qtile-invalid-n (:dt/error (ex-data e))))))
-  (testing "qtile with non-integer n throws :qtile-invalid-n"
-    (let [e (try (core/qtile :mass 2.5) nil
+      (is (= :cut-invalid-n (:dt/error (ex-data e))))))
+  (testing "cut-in-:by with non-integer n throws :cut-invalid-n"
+    (let [e (try (core/cut :mass 2.5) nil
                  (catch clojure.lang.ExceptionInfo e e))]
-      (is (= :qtile-invalid-n (:dt/error (ex-data e))))))
-  (testing "qtile with non-keyword column throws :qtile-invalid-col"
-    (let [e (try (core/qtile "mass" 5) nil
+      (is (= :cut-invalid-n (:dt/error (ex-data e))))))
+  (testing "cut-in-:by with non-keyword column throws :cut-invalid-col"
+    (let [e (try (core/cut "mass" 5) nil
                  (catch clojure.lang.ExceptionInfo e e))]
-      (is (= :qtile-invalid-col (:dt/error (ex-data e)))))))
+      (is (= :cut-invalid-col (:dt/error (ex-data e)))))))
 
-(deftest qtile-default-result-column-name
+(deftest cut-by-default-result-column-name
   (testing "default result column name is <col>-q<n>"
     (core/reset-notes!)
     (let [data (ds/->dataset {:score [10 20 30 40 50]})
-          result (core/dt data :by [(core/qtile :score 5)] :agg {:n core/N})]
+          result (core/dt data :by [(core/cut :score 5)] :agg {:n core/N})]
       (is (contains? (set (ds/column-names result)) :score-q5))))
   (testing "quintile bins of :mktcap produce :mktcap-q5"
     (core/reset-notes!)
     (let [data (ds/->dataset {:mktcap (range 1 21)})
-          result (core/dt data :by [(core/qtile :mktcap 5)] :agg {:n core/N})]
+          result (core/dt data :by [(core/cut :mktcap 5)] :agg {:n core/N})]
       (is (contains? (set (ds/column-names result)) :mktcap-q5))
       ;; 20 rows / 5 bins = 4 per bin
       (is (every? #(= 4 %) (vec (:n result)))))))
 
-(deftest qtile-from-basic
-  (testing "qtile :from with predicate expression selects reference population"
+(deftest cut-by-from-basic
+  (testing "cut-in-:by :from with predicate expression selects reference population"
     (core/reset-notes!)
     ;; exchcd=1 rows: mktcap [5 15 35] -> 50th-percentile breakpoint = 15.0
     ;; Bin assignment uses <=: values <= breakpoint go to lower bin.
@@ -2379,21 +2381,21 @@
     ;; This is consistent with cut-bucket (binarySearch exact match → lower bin).
     (let [data (ds/->dataset {:mktcap [5 15 25 35 45]
                               :exchcd [1 1 2 1 2]})
-          result (core/dt data :by [(core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+          result (core/dt data :by [(core/cut :mktcap 2 :from #dt/e (= :exchcd 1))]
                           :agg {:n core/N})
           rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
       (is (= [2 3] (mapv :n rows)))))
-  (testing "qtile :from with boolean column keyword"
+  (testing "cut-in-:by :from with boolean column keyword"
     (core/reset-notes!)
     ;; nyse?=true rows: mktcap [5 15 35] -> same breakpoint and bins as above
     (let [data (ds/->dataset {:mktcap [5 15 25 35 45]
                               :nyse? [true true false true false]})
-          result (core/dt data :by [(core/qtile :mktcap 2 :from :nyse?)]
+          result (core/dt data :by [(core/cut :mktcap 2 :from :nyse?)]
                           :agg {:n core/N})
           rows (sort-by :mktcap-q2 (ds/mapseq-reader result))]
       (is (= [2 3] (mapv :n rows))))))
 
-(deftest qtile-from-nil-handling
+(deftest cut-by-from-nil-handling
   (testing "nils in col stay nil-keyed even with :from predicate"
     (core/reset-notes!)
     ;; exchcd=1 for all rows; non-nil mktcap = [10 30 50] -> breakpoint = 30
@@ -2401,13 +2403,13 @@
     ;; groups: nil->2, bin1->1, bin2->2
     (let [data (ds/->dataset {:mktcap [10 nil 30 nil 50]
                               :exchcd [1 1 1 1 1]})
-          result (core/dt data :by [(core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+          result (core/dt data :by [(core/cut :mktcap 2 :from #dt/e (= :exchcd 1))]
                           :agg {:n core/N})
           rows (ds/mapseq-reader result)
           nil-row (first (filter #(nil? (:mktcap-q2 %)) rows))]
       (is (= 2 (:n nil-row))))))
 
-(deftest qtile-from-with-exact-key
+(deftest cut-by-from-with-exact-key
   ;; Phase 62: the canonical Fama-French case. Per-date NYSE breakpoints
   ;; applied to all stocks (NYSE + AMEX + NASDAQ). The `:from` mask is
   ;; applied WITHIN each exact-key partition, so each date's NYSE
@@ -2425,7 +2427,7 @@
                  :exchcd [1 1 2 2 1 1 2 2]
                  :mktcap [10.0 30.0 15.0 40.0 100.0 300.0 150.0 400.0]})
           result (core/dt data
-                          :by [:date (core/qtile :mktcap 2 :from #dt/e (= :exchcd 1))]
+                          :by [:date (core/cut :mktcap 2 :from #dt/e (= :exchcd 1))]
                           :agg {:n core/N})
           by-date (group-by :date (ds/mapseq-reader result))]
       ;; Per-date expected split with NYSE-based breakpoints (bp_date1=20, bp_date2=200):
@@ -3277,3 +3279,58 @@
     (let [d (ds/->dataset {:g [:a :a :a] :x [1.0 nil nil]})]
       (is (= (vec (:f (core/dt d :set {:f #dt/e (win/fills :x {:limit 1})} :by [:g])))
              (vec (:f (core/dt d :set [[:f [:win/fills :x {:limit 1}]]] :by [:g]))))))))
+
+;; ---------------------------------------------------------------------------
+;; Elementary math ops — abs/exp/sqrt/pow/floor/ceil/round/signum
+;; ---------------------------------------------------------------------------
+
+(deftest elementary-math-ops
+  (let [d (ds/->dataset {:x [-4.0 9.0 nil 2.25] :y [2 3 4 5]})]
+    (testing "abs/sqrt/floor/ceil/signum are element-wise; missing stays missing"
+      (is (= [4.0 9.0 nil 2.25] (vec (:a (core/dt d :set {:a #dt/e (abs :x)})))))
+      (is (= [2.0 3.0 nil 1.5] (vec (:s (core/dt d :set {:s #dt/e (sqrt (abs :x))})))))
+      (is (= [-4.0 9.0 nil 2.0] (vec (:f (core/dt d :set {:f #dt/e (floor :x)})))))
+      (is (= [-4.0 9.0 nil 3.0] (vec (:c (core/dt d :set {:c #dt/e (ceil :x)})))))
+      (is (= [-1.0 1.0 nil 1.0] (vec (:sg (core/dt d :set {:sg #dt/e (signum :x)}))))))
+    (testing "pow is binary; round returns longs; exp inverts log"
+      (is (= [4.0 9.0 16.0 25.0] (vec (:p (core/dt d :set {:p #dt/e (pow :y 2)})))))
+      (is (= [2 3 4 5] (vec (:r (core/dt d :set {:r #dt/e (round (exp (log :y)))}))))))
+    (testing "data-form spelling matches #dt/e"
+      (is (= (vec (:a (core/dt d :set {:a #dt/e (abs :x)})))
+             (vec (:a (core/dt d :set {:a [:abs :x]})))))
+      (is (= (vec (:p (core/dt d :set {:p #dt/e (pow :y 2)})))
+             (vec (:p (core/dt d :set {:p [:pow :y 2]}))))))
+    (testing "usable in :where"
+      (is (= 2 (ds/row-count (core/dt d :where #dt/e (> (abs :x) 3))))))
+    (testing "wrong arity is a read-time :wrong-arity error"
+      (is (= :wrong-arity (try (datajure.expr/data->ast [:sqrt :x :y]) nil
+                               (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e))))))
+      (is (= :wrong-arity (try (datajure.expr/data->ast [:pow :x]) nil
+                               (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
+    (testing "literal nil in the new arithmetic ops is rejected at read time"
+      (is (= :arith-nil-literal (try (datajure.expr/data->ast [:abs nil]) nil
+                                     (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Time-unit spellings — singular and plural accepted everywhere
+;; ---------------------------------------------------------------------------
+
+(deftest time-unit-spellings
+  (testing "xbar accepts singular units, in #dt/e and standalone"
+    (let [d (ds/->dataset {:t [(java.time.LocalDateTime/of 2024 1 1 10 3)
+                               (java.time.LocalDateTime/of 2024 1 1 10 7)]})]
+      (is (= (vec (:b (core/dt d :set {:b #dt/e (xbar :t 5 :minutes)})))
+             (vec (:b (core/dt d :set {:b #dt/e (xbar :t 5 :minute)})))))
+      (is (= (vec (:n (core/dt d :by [(core/xbar :t 5 :minutes)] :agg {:n core/N})))
+             (vec (:n (core/dt d :by [(core/xbar :t 5 :minute)] :agg {:n core/N})))))))
+  (testing "win/tlag accepts plural units"
+    (let [dates [(java.time.LocalDate/of 2024 1 1) (java.time.LocalDate/of 2024 2 1)
+                 (java.time.LocalDate/of 2024 3 1)]
+          d (ds/->dataset {:g [:a :a :a] :d dates :x [10 20 30]})]
+      (is (= (vec (:l (core/dt d :by [:g] :set {:l #dt/e (win/tlag :x :d 1 {:unit :month})})))
+             (vec (:l (core/dt d :by [:g] :set {:l #dt/e (win/tlag :x :d 1 {:unit :months})})))))))
+  (testing "unsupported units still throw their structured errors"
+    (let [d (ds/->dataset {:t [(java.time.LocalDateTime/of 2024 1 1 10 3)]})]
+      (is (= :xbar-unknown-unit
+             (try (vec (:b (core/dt d :set {:b #dt/e (xbar :t 5 :months)}))) nil
+                  (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))))

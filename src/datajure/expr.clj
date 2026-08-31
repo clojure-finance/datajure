@@ -301,6 +301,16 @@
                (div0 a b))))
    :sq dfn/sq
    :log dfn/log
+   ;; elementary math (one-for-one dfn delegations, same nil story as sq/log):
+   ;; abs/exp/sqrt/floor/ceil/signum are unary, pow is binary, round returns longs
+   :abs dfn/abs
+   :exp dfn/exp
+   :sqrt dfn/sqrt
+   :pow dfn/pow
+   :floor dfn/floor
+   :ceil dfn/ceil
+   :round dfn/round
+   :signum dfn/signum
    ;; element-wise non-finite cleaners (mbmisc na2zero/neg2na/nonfin2na) + stable
    ;; inverse-hyperbolic-sine. Per-element nil/NaN/±Inf handling → object readers.
    :asinh (fn [col] (dtype/make-reader :object (dtype/ecount col)
@@ -378,6 +388,8 @@
   "Maps source-form symbols to canonical keyword op names."
   {'+ :+, '- :-, '* :*, '/ :div
    'sq :sq, 'log :log, 'asinh :asinh
+   'abs :abs, 'exp :exp, 'sqrt :sqrt, 'pow :pow
+   'floor :floor, 'ceil :ceil, 'round :round, 'signum :signum
    'na2zero :na2zero, 'neg2na :neg2na, 'nonfin2na :nonfin2na
    ;; calendar date-parts, with a long alias for dow matching java.time naming
    'year :year, 'month :month, 'day :day, 'dow :dow, 'quarter :quarter
@@ -495,6 +507,20 @@
                  n-args ".")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
 
+    (and (#{:sq :log :asinh :abs :exp :sqrt :floor :ceil :round :signum
+            :na2zero :neg2na :nonfin2na} op-kw)
+         (not= 1 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly one argument (a column or expression). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
+
+    (and (= :pow op-kw) (not= 2 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly two arguments (base, exponent). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
     (and (= :when-finite op-kw) (not= 2 n-args))
     (throw (ex-info
             (str "`" op-sym "` takes exactly two arguments (guard expression, body expression). Got "
@@ -514,7 +540,9 @@
   `coalesce` or `div0`. Predicates keep their unambiguous nil-literal → false
   rule, so this check is scoped to arithmetic only."
   [op-kw op-sym args]
-  (when (and (#{:+ :- :* :div :sq :log} op-kw) (some nil? args))
+  (when (and (#{:+ :- :* :div :sq :log
+                :abs :exp :sqrt :pow :floor :ceil :round :signum} op-kw)
+             (some nil? args))
     (throw (ex-info
             (str "Arithmetic op `" op-sym "` received a literal nil. Arithmetic "
                  "requires non-nil operands — use `coalesce` to supply a value, "
@@ -894,14 +922,11 @@
         rdr (dtype/->reader col)
         n (dtype/ecount rdr)]
     (if (and col-dtype (dtype-dt/datetime-datatype? col-dtype))
-      (let [ms-per-unit (condp = unit
-                          :seconds dtype-dt/milliseconds-in-second
-                          :minutes dtype-dt/milliseconds-in-minute
-                          :hours dtype-dt/milliseconds-in-hour
-                          :days dtype-dt/milliseconds-in-day
-                          :weeks dtype-dt/milliseconds-in-week
-                          (throw (ex-info (str "Unknown xbar temporal unit: " unit)
-                                          {:dt/error :xbar-unknown-unit :unit unit})))]
+      (let [ms-per-unit (or (some->> unit (math/canonical-unit math/ms-per-unit) math/ms-per-unit)
+                            (throw (ex-info (str "Unknown xbar temporal unit: " unit
+                                                 ". Supported: :seconds :minutes :hours :days :weeks"
+                                                 " (singular spellings accepted).")
+                                            {:dt/error :xbar-unknown-unit :unit unit})))]
         (dtype/make-reader :object n
                            (let [v (nth rdr idx)]
                              (if (nil? v)

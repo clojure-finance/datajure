@@ -236,3 +236,11 @@
              (err #(reshape/tsfill (ds/->dataset {:y [1]}) {}))))
       (is (= :unknown-column
              (err #(reshape/tsfill (ds/->dataset {:y [1]}) {:date :z})))))))
+
+(deftest tsfill-unit-spellings
+  (testing ":every accepts plural spellings (:months == :month)"
+    (let [d (ds/->dataset {:k [:a :a]
+                           :d [(java.time.LocalDate/of 2024 1 1)
+                               (java.time.LocalDate/of 2024 4 1)]})]
+      (is (= (vec (:d (reshape/tsfill d {:by [:k] :date :d :every :month})))
+             (vec (:d (reshape/tsfill d {:by [:k] :date :d :every :months}))))))))
