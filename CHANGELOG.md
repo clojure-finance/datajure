@@ -517,7 +517,7 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
   (core/dt stocks :by [:date (core/qtile :mktcap 5)]
            :agg {:mean-ret #dt/e (mn :ret)})
   ```
-  Inspired by R's `cut` and Stata's `xtile`; named to evoke quintile/decile. Companion to `xbar` (equal-width bins) with a symmetric API. Result column name defaults to `<col>-q<n>`, overridable via `:datajure/col` metadata (the same extension point `xbar` uses). `nil` inputs form their own group (nil key). The `:from` option for reference-subpopulation breakpoints was added post-release — see `[Unreleased]`.
+  Inspired by R's `cut` and Stata's `xtile`; named to evoke quintile/decile. Companion to `xbar` (equal-width bins) with a symmetric API. Result column name defaults to `<col>-q<n>`, overridable via `:datajure/col` metadata (the same extension point `xbar` uses). `nil` inputs form their own group (nil key). The `:from` option for reference-subpopulation breakpoints was added post-release — see `[2.0.8]`.
 
 ### Changed
 
