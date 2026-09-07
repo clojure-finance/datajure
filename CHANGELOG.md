@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Structured `:not-a-dataset` guard on every dataset-taking entry point** —
-  passing a non-dataset where a dataset belongs (a plain column map, a
+- **Structured `:not-a-dataset` guard on every dataset-taking data-path entry
+  point** — passing a non-dataset where a dataset belongs (a plain column map, a
   sequence of maps, `nil`, anything else) previously died with a raw NPE
   (`dt` + `:where`, the crash ironically inside the typo-suggestion code), a
   raw protocol/cast error (`:select`, seq-of-maps), a *misleading*
@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tsfill`, `index-by`, `io/write`, and all `util` dataset fns (`describe`,
   `clean-column-names`, `duplicate-rows`, `distinct-rows`, `mark-duplicates`,
   `drop-constant-columns`, `coerce-columns`, `blank->nil`, `parse-numeric`).
-  (Reported from quanajure smoke testing.)
+  The display-only clay/clerk viewers are deliberately unguarded — they fail
+  visibly at render time. (Reported from quanajure smoke testing.)
 
 ## [2.7.4] - 2026-08-31
 
