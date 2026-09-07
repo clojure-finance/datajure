@@ -7,7 +7,8 @@
             [tech.v3.datatype.datetime :as dtype-dt]
             [datajure.asof :as asof]
             [datajure.expr :as expr]
-            [datajure.math :as math]))
+            [datajure.math :as math]
+            [datajure.util :as util]))
 
 (defn- has-duplicate-keys?
   [dataset key-cols]
@@ -293,6 +294,8 @@
   [left right & {:keys [on left-on right-on how validate report direction tolerance window agg
                         right-index]
                  :or {how :inner report false direction :backward}}]
+  (#'util/ensure-dataset! left "join (left dataset)")
+  (#'util/ensure-dataset! right "join (right dataset)")
   (let [how-kw (if (string? how) (keyword how) how)
         left-keys (or (normalize-keys on) (normalize-keys left-on))
         right-keys (or (normalize-keys on) (normalize-keys right-on))]

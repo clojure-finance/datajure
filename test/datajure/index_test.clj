@@ -144,3 +144,9 @@
     (is (= :invalid-index-kind
            (:dt/error (try (idx/index-by panel :tic {:kind :sorted}) nil
                            (catch clojure.lang.ExceptionInfo e (ex-data e))))))))
+
+(deftest index-by-not-a-dataset-error
+  (testing "a non-dataset first argument throws structured :not-a-dataset"
+    (is (= :not-a-dataset
+           (:dt/error (try (idx/index-by {:a [1]} :a) nil
+                           (catch clojure.lang.ExceptionInfo e (ex-data e))))))))

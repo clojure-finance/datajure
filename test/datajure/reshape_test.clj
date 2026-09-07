@@ -244,3 +244,9 @@
                                (java.time.LocalDate/of 2024 4 1)]})]
       (is (= (vec (:d (reshape/tsfill d {:by [:k] :date :d :every :month})))
              (vec (:d (reshape/tsfill d {:by [:k] :date :d :every :months}))))))))
+
+(deftest reshape-not-a-dataset-errors
+  (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+    (is (= :not-a-dataset (err #(melt {:a [1]} {:id [:a]}))))
+    (is (= :not-a-dataset (err #(cast nil {:id [:a] :from :f :value :v}))))
+    (is (= :not-a-dataset (err #(reshape/tsfill [{:a 1}] {:date :a}))))))

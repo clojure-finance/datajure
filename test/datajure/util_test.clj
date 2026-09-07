@@ -229,3 +229,36 @@
       (is (= 3 (ds/row-count (du/distinct-rows d :id)))))
     (testing "multi-column key"
       (is (= 4 (ds/row-count (du/distinct-rows d [:id :d])))))))
+
+(deftest ensure-dataset!-validation
+  (testing "returns a real dataset unchanged"
+    (let [d (ds/->dataset {:a [1]})]
+      (is (identical? d (#'du/ensure-dataset! d "test")))))
+  (testing "shape-aware hints: nil / plain map / seq-of-maps / other class"
+    (letfn [(msg [x] (try (#'du/ensure-dataset! x "f") nil
+                          (catch clojure.lang.ExceptionInfo e (.getMessage e))))]
+      (is (re-find #"got nil" (msg nil)))
+      (is (re-find #"plain map" (msg {:a [1]})))
+      (is (re-find #"sequence of maps" (msg [{:a 1}])))
+      (is (re-find #"java\.lang\.String" (msg "x")))))
+  (testing "an explicit hint overrides the shape-derived one"
+    (is (re-find #"custom hint"
+                 (try (#'du/ensure-dataset! nil "f" "custom hint") nil
+                      (catch clojure.lang.ExceptionInfo e (.getMessage e))))))
+  (testing "ex-data carries :dt/error, :dt/fn, :dt/got"
+    (let [d (try (#'du/ensure-dataset! {:a [1]} "myfn") nil
+                 (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :not-a-dataset (:dt/error d)))
+      (is (= "myfn" (:dt/fn d)))
+      (is (= "clojure.lang.PersistentArrayMap" (:dt/got d)))))
+  (testing "util entry points are guarded"
+    (letfn [(err [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+      (is (= :not-a-dataset (err #(du/describe {:a [1]}))))
+      (is (= :not-a-dataset (err #(du/distinct-rows nil))))
+      (is (= :not-a-dataset (err #(du/duplicate-rows nil))))
+      (is (= :not-a-dataset (err #(du/mark-duplicates nil))))
+      (is (= :not-a-dataset (err #(du/clean-column-names [{:a 1}]))))
+      (is (= :not-a-dataset (err #(du/drop-constant-columns nil))))
+      (is (= :not-a-dataset (err #(du/coerce-columns nil {:a :int64}))))
+      (is (= :not-a-dataset (err #(du/blank->nil nil))))
+      (is (= :not-a-dataset (err #(du/parse-numeric {:a ["1"]} :a)))))))

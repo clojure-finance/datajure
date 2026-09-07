@@ -5,6 +5,7 @@
   (:require [tech.v3.dataset :as ds]
             [tech.v3.datatype :as dtype]
             [datajure.math :as math]
+            [datajure.util :as util]
             [datajure.window :as win]))
 
 (defn melt
@@ -34,6 +35,7 @@
               :variable-col :metric :value-col :val})"
   [dataset {:keys [id measure variable-col value-col]
             :or {variable-col :variable value-col :value}}]
+  (#'util/ensure-dataset! dataset "melt")
   (let [measure-cols (or measure (remove (set id) (ds/column-names dataset)))]
     (if (empty? measure-cols)
       (-> (ds/select-columns dataset (vec id))
@@ -89,6 +91,7 @@
     (cast ds {:id [:date :sym] :from :metric :value :val :agg dfn/mean})"
   [dataset {:keys [id from value agg fill]
             :or {fill nil}}]
+  (#'util/ensure-dataset! dataset "cast")
   (when-not id (throw (ex-info "cast requires :id" {:dt/error :cast-missing-id})))
   (when-not from (throw (ex-info "cast requires :from" {:dt/error :cast-missing-from})))
   (when-not value (throw (ex-info "cast requires :value" {:dt/error :cast-missing-value})))
@@ -211,6 +214,7 @@
     (tsfill ds {:by [:permno] :date :month :every :month
                 :carry [:ticker]})"
   [dataset {:keys [by date every grid carry]}]
+  (#'util/ensure-dataset! dataset "tsfill")
   (when (nil? date)
     (throw (ex-info "tsfill: :date is required." {:dt/error :tsfill-missing-date})))
   (let [by (cond (nil? by) [] (keyword? by) [by] :else (vec by))

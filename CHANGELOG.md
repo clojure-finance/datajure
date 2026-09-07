@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Structured `:not-a-dataset` guard on every dataset-taking entry point** —
+  passing a non-dataset where a dataset belongs (a plain column map, a
+  sequence of maps, `nil`, anything else) previously died with a raw NPE
+  (`dt` + `:where`, the crash ironically inside the typo-suggestion code), a
+  raw protocol/cast error (`:select`, seq-of-maps), a *misleading*
+  `:unknown-column` error (`nil`), or — worst — silently returned the input
+  unchanged (`(dt {:a [1 2 3]})` with no query keys). All now throw
+  `{:dt/error :not-a-dataset :dt/fn … :dt/got …}` with a shape-aware hint:
+  maps and seqs of maps point at `tech.v3.dataset/->dataset`, `nil` asks
+  whether an upstream step returned nil, and a lone query map passed to `dt`
+  gets "did you forget the dataset?". Guarded: `dt`, `prepare-grouping`,
+  `rename`, `join` (both sides, side-specific messages), `melt`, `cast`,
+  `tsfill`, `index-by`, `io/write`, and all `util` dataset fns (`describe`,
+  `clean-column-names`, `duplicate-rows`, `distinct-rows`, `mark-duplicates`,
+  `drop-constant-columns`, `coerce-columns`, `blank->nil`, `parse-numeric`).
+  (Reported from quanajure smoke testing.)
+
 ## [2.7.4] - 2026-08-31
 
 The syntax-review release: a design review of the DSL against its own

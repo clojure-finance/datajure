@@ -6,7 +6,8 @@
             [tech.v3.datatype.datetime :as dtype-dt]
             [clojure.set :as set]
             [datajure.expr :as expr]
-            [datajure.math :as math])
+            [datajure.math :as math]
+            [datajure.util :as util])
   (:import [org.roaringbitmap RoaringBitmap]))
 
 (declare apply-order-by order-perm validate-select-cols info-note)
@@ -811,6 +812,7 @@
   `dt` checks the row count matches; reusing it on reordered rows is undefined."
   ([dataset by] (prepare-grouping dataset by nil))
   ([dataset by within-order]
+   (#'util/ensure-dataset! dataset "prepare-grouping")
    (when-not (and (sequential? by) (seq by) (every? keyword? by))
      (throw (ex-info "prepare-grouping :by must be a non-empty vector of column keywords."
                      {:dt/error :invalid-grouping-by :dt/by by})))
@@ -950,6 +952,7 @@
   "Rename columns in a dataset without dropping any.
   col-map is {old-kw new-kw}."
   [dataset col-map]
+  (#'util/ensure-dataset! dataset "rename")
   (ds/rename-columns dataset col-map))
 
 (defn xbar
@@ -1341,6 +1344,11 @@
                    gigabytes of heap to ~0. Pass :off-heap false for on-heap output.
                    No effect on other query shapes or non-numeric derived columns."
   [dataset & args]
+  (#'util/ensure-dataset! dataset "dt"
+                          (when (or (contains? dt-query-keys dataset)
+                                    (and (map? dataset) (seq dataset)
+                                         (every? dt-query-keys (keys dataset))))
+                            "did you forget the dataset? dt takes it as the first argument: (dt dataset :where ...)"))
   (let [{:keys [where set agg by select order-by within-order take off-heap]
          :or {off-heap true}} (dt-query-map args)
         grouping (when (grouping? by) by)]

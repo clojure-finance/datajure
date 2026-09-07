@@ -244,3 +244,9 @@
                  (catch clojure.lang.ExceptionInfo e e))]
       (when (some? e)
         (is (= :missing-dep (-> e ex-data :dt/error)))))))
+
+(deftest write-not-a-dataset-error
+  (testing "a non-dataset first argument throws before touching the filesystem"
+    (is (= :not-a-dataset
+           (:dt/error (try (dio/write {:a [1]} "never-written.csv") nil
+                           (catch clojure.lang.ExceptionInfo e (ex-data e))))))))

@@ -27,7 +27,8 @@
   `lookup-indices` returns raw row indices for callers gathering from a row-aligned
   projection themselves."
   (:require [tech.v3.dataset :as ds]
-            [tech.v3.datatype :as dtype]))
+            [tech.v3.datatype :as dtype]
+            [datajure.util :as util]))
 
 (def ^:private index-marker ::index)
 
@@ -132,6 +133,7 @@
   The index holds a reference to `dataset`."
   ([dataset key-cols] (index-by dataset key-cols {}))
   ([dataset key-cols opts]
+   (#'util/ensure-dataset! dataset "index-by")
    (let [kcols (->key-cols key-cols)
          kind (get opts :kind :hash)]
      (validate-key-cols dataset kcols)

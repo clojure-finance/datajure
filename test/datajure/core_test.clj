@@ -3423,3 +3423,30 @@
       (is (= 4 (ds/row-count (core/dt d :set {:z #dt/e (win/lag :x 1)}
                                       :by (core/prepare-grouping d [:g])))))
       (is (= [:x :g] (vec (ds/column-names (core/dt d :select (core/col-range :x :g)))))))))
+
+(deftest not-a-dataset-errors
+  (testing "a plain column map as the first argument throws structured :not-a-dataset (was a raw NPE)"
+    (let [e (try (core/dt {:a [1 2 3]} :where [:> :a 1]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :not-a-dataset (:dt/error (ex-data e))))
+      (is (re-find #"->dataset" (.getMessage e)))))
+  (testing "a lone query map hints that the dataset was forgotten"
+    (let [e (try (core/dt {:where [:> :a 1]}) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :not-a-dataset (:dt/error (ex-data e))))
+      (is (re-find #"did you forget the dataset" (.getMessage e)))))
+  (testing "nil dataset gets a nil-specific hint, not a misleading :unknown-column"
+    (let [e (try (core/dt nil :where [:> :a 1]) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :not-a-dataset (:dt/error (ex-data e))))
+      (is (re-find #"got nil" (.getMessage e)))))
+  (testing "a sequence of maps, another type, and a query-key-free map are rejected too"
+    (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+      (is (= :not-a-dataset (err #(core/dt [{:a 1} {:a 2}] :select [:a]))))
+      (is (= :not-a-dataset (err #(core/dt "nope" :take 2))))
+      ;; previously (dt {:a [1 2 3]}) silently returned the map unchanged
+      (is (= :not-a-dataset (err #(core/dt {:a [1 2 3]}))))))
+  (testing "prepare-grouping and rename are guarded"
+    (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+      (is (= :not-a-dataset (err #(core/prepare-grouping {:a [1]} [:a]))))
+      (is (= :not-a-dataset (err #(core/rename nil {:a :b})))))))

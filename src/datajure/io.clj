@@ -7,7 +7,8 @@
   (:require [tech.v3.dataset :as ds]
             [tech.v3.dataset.io :as ds-io]
             [charred.api :as charred]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [datajure.util :as util])
   (:import [java.io FileInputStream FileOutputStream InputStreamReader
             OutputStreamWriter BufferedReader BufferedWriter]
            [java.util.zip GZIPInputStream GZIPOutputStream]
@@ -256,6 +257,7 @@
     (write ds \"output.csv\" {:separator \\tab})"
   ([dataset path] (write dataset path {}))
   ([dataset path options]
+   (#'util/ensure-dataset! dataset "write")
    (let [ext (file-ext path)]
      (case ext
        (:csv :tsv :json :nippy nil) (ds-io/write! dataset path options)

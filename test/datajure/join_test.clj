@@ -463,3 +463,11 @@
   (is (= :join-unknown-how
          (try (join (ds/->dataset {:x [1]}) (ds/->dataset {:x [1]}) :on :x :how :smei) nil
               (catch clojure.lang.ExceptionInfo e (-> e ex-data :dt/error))))))
+
+(deftest join-not-a-dataset-errors
+  (let [d (ds/->dataset {:x [1]})
+        err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))]
+    (testing "left and right sides are validated with side-specific error data"
+      (is (= :not-a-dataset (:dt/error (err #(join {:x [1]} d :on :x)))))
+      (is (= "join (left dataset)" (:dt/fn (err #(join {:x [1]} d :on :x)))))
+      (is (= "join (right dataset)" (:dt/fn (err #(join d nil :on :x))))))))

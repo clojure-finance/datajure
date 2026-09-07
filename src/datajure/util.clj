@@ -9,6 +9,37 @@
             [datajure.math :as math]
             [clojure.string :as str]))
 
+(defn- ensure-dataset!
+  "Internal (other datajure namespaces call it via the var). Validate that `x`
+  is a tech.v3.dataset, returning it unchanged. Otherwise
+  throws a structured :not-a-dataset error whose message names the calling
+  function (`fn-name`, e.g. \"dt\" or \"join (left dataset)\") and carries a
+  shape-aware hint: nil, a plain column map, and a sequence of maps each get a
+  targeted suggestion; anything else reports its class. `hint` (optional)
+  overrides the shape-derived hint — used by dt to detect a query map passed
+  where the dataset belongs."
+  ([x fn-name] (ensure-dataset! x fn-name nil))
+  ([x fn-name hint]
+   (when-not (ds/dataset? x)
+     (let [hint (or hint
+                    (cond
+                      (nil? x)
+                      "got nil — did an upstream load or step return nil?"
+
+                      (map? x)
+                      "got a plain map — construct a dataset with (tech.v3.dataset/->dataset {...})"
+
+                      (and (sequential? x) (seq x) (every? map? (take 8 x)))
+                      "got a sequence of maps — construct a dataset with (tech.v3.dataset/->dataset [...])"
+
+                      :else
+                      (str "got " (.getName (class x)))))]
+       (throw (ex-info (str fn-name " expects a dataset — " hint)
+                       {:dt/error :not-a-dataset
+                        :dt/fn fn-name
+                        :dt/got (some-> x class .getName)}))))
+   x))
+
 (defn- describe-column [dataset col-kw]
   (let [col (dataset col-kw)
         dt (dtype/elemwise-datatype col)
@@ -45,8 +76,10 @@
   :median, :p75, :max. Non-numeric columns show nil for stats.
   Optional second arg selects columns (vector of keywords)."
   ([dataset]
+   (ensure-dataset! dataset "describe")
    (describe dataset (vec (ds/column-names dataset))))
   ([dataset cols]
+   (ensure-dataset! dataset "describe")
    (let [cols (if (keyword? cols) [cols] cols)]
      (ds/->dataset (mapv #(describe-column dataset %) cols)))))
 
@@ -59,6 +92,7 @@
   \"Some Ugly Name!\" → :some-ugly-name
   \"市值 (HKD millions)!\" → :市值-hkd-millions"
   [dataset]
+  (ensure-dataset! dataset "clean-column-names")
   (let [col-names (ds/column-names dataset)
         rename-map (into {}
                          (map (fn [col]
@@ -77,6 +111,7 @@
   ([dataset]
    (duplicate-rows dataset (vec (ds/column-names dataset))))
   ([dataset cols]
+   (ensure-dataset! dataset "duplicate-rows")
    (let [cols (if (keyword? cols) [cols] cols)
          grouped (group-by (fn [idx]
                              (mapv #(nth (dataset %) idx) cols))
@@ -99,6 +134,7 @@
   ([dataset]
    (distinct-rows dataset (vec (ds/column-names dataset))))
   ([dataset cols]
+   (ensure-dataset! dataset "distinct-rows")
    (let [cols (if (keyword? cols) [cols] cols)
          seen (java.util.HashSet.)
          keep-indices (filterv (fn [idx]
@@ -112,6 +148,7 @@
   ([dataset]
    (mark-duplicates dataset (vec (ds/column-names dataset))))
   ([dataset cols]
+   (ensure-dataset! dataset "mark-duplicates")
    (let [cols (if (keyword? cols) [cols] cols)
          grouped (group-by (fn [idx]
                              (mapv #(nth (dataset %) idx) cols))
@@ -128,6 +165,7 @@
   variance by definition, but that does not mean the column is constant across
   observations."
   [dataset]
+  (ensure-dataset! dataset "drop-constant-columns")
   (let [keep-cols (filterv (fn [col-kw]
                              (let [col (dtype/->reader (dataset col-kw))
                                    n (dtype/ecount col)]
@@ -143,6 +181,7 @@
   "Bulk type coercion. col-type-map is {col-kw datatype-kw ...}.
   Example: (coerce-columns ds {:year :int64 :mass :float64})"
   [dataset col-type-map]
+  (ensure-dataset! dataset "coerce-columns")
   (reduce-kv (fn [ds col-kw target-type]
                (ds/update-column ds col-kw #(dtype/elemwise-cast % target-type)))
              dataset
@@ -154,11 +193,13 @@
   the cleaning to specific columns (a keyword or vector of keywords). Non-string
   values in the selected columns pass through unchanged."
   ([dataset]
+   (ensure-dataset! dataset "blank->nil")
    (blank->nil dataset
                (filterv (fn [c] (contains? #{:string :text}
                                            (dtype/elemwise-datatype (ds/column dataset c))))
                         (ds/column-names dataset))))
   ([dataset cols]
+   (ensure-dataset! dataset "blank->nil")
    (let [cols (if (keyword? cols) [cols] cols)]
      (reduce (fn [d c]
                (let [rdr (dtype/->reader (ds/column d c))
@@ -204,6 +245,7 @@
   otherwise float.
   Example: (parse-numeric ds [:price :volume])"
   [dataset cols]
+  (ensure-dataset! dataset "parse-numeric")
   (let [cols (if (keyword? cols) [cols] cols)]
     (reduce
      (fn [d c]
