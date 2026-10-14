@@ -565,7 +565,7 @@
                   (keys win-sym->op)
                   (keys row-sym->op)
                   (keys stat-sym->op)
-                  '[if cond coalesce coalesce-finite let cut xbar win/scan win/each-prior]))))
+                  '[if cond coalesce coalesce-finite let lit cut xbar win/scan win/each-prior]))))
 
 (defn- suggest-op [op]
   (let [op-str (str op)
@@ -663,6 +663,16 @@
                  n-args ". For a non-nil count of a column use `count*`/`ct`.")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 0 :dt/got n-args}))))
 
+(defn- check-lit-arity!
+  "`lit` takes exactly one argument — the value to treat verbatim. Shared by
+  parse-form ((lit v)) and data->ast ([:lit v])."
+  [op-sym n-args]
+  (when (not= 1 n-args)
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly one argument (the literal value). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))))
+
 (defn- check-arith-nil-literal!
   "Arithmetic ops require non-nil operands. A literal nil — e.g. `(+ :x nil)` —
   is rejected at read time with a clear error: nil is ambiguous in arithmetic
@@ -754,6 +764,13 @@
          {:node/type :coalesce
           :coalesce/args (mapv #(parse-form % env) args)
           :coalesce/finite? (not= op 'coalesce)}
+         ;; explicit literal escape: (lit v) treats v verbatim — a keyword stays
+         ;; a VALUE instead of becoming a column reference, a vector stays data.
+         ;; #dt/e is a read-time tag, so v is the unevaluated form; for a runtime
+         ;; value use the data-form spelling [:lit x].
+         (= op 'lit)
+         (do (check-lit-arity! op (count args))
+             (lit-node (first args)))
          (= op 'let)
          (let [[binding-vec body] args
                binding-pairs (partition 2 binding-vec)
@@ -839,7 +856,7 @@
 (def ^:private data-special-op?
   "Vector heads handled structurally by data->ast (mirroring parse-form's special
   forms) rather than through the op tables."
-  #{:if :cond :let :coalesce :coalesce-finite :coalescef :cut :xbar
+  #{:if :cond :let :lit :coalesce :coalesce-finite :coalescef :cut :xbar
     :win/scan :win/each-prior})
 
 (defn- data-op->kw
@@ -886,7 +903,9 @@
       :qnt, :nrow, … including every full-name/concise alias), window/row/stat
       (:win/lag, :row/sum, :stat/winsorize, …);
     - the special forms are vector-headed too: [:if pred then else?],
-      [:cond p1 v1 … :else d], [:let [:name expr …] body],
+      [:cond p1 v1 … :else d], [:let [:name expr …] body], [:lit x] (the
+      literal escape — x passes through verbatim, so a runtime keyword stays a
+      value instead of becoming a column ref, and a vector stays data),
       [:coalesce …]/[:coalesce-finite …], [:cut :col n]/[:cut :col n :from pred],
       [:xbar :col w]/[:xbar :col w :minutes], [:win/scan :* expr],
       [:win/each-prior :- expr];
@@ -934,6 +953,12 @@
                    {:node/type :coalesce
                     :coalesce/args (mapv #(go % env) args)
                     :coalesce/finite? (not= h :coalesce)}
+                   ;; literal escape: [:lit x] passes the (already evaluated)
+                   ;; runtime value x through verbatim — a keyword stays a value,
+                   ;; a vector stays data, never a column ref or an operation
+                   :lit
+                   (do (check-lit-arity! :lit (count args))
+                       (lit-node (first args)))
                    :let
                    (let [[bvec body] args
                          _ (when-not (and (vector? bvec) (even? (count bvec))

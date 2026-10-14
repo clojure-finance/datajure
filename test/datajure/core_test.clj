@@ -2674,6 +2674,88 @@
                     (catch clojure.lang.ExceptionInfo e (ex-data e)))]
         (is (= :expr-in-by (:dt/error ed)))))))
 
+(deftest lit-escape
+  ;; (lit v) / [:lit x]: the explicit literal escape — a keyword stays a VALUE
+  ;; instead of becoming a column reference, and a keyword-headed vector stays
+  ;; data instead of parsing as an operation.
+  (let [d (ds/->dataset {:status [:active :inactive :active :pending]
+                         :x [1 2 3 4]})]
+    (testing "#dt/e (lit :kw) compares against the keyword value, not a column"
+      (is (= [1 3] (vec ((core/dt d :where #dt/e (= :status (lit :active))) :x)))))
+    (testing "without lit, the keyword is a column ref -> :unknown-column"
+      (let [ed (try (core/dt d :where #dt/e (= :status :active)) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :unknown-column (:dt/error ed)))))
+    (testing "data-form [:lit x] closes over a runtime keyword value"
+      (let [status :active]
+        (is (= [1 3] (vec ((core/dt d :where [:= :status [:lit status]]) :x))))))
+    (testing "lit keyword labels in if branches"
+      (is (= [:lo :lo :hi :hi]
+             (vec ((core/dt d :set {:lab #dt/e (if (> :x 2) (lit :hi) (lit :lo))}) :lab)))))
+    (testing "a keyword-headed vector passes through verbatim under [:lit ...]"
+      ;; this shape would otherwise parse as an (unknown) operation
+      (is (= [:not-an-op 1]
+             (first ((core/dt d :agg {:v [:lit [:not-an-op 1]]}) :v)))))
+    (testing "lit arity errors (shared by both spellings)"
+      (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+        (is (= :wrong-arity (err #(core/dt d :where [:= :x [:lit]]))))
+        (is (= :wrong-arity (err #(core/dt d :where [:= :x [:lit 1 2]]))))))))
+
+(deftest computed-by-named-keys
+  ;; single-entry maps in :by name a computed group key — pre-derived at the dt
+  ;; boundary, substituted by name, riding the keyword-only fast paths.
+  (let [sales (ds/->dataset {:region ["e" "e" "w" "w" "e"]
+                             :date (mapv #(java.time.LocalDate/parse %)
+                                         ["2020-01-05" "2020-03-01" "2020-01-20"
+                                          "2021-02-01" "2021-06-01"])
+                             :rev [10.0 20.0 30.0 40.0 50.0]})]
+    (testing ":agg mode — the computed key is a group-key output column"
+      (let [r (core/dt sales :by [:region {:year #dt/e (year :date)}]
+                       :agg {:total #dt/e (sum :rev)})]
+        (is (= [:region :year :total] (vec (ds/column-names r))))
+        (is (= {["e" 2020] 30.0 ["w" 2020] 30.0 ["w" 2021] 40.0 ["e" 2021] 50.0}
+               (zipmap (map vector (r :region) (r :year)) (vec (r :total)))))))
+    (testing "data-form spelling of the key expression"
+      (let [r (core/dt sales :by [{:year [:year :date]}] :agg {:n core/N})]
+        (is (= {2020 3 2021 2} (zipmap (vec (r :year)) (vec (r :n)))))))
+    (testing "window mode — the key drives the grouping but is dropped from output"
+      (let [r (core/dt sales :by [{:year #dt/e (year :date)}]
+                       :within-order [(core/asc :date)]
+                       :set {:cum #dt/e (win/cumsum :rev)})]
+        (is (= [:region :date :rev :cum] (vec (ds/column-names r))))
+        (is (= [10.0 60.0 40.0 40.0 90.0] (vec (r :cum))))))
+    (testing ":where filters the pre-derived key column row-aligned"
+      (let [r (core/dt sales :where #dt/e (> :rev 15)
+                       :by [{:year #dt/e (year :date)}] :agg {:n core/N})]
+        (is (= {2020 2 2021 2} (zipmap (vec (r :year)) (vec (r :n)))))))
+    (testing "mixed with a cut marker — the computed key partitions the breakpoints"
+      (let [r (core/dt sales :by [{:year #dt/e (year :date)} (core/cut :rev 2)]
+                       :agg {:n core/N})]
+        (is (= [:year :rev-q2 :n] (vec (ds/column-names r))))
+        (is (= 4 (ds/row-count r)))))
+    (testing "bare :by with no :set/:agg does not leak the temp column"
+      (is (= [:region :date :rev]
+             (vec (ds/column-names (core/dt sales :by [{:year #dt/e (year :date)}]))))))))
+
+(deftest computed-by-validation
+  (let [d (ds/->dataset {:g ["a" "b"] :x [1.0 2.0]})
+        err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+    (testing "multi-entry maps are rejected (entry order is not reliable)"
+      (is (= :by-computed-multi-entry
+             (err #(core/dt d :by [{:a #dt/e (sq :x) :b #dt/e (sq :x)}] :agg {:n core/N})))))
+    (testing "aggregator / win keys are circular"
+      (is (= :by-expr-not-elementwise (err #(core/dt d :by [{:m #dt/e (mn :x)}] :agg {:n core/N}))))
+      (is (= :by-expr-not-elementwise (err #(core/dt d :by [{:m #dt/e (win/cumsum :x)}] :agg {:n core/N})))))
+    (testing "name collisions: existing column, :set target, duplicate key"
+      (is (= :by-computed-name-collision (err #(core/dt d :by [{:x #dt/e (sq :x)}] :agg {:n core/N}))))
+      (is (= :by-computed-name-collision (err #(core/dt d :by [{:y #dt/e (sq :x)}] :set {:y #dt/e (sq :x)}))))
+      (is (= :by-computed-name-collision
+             (err #(core/dt d :by [{:y #dt/e (sq :x)} {:y #dt/e (sq :x)}] :agg {:n core/N})))))
+    (testing "a non-expression value is rejected"
+      (is (= :by-computed-invalid-expr (err #(core/dt d :by [{:y (fn [_] 1)}] :agg {:n core/N})))))
+    (testing "unknown column inside the key expression"
+      (is (= :unknown-column (err #(core/dt d :by [{:y #dt/e (sq :xx)}] :agg {:n core/N})))))))
+
 (deftest win-grr-op
   ;; §2.2: inverse-hyperbolic-sine growth window op = asinh(x) - asinh(lag x),
   ;; per partition, run-of-zeros -> 0, nil for the first element.

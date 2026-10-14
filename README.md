@@ -100,6 +100,18 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
         :prev   #dt/e (win/lag :price 1)})
 ```
 
+`:set` takes a **map** or a **sequence of pairs**, and the collection type carries the semantics:
+
+| Form | Meaning |
+|---|---|
+| Map `{:a e1 :b e2}` | Independent derivations against the input (a cross-reference between siblings throws a structured error) |
+| Seq of pairs `[[:a e1] [:b e2]]` | Ordered — later pairs see earlier-derived columns |
+
+```clojure
+(dt ds :set [[:bmi   #dt/e (/ :mass (sq :height))]
+             [:obese #dt/e (> :bmi 30)]])    ;; :obese sees the fresh :bmi
+```
+
 A window-mode `:set` **preserves the input row order** — with or without `:by` (2.7.0). `:within-order` sets only the *computation* order (so `win/lag`/`win/cumsum`/… walk by, say, date within each partition), and the derived values are scattered back to their original rows. Use `:order-by` if you want sorted output.
 
 `:within-order` also combines with `:agg`, sorting rows within each group before the aggregation runs. This is the one-call OHLC pattern and the reason `first-val` / `last-val` are first-class helpers:
@@ -233,6 +245,26 @@ All work in `#dt/e` and data-forms (`[:abs :x]`), compose freely, and are valida
 (dt ds :where #dt/e (between? :year 2007 2009))
 ```
 
+### Literal escape: `lit`
+
+Bare keywords in an expression are column references, and in data-forms a keyword-headed vector is an operation — convenient until the *value* you mean is itself a keyword (or such a vector). `(lit v)` / `[:lit x]` marks a value as a literal, taken verbatim:
+
+```clojure
+;; keyword-valued columns — without lit, :active would be an (unknown) column ref
+(dt ds :where #dt/e (= :status (lit :active)))
+(dt ds :set   {:lab #dt/e (if (> :x 2) (lit :hi) (lit :lo))})
+
+;; data-form: a runtime value that happens to be a keyword stays a VALUE
+(let [status :active]
+  (dt ds :where [:= :status [:lit status]]))
+
+;; self-documenting parameterization, even where nothing would misparse
+(let [threshold 4000]
+  (dt ds :where [:> :mass [:lit threshold]]))
+```
+
+`#dt/e` is a read-time tag, so `(lit v)` takes the unevaluated form; for runtime values use the data-form `[:lit x]`. `lit` changes how a value *parses*, not how the engine treats it afterwards: a sequential literal is still sequence-like to the vectorized ops (the same way `qnt` takes a probability vector), so membership against collection values stays a set with `in`, and per-row collection values stay plain-fn territory.
+
 ### Reusable expressions
 
 As shown in the "Why Datajure" section, `#dt/e` expressions are first-class AST values — store in vars, compose across queries:
@@ -299,7 +331,7 @@ Since 2.7.0 the data-form covers the **entire** `#dt/e` vocabulary — one expre
         :agg {:top [:first-val :mass] :n [:nrow]}})
 ```
 
-Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]`, and the bare SQL-style heads `[:max …]`/`[:min …]`/`[:count …]` == `[:mx …]`/`[:mi …]`/`[:ct …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`, `[:coalesce-finite …]`, `[:cut …]`, `[:xbar …]`, `[:win/scan :op …]`, `[:win/each-prior :op …]`), and `[:nrow]` for row count. Use a set for `:in` (a non-number-headed vector denotes an operation). Context rules match `#dt/e` exactly — e.g. `win/*` outside `:set` throws; unknown ops throw `:unknown-data-op` with a suggestion.
+Every `#dt/e` op keyword works, including all full-name/concise aliases (`[:mean …]` == `[:mn …]`, `[:fst …]` == `[:first-val …]`, and the bare SQL-style heads `[:max …]`/`[:min …]`/`[:count …]` == `[:mx …]`/`[:mi …]`/`[:ct …]`), the special forms (`[:if …]`, `[:cond … :else …]`, `[:let [:name expr …] body]`, `[:lit x]` — the literal escape, `[:coalesce-finite …]`, `[:cut …]`, `[:xbar …]`, `[:win/scan :op …]`, `[:win/each-prior :op …]`), and `[:nrow]` for row count. Use a set for `:in` (a non-number-headed vector denotes an operation; `[:lit x]` escapes any value). Context rules match `#dt/e` exactly — e.g. `win/*` outside `:set` throws; unknown ops throw `:unknown-data-op` with a suggestion.
 
 ## `:select` — Polymorphic Column Selection
 
@@ -771,7 +803,7 @@ Semantics:
 - `dow` follows ISO / `java.time`: 1 = Monday … 7 = Sunday.
 - `quarter` is 1–4, derived from the month.
 - Works on date and date-time columns. Raw `:instant` columns have no calendar fields (they're zone-less) — convert to local dates first.
-- Grouping goes through `:set` first: expressions directly in `:by` throw a structured `:expr-in-by` error pointing at the idiom above. Note that stored parts become proper typed `:int64` columns with missing bitmaps.
+- Grouping by a date part is a named `:by` entry — `:by [{:m #dt/e (month :date)}]` (see *Computed `:by`* below); a BARE expression in `:by` throws a structured `:expr-in-by` error pointing at that form. Note that stored parts become proper typed `:int64` columns with missing bitmaps.
 
 `xbar` (below) is complementary, not overlapping: `xbar` bins timestamps into consecutive intervals; date-parts extract calendar fields across periods ("all Aprils across decades" is inexpressible with `xbar`).
 
@@ -865,9 +897,33 @@ Use `:by` when the bins are a grouping key; use `#dt/e` when the bins are a colu
 
 > Before the syntax-review release this grouping form was a separate function, `qtile` — now removed; `cut` covers both contexts.
 
-## Computed `:by` — Custom Grouping Functions
+## Computed `:by` — Named Expression Keys & Custom Grouping Functions
 
-`:by` accepts a plain function of the row in addition to column keywords. Functions can attach `:datajure/col` metadata to control the result-column name:
+A `:by` vector entry may be a **single-entry map** naming a computed group key. The value is an element-wise `#dt/e` expression or data-form vector — the same output-name → expression convention as `:set`/`:agg`:
+
+```clojure
+;; group by a derived calendar part — data.table's keyby = .(year(date)) one-liner
+(dt sales
+  :by [:region {:year #dt/e (year :date)}]
+  :agg {:revenue #dt/e (sum :revenue)})
+
+;; data-form spelling
+(dt sales :by [:region {:year [:year :date]}] :agg {:revenue [:sum :revenue]})
+
+;; window mode: the key drives the grouping but is dropped from the output
+(dt prices
+  :by [{:ym #dt/e (+ (* 100 (year :date)) (month :date))}]
+  :within-order [(asc :date)]
+  :set {:cum #dt/e (win/cumsum :ret)})
+```
+
+Keywords select existing columns; maps name computed keys. The key is derived once at the `dt` boundary and the grouping rides the keyword-only fast paths. In `:agg` output it appears as the group-key column under your name; from window-mode `:set` output it is dropped (output stays "input columns + what `:set` names"). Rules:
+
+- **one map per key** (`:by [{:a e1} {:b e2}]`) — map entry order isn't reliable, and key order fixes output column order;
+- **element-wise expressions only** — aggregators and `win/*` are circular as group keys, and quantile/width binning keeps the `(cut …)`/`(xbar …)` markers (a `cut` key's breakpoint population depends on the *other* `:by` keys — see above — which a pre-derived column would silently change);
+- the name must not collide with an existing column or a `:set` target.
+
+`:by` also accepts a plain function of the row in addition to column keywords. Functions can attach `:datajure/col` metadata to control the result-column name:
 
 ```clojure
 ;; Simple computed :by
@@ -991,8 +1047,8 @@ Structured `ex-info` with suggestions. All errors carry a `:dt/error` key in `ex
 **Unknown op — namespace-aware suggestions at read time:**
 
 ```clojure
-#dt/e (sqrt :x)
-;; => ExceptionInfo: Unknown op `sqrt` in #dt/e expression. Did you mean: `sq`?
+#dt/e (sqart :x)
+;; => ExceptionInfo: Unknown op `sqart` in #dt/e expression. Did you mean: `sqrt`?
 
 #dt/e (win/mvag :price 20)
 ;; => ExceptionInfo: Unknown op `win/mvag` in #dt/e expression. Did you mean: `win/mavg`?

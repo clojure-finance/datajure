@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`lit` — the explicit literal escape**, in both expression spellings:
+  `#dt/e (= :status (lit :active))` and the data-form `[:lit x]`. A keyword
+  under `lit` stays a value instead of becoming a column reference, and a
+  keyword-headed vector stays data instead of parsing as an operation — the
+  data-form trap where a runtime value of keyword type silently became a
+  column ref (worst case colliding with a real column name) now has an
+  unambiguous spelling. `lit` changes parsing only: a sequential literal is
+  still sequence-like to the vectorized ops (membership against collection
+  values stays a set + `in`). Wrong arity throws the structured
+  `:wrong-arity` error from both spellings.
+- **Named computed group keys in `:by`** — a `:by` vector entry may be a
+  single-entry map naming an element-wise expression as a group key, in
+  either spelling: `(dt sales :by [:region {:year #dt/e (year :date)}]
+  :agg {…})` or `{:year [:year :date]}`. The key is derived once at the `dt`
+  boundary and substituted by name, so the grouping rides the keyword-only
+  fast paths; it appears as the group-key output column in `:agg` and is
+  dropped from window-mode `:set` output. Aggregators and `win/*` are
+  rejected as keys (`:by-expr-not-elementwise` — circular), as are
+  multi-entry maps (`:by-computed-multi-entry`), name collisions with an
+  existing column / `:set` target / sibling key
+  (`:by-computed-name-collision`), and non-expression values
+  (`:by-computed-invalid-expr`). `cut`/`xbar` keep their dedicated marker
+  forms (a `cut` key's breakpoint population depends on the other `:by`
+  keys, which a pre-derived column would silently change). The `:expr-in-by`
+  error now points at the named-map form.
+
+### Changed
+
+- README: the map-vs-seq-of-pairs `:set` rule (map = independent
+  derivations, seq of pairs = sequential, later pairs see earlier results)
+  is now taught up front in "The Key Insight", instead of only via the
+  cross-reference error message; the stale "unknown op `sqrt`" error example
+  (stale since `sqrt` became a real op) was replaced.
+
 ## [2.7.7] - 2026-10-14
 
 A single-fix correctness release, from the post-2.7.6 consistency audit.

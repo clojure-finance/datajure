@@ -338,16 +338,18 @@
   "Reject #dt/e ASTs and data-form vectors inside a sequential :by with a
   structured error. Without this, an AST map lands in by->group-fn's fn branch,
   where (ast-map row) is a lookup miss -> every row keys to nil -> the whole
-  dataset silently collapses into ONE group. Derive the key with :set first."
+  dataset silently collapses into ONE group. Name the key with a single-entry
+  map ({:m expr}, resolved by resolve-computed-by before this check) or derive
+  it with :set first."
   [by]
   (when (sequential? by)
     (doseq [item by]
       (when (or (expr-node? item) (vector? item))
         (throw (ex-info
-                (str "Expressions aren't supported directly in :by (got "
+                (str "Expressions aren't supported BARE in :by (got "
                      (if (expr-node? item) "a #dt/e expression" (pr-str item))
-                     "). Derive the group key with :set first, e.g. "
-                     "(-> ds (dt :set {:m #dt/e (month :date)}) (dt :by [:m] :agg {...})).")
+                     "). Name the key with a single-entry map — "
+                     ":by [{:m #dt/e (month :date)}] — or derive it with :set first.")
                 {:dt/error :expr-in-by
                  :dt/entry item})))
       ;; a non-grouping selector map in :by would silently collapse everything
@@ -639,6 +641,94 @@
     :let (and (every? (comp element-wise-ast? :binding/expr) (:let/bindings node))
               (element-wise-ast? (:let/body node)))
     false))
+
+(defn- computed-by-entry?
+  "True for a plain map used as a :by entry — the named-computed-key form
+  {:year #dt/e (year :date)} — as distinct from a #dt/e AST (:node/type …)
+  and a tagged selector map (:dt/selector …, e.g. a cut marker or a prepared
+  grouping)."
+  [x]
+  (and (map? x) (not (expr-node? x)) (not (:dt/selector x))))
+
+(defn- resolve-computed-by
+  "Pre-derive named computed group keys in a sequential :by — single-entry maps
+  {name expr} where expr is a #dt/e expression or data-form vector, e.g.
+  :by [:region {:year #dt/e (year :date)}]. Each entry is derived as a real
+  column at the dt boundary and the map is replaced by its name keyword, so the
+  grouping rides the keyword-only fast paths unchanged. Deriving happens before
+  :where, which is row-aligned because only element-wise expressions are
+  accepted. Returns {:dataset :by :temp-cols}; :temp-cols names the derived key
+  columns, which dt drops from non-:agg output (:agg output keeps them — they
+  ARE the group-key columns, named by the user).
+
+  Only element-wise expressions are accepted: an aggregator or win/* group key
+  is circular (the grouping doesn't exist yet while the key is computed), and
+  cut/xbar keep their dedicated marker forms — a cut key's breakpoint population
+  depends on the OTHER :by keys (per-partition resolution), which a pre-derived
+  expression would silently change to whole-dataset breakpoints."
+  [dataset by set-derivations]
+  (if-not (and (sequential? by) (some computed-by-entry? by))
+    {:dataset dataset :by by :temp-cols nil}
+    (let [existing (set (ds/column-names dataset))
+          set-targets (into #{} (map first)
+                            (if (map? set-derivations)
+                              (seq set-derivations)
+                              set-derivations))]
+      (reduce
+       (fn [{:keys [dataset by temp-cols] :as acc} item]
+         (if-not (computed-by-entry? item)
+           (assoc acc :by (conj by item))
+           (do
+             (when (not= 1 (count item))
+               (throw (ex-info
+                       (str "A computed :by entry is a SINGLE-entry map {name expr}; got "
+                            (count item) " entries " (vec (keys item))
+                            ". Use one map per key: :by [{:a expr-a} {:b expr-b}] —"
+                            " map entry order is not reliable, and group-key order"
+                            " fixes output column order.")
+                       {:dt/error :by-computed-multi-entry :dt/entry item})))
+             (let [[name-kw raw] (first item)
+                   expr (normalise-expr-value raw)]
+               (when-not (keyword? name-kw)
+                 (throw (ex-info
+                         (str "A computed :by entry names its key with a keyword; got "
+                              (pr-str name-kw) ".")
+                         {:dt/error :by-computed-invalid-name :dt/entry item})))
+               (when-not (expr-node? expr)
+                 (throw (ex-info
+                         (str "Computed :by key " name-kw " takes a #dt/e expression or"
+                              " data-form vector; got " (pr-str raw) "."
+                              (when (fn? raw)
+                                (str " For a plain-fn grouping, pass the fn as the whole"
+                                     " :by instead.")))
+                         {:dt/error :by-computed-invalid-expr :dt/entry item})))
+               (when-not (element-wise-ast? expr)
+                 (throw (ex-info
+                         (str "Computed :by key " name-kw " must be an element-wise"
+                              " expression. Aggregators and win/* are circular as group"
+                              " keys (the grouping doesn't exist yet); for quantile or"
+                              " width binning use the (cut :col n) / (xbar :col w)"
+                              " markers, whose breakpoint/partition semantics differ"
+                              " from a pre-derived column; anything else: derive the"
+                              " key with :set first.")
+                         {:dt/error :by-expr-not-elementwise
+                          :dt/entry name-kw})))
+               (when (or (existing name-kw) (set-targets name-kw)
+                         (some #{name-kw} temp-cols))
+                 (throw (ex-info
+                         (str "Computed :by key " name-kw " collides with an existing "
+                              (cond (existing name-kw) "column"
+                                    (set-targets name-kw) ":set derivation"
+                                    :else "computed :by key")
+                              " of the same name — reference it directly or pick"
+                              " another name.")
+                         {:dt/error :by-computed-name-collision :dt/name name-kw})))
+               (validate-expr-cols dataset expr (str ":by " name-kw))
+               {:dataset (assoc dataset name-kw (derive-column dataset name-kw expr))
+                :by (conj by name-kw)
+                :temp-cols (conj temp-cols name-kw)}))))
+       {:dataset dataset :by [] :temp-cols []}
+       by))))
 
 (defn- single-col-win-spec
   "If `dval` is a *pure single-column* window op — an AST `:win` node whose first arg
@@ -1409,8 +1499,14 @@
                    grouping from `prepare-grouping` — which bundles the group keys
                    and the :within-order sort, amortising them across multi-pass
                    transforms and repeated aggregations.
-                   #dt/e expressions / data-form vectors are NOT accepted as entries
-                   (structured :expr-in-by error) — derive the key with :set first.
+                   A vector entry may also be a SINGLE-entry map naming a computed
+                   key — :by [:region {:year #dt/e (year :date)}] — whose value is
+                   an element-wise #dt/e expression or data-form vector ([:year
+                   :date]). The key appears as a group-key column in :agg output
+                   and is dropped from window-mode :set output. Aggregators and
+                   win/* are rejected as keys (circular); quantile/width binning
+                   keeps the (cut …)/(xbar …) markers. BARE expressions (no name)
+                   are NOT accepted as entries (structured :expr-in-by error).
   :within-order  - the order rows are WALKED within each partition (or across the
                    whole dataset when :by is absent) while :set or :agg computes —
                    for window functions (win/lag, win/cumsum, ...) and
@@ -1463,6 +1559,8 @@
           set (normalise-derivations set)
           agg (normalise-derivations agg)
           eff-by (if grouping (:by grouping) by)
+          {dataset :dataset eff-by :by by-temp-cols :temp-cols}
+          (resolve-computed-by dataset eff-by set)
           _ (validate-by-entries eff-by)
           eff-wo (if grouping (:within-order grouping) within-order)
           set-has-win? (and set (derivations-have-win? set))
@@ -1493,6 +1591,9 @@
         (and set eff-by) (apply-group-set eff-by set eff-wo off-heap grouping)
         (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order off-heap)
         (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
+        ;; computed :by keys are temp columns everywhere but :agg (where they ARE
+        ;; the group-key output columns) — drop them from :set / bare-:by output
+        (and (seq by-temp-cols) (not agg)) (ds/remove-columns by-temp-cols)
         (and agg eff-by) (apply-group-agg eff-by agg eff-wo grouping)
         (and agg (not eff-by)) (apply-agg agg eff-wo)
         select (apply-select select)
