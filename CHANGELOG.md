@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.8] - 2026-10-14
+
+Two additive syntax features from an external review of the query DSL (its
+remaining suggestions were documentation-only or rejected). No breaking
+changes — a drop-in upgrade.
+
 ### Added
 
 - **`lit` — the explicit literal escape**, in both expression spellings:
@@ -718,7 +724,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.7...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.8...HEAD
+[2.7.8]: https://github.com/clojure-finance/datajure/compare/v2.7.7...v2.7.8
 [2.7.7]: https://github.com/clojure-finance/datajure/compare/v2.7.6...v2.7.7
 [2.7.6]: https://github.com/clojure-finance/datajure/compare/v2.7.5...v2.7.6
 [2.7.5]: https://github.com/clojure-finance/datajure/compare/v2.7.4...v2.7.5
