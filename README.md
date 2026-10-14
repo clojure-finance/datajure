@@ -84,8 +84,7 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
 
 ;; Same, as a plain map — dt1 returns THE single result row
 ;; (structured error if the result isn't exactly one row)
-(dt1 ds :agg {:total #dt/e (sm :mass) :n nrow})
-;; => {:total 20850, :n 5}
+(dt1 ds :agg {:total #dt/e (sm :mass) :n nrow})   ;; => {:total … :n …}
 
 ;; Partitioned window — compute within groups, keep all rows
 (dt ds
