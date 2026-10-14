@@ -372,6 +372,8 @@
                (div0 a b))))
    :sq dfn/sq
    :log dfn/log
+   :log1p dfn/log1p
+   :expm1 dfn/expm1
    ;; elementary math (one-for-one dfn delegations, same nil story as sq/log):
    ;; abs/exp/sqrt/floor/ceil/signum are unary, pow is binary, round returns longs
    :abs dfn/abs
@@ -477,7 +479,7 @@
 (def ^:private sym->op
   "Maps source-form symbols to canonical keyword op names."
   {'+ :+, '- :-, '* :*, '/ :div
-   'sq :sq, 'log :log, 'asinh :asinh
+   'sq :sq, 'log :log, 'log1p :log1p, 'expm1 :expm1, 'asinh :asinh
    'abs :abs, 'exp :exp, 'sqrt :sqrt, 'pow :pow
    'floor :floor, 'ceil :ceil, 'round :round, 'signum :signum
    'na2zero :na2zero, 'neg2na :neg2na, 'nonfin2na :nonfin2na
@@ -619,7 +621,7 @@
                  n-args ".")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
 
-    (and (#{:sq :log :asinh :abs :exp :sqrt :floor :ceil :round :signum
+    (and (#{:sq :log :log1p :expm1 :asinh :abs :exp :sqrt :floor :ceil :round :signum
             :na2zero :neg2na :nonfin2na} op-kw)
          (not= 1 n-args))
     (throw (ex-info
@@ -668,7 +670,7 @@
   `coalesce` or `div0`. Predicates keep their unambiguous nil-literal → false
   rule, so this check is scoped to arithmetic only."
   [op-kw op-sym args]
-  (when (and (#{:+ :- :* :div :sq :log
+  (when (and (#{:+ :- :* :div :sq :log :log1p :expm1
                 :abs :exp :sqrt :pow :floor :ceil :round :signum} op-kw)
              (some nil? args))
     (throw (ex-info

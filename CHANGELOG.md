@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dt1` — scalar reads from single-row results** — same arguments as `dt`,
+  returns the single result row as a plain map, replacing the
+  `(first (ds/mapseq-reader (dt …)))` ceremony around whole-table `:agg`.
+  Throws a structured `:dt1-not-single-row` when the result doesn't have
+  exactly one row (silently taking the first of several would mask a
+  grouping/filter bug). Exported from `datajure.concise` too. (From the
+  wrds-scratch momentum scripts, where the ceremony appeared four times.)
+- **`log1p` / `expm1` element-wise ops** — the log-return pair:
+  `(log1p :ret)` = `(log (+ 1.0 :ret))` but numerically better near zero,
+  `expm1` inverts back to simple returns. One-for-one `dfn` delegations with
+  the same read-time checks and fast-path treatment as `log`/`exp`.
+
+### Changed
+
+- **A prepared grouping as `:by` now works for `:agg`** (was `:set`-only,
+  rejected with `:grouping-requires-set`) — `fast-group-agg` consumes the
+  prebuilt perm/bounds, skipping both the per-call group-index build and the
+  per-group `:within-order` sort. Real pipelines regroup by the same keys
+  repeatedly; on 2M rows × 20k groups each reused `:agg` pass runs ~3.5–4×
+  faster. The guard's error key is now `:grouping-requires-set-or-agg`
+  (thrown only when a prepared grouping is passed with neither `:set` nor
+  `:agg`).
+
 ## [2.7.5] - 2026-10-14
 
 The consumer-feedback release: structured input validation from quanajure's

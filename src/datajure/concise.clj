@@ -31,7 +31,7 @@
     col-range = positional range selector (core/col-range)
 
   Everything else re-exported from datajure.core:
-    N, dt, asc, desc, rename, pass-nil"
+    N, dt, dt1, asc, desc, rename, pass-nil"
   (:require [datajure.core :as core]
             [datajure.expr :as expr]
             [datajure.stat :as stat]))
@@ -49,6 +49,7 @@
 
 (def ^{:doc "Row count helper. Re-exported from `datajure.core/N`."} N core/N)
 (def ^{:doc "Main query function. Re-exported from `datajure.core/dt`."} dt core/dt)
+(def ^{:doc "dt returning the single result row as a plain map (scalar reads from whole-table :agg). Re-exported from `datajure.core/dt1`."} dt1 core/dt1)
 (def ^{:doc "Ascending sort spec. Re-exported from `datajure.core/asc`."} asc core/asc)
 (def ^{:doc "Descending sort spec. Re-exported from `datajure.core/desc`."} desc core/desc)
 (def ^{:doc "Rename columns. Re-exported from `datajure.core/rename`."} rename core/rename)

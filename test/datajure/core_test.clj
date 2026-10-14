@@ -3288,11 +3288,78 @@
              (-> (try (core/dt d :set {:y [:* :x 2]} :grouping g) nil
                       (catch clojure.lang.ExceptionInfo e e))
                  ex-data :dt/error))))
-    (testing "a prepared grouping with :agg is rejected"
-      (is (= :grouping-requires-set
-             (-> (try (core/dt d :by g :agg {:n [:nrow]}) nil
+    (testing "a prepared grouping rides :agg too (wrds-scratch DATAJURE-NOTES §6)"
+      (is (= (mapv vec (ds/rowvecs (core/dt d :by [:k] :agg {:m [:mn :x] :n [:nrow]})))
+             (mapv vec (ds/rowvecs (core/dt d :by g :agg {:m [:mn :x] :n [:nrow]}))))))
+    (testing "an order-sensitive agg sees the grouping's encoded :within-order"
+      (is (= (mapv vec (ds/rowvecs (core/dt d :by [:k] :within-order [(core/asc :t)]
+                                            :agg {:first [:first-val :x] :last [:last-val :x]})))
+             (mapv vec (ds/rowvecs (core/dt d :by g
+                                            :agg {:first [:first-val :x] :last [:last-val :x]}))))))
+    (testing "a sort-free grouping matches plain :by for quantile aggs (prim path shape)"
+      (let [g0 (core/prepare-grouping d [:k])]
+        (is (= (mapv vec (ds/rowvecs (core/dt d :by [:k] :agg {:q [:qnt :x 0.5]})))
+               (mapv vec (ds/rowvecs (core/dt d :by g0 :agg {:q [:qnt :x 0.5]})))))))
+    (testing "a prepared grouping with neither :set nor :agg is rejected"
+      (is (= :grouping-requires-set-or-agg
+             (-> (try (core/dt d :by g :select [:k]) nil
                       (catch clojure.lang.ExceptionInfo e e))
                  ex-data :dt/error))))))
+
+(deftest dt1-scalar-reads
+  ;; wrds-scratch DATAJURE-NOTES §7: the (first (ds/mapseq-reader (dt …)))
+  ;; ceremony for whole-table :agg scalar reads, as one fn.
+  (let [d (ds/->dataset {:k ["a" "a" "b"] :x [1.0 2.0 30.0]})]
+    (testing "whole-table :agg comes back as a plain map"
+      (let [span (core/dt1 d :agg {:lo #dt/e (min :x) :hi #dt/e (max :x)})]
+        (is (map? span))
+        (is (= 1.0 (:lo span)))
+        (is (= 30.0 (:hi span)))))
+    (testing "any single-row result qualifies, e.g. a one-group :by"
+      (is (= {:k "b" :n 1} (core/dt1 d :where #dt/e (= :k "b") :by [:k] :agg {:n [:nrow]}))))
+    (testing "multi-row results throw :dt1-not-single-row with the count"
+      (let [ed (try (core/dt1 d :by [:k] :agg {:n [:nrow]}) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :dt1-not-single-row (:dt/error ed)))
+        (is (= 2 (:dt/row-count ed)))))
+    (testing "zero-row results throw too (a filtered-to-nothing bug isn't a nil scalar)"
+      (is (= :dt1-not-single-row
+             (-> (try (core/dt1 d :where #dt/e (> :x 1e9)) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
+
+(deftest log1p-expm1-ops
+  ;; wrds-scratch DATAJURE-NOTES §8: log-return vocabulary.
+  (let [d (ds/->dataset {:ret [0.0 0.1 -0.5]})]
+    (testing "log1p == log(1+x), expm1 is its inverse"
+      (let [r (core/dt d :set {:lr #dt/e (log1p :ret)
+                               :back #dt/e (expm1 (log1p :ret))})]
+        (is (= (mapv #(Math/log1p (double %)) (vec (:ret d))) (vec (:lr r))))
+        (is (every? #(< (Math/abs (double %)) 1e-12)
+                    (map - (vec (:back r)) (vec (:ret d)))))))
+    (testing "the log-return idiom composes as with log"
+      (let [r (core/dt d :set {:lr #dt/e (nonfin2na (log1p :ret))})]
+        ;; log1p(-1) is -Inf -> nonfin2na nil; a total-loss return month
+        (is (nil? (nth (vec (:lr (core/dt (ds/->dataset {:ret [-1.0]})
+                                          :set {:lr #dt/e (nonfin2na (log1p :ret))})))
+                       0)))
+        (is (= 0.0 (first (vec (:lr r)))))))
+    (testing "data-form spelling and read-time checks"
+      (is (= (vec (:lr (core/dt d :set {:lr #dt/e (log1p :ret)})))
+             (vec (:lr (core/dt d :set {:lr [:log1p :ret]})))))
+      (is (= :wrong-arity
+             (-> (try (read-string "#dt/e (log1p :a :b)") nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error)))
+      (is (= :arith-nil-literal
+             (-> (try (read-string "#dt/e (expm1 nil)") nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))
+    (testing "rides the window fast path as an element-wise op"
+      (with-redefs-fn {#'datajure.core/apply-set
+                       (fn [& _] (throw (ex-info "general path taken" {})))}
+        #(is (= 3 (count (vec (:lr (core/dt (ds/->dataset {:k [:a :a :b] :ret [0.1 0.2 0.3]})
+                                            :by [:k] :set {:lr [:log1p :ret]}))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; win/tlag — date-value-aware lag (mbmisc lbd / statar tlag)

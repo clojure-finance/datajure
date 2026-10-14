@@ -447,8 +447,14 @@
   gathered by row index and reduced with no boxing. Every other agg (composite
   #dt/e, plain fn, order-sensitive) is fed a lazy `ds/select-rows` view through
   `eval-agg`. Same result as the general path: key columns first (in :by order),
-  then agg columns (in :agg order); one row per group in first-seen order."
-  [dataset0 by pairs within-order]
+  then agg columns (in :agg order); one row per group in first-seen order.
+
+  A precomputed `grouping` ({:perm :bounds} from `prepare-grouping`) is reused
+  as-is — each group is a contiguous perm slice whose rows already carry the
+  grouping's `:within-order` sort, so both the per-call group pass and the
+  per-group sort are skipped (the amortised multi-pass path, same as
+  fast-group-set)."
+  [dataset0 by pairs within-order grouping]
   (let [dataset (narrow-for-aggs dataset0 by pairs within-order)
         key-rdrs (mapv #(dtype/->reader (ds/column dataset %)) by)
         nk (count by)
@@ -460,29 +466,44 @@
         darrs (persistent! (reduce (fn [m c] (assoc! m c (dtype/->double-array (ds/column dataset c))))
                                    (transient {}) prim-cols))
         need-sub? (boolean (some #{:general} specs))
-        groups (java.util.LinkedHashMap.)]
-    (dotimes [i n]
-      (let [k (mapv #(nth % i) key-rdrs)
-            ^java.util.ArrayList lst (or (.get groups k)
-                                         (let [a (java.util.ArrayList.)] (.put groups k a) a))]
-        (.add lst (int i))))
-    (let [g (.size groups)
+        ;; per-group row-index arrays, in first-seen group order: contiguous
+        ;; perm slices from the prebuilt grouping, or one pass over the key readers
+        entries (if grouping
+                  (let [^ints perm (:perm grouping)]
+                    (mapv (fn [[s e]]
+                            (let [s (long s) m (- (long e) s)
+                                  idx-arr (int-array m)]
+                              (dotimes [j m] (aset idx-arr j (aget perm (+ s j))))
+                              idx-arr))
+                          (:bounds grouping)))
+                  (let [groups (java.util.LinkedHashMap.)]
+                    (dotimes [i n]
+                      (let [k (mapv #(nth % i) key-rdrs)
+                            ^java.util.ArrayList lst (or (.get groups k)
+                                                         (let [a (java.util.ArrayList.)] (.put groups k a) a))]
+                        (.add lst (int i))))
+                    (mapv (fn [^java.util.ArrayList idxs]
+                            (let [m (.size idxs)
+                                  idx-arr (int-array m)]
+                              (dotimes [j m] (aset idx-arr j (int (.get idxs j))))
+                              idx-arr))
+                          (.values groups))))]
+    (let [g (count entries)
           key-cols (vec (repeatedly nk #(object-array g)))
-          agg-cols (vec (repeatedly np #(object-array g)))
-          gi (int-array 1)]
-      (doseq [^java.util.Map$Entry e (.entrySet groups)]
-        (let [row (aget gi 0)
-              ktuple (.getKey e)
-              ^java.util.ArrayList idxs (.getValue e)
-              m (.size idxs)
-              idx-arr (int-array m)
-              _ (dotimes [j m] (aset idx-arr j (int (.get idxs j))))
+          agg-cols (vec (repeatedly np #(object-array g)))]
+      (dotimes [row g]
+        (let [^ints idx-arr (nth entries row)
+              m (alength idx-arr)
+              i0 (aget idx-arr 0)
               sub (when need-sub?
                     (let [s0 (ds/select-rows dataset idx-arr)]
-                      (if within-order (apply-order-by s0 within-order :within-order) s0)))
+                      ;; a prebuilt grouping's slices are already within-order sorted
+                      (if (and within-order (not grouping))
+                        (apply-order-by s0 within-order :within-order)
+                        s0)))
               ;; one scratch buffer per group, re-gathered per prim agg
               ^doubles buf (when (pos? (count darrs)) (double-array m))]
-          (dotimes [c nk] (aset ^objects (nth key-cols c) row (nth ktuple c)))
+          (dotimes [c nk] (aset ^objects (nth key-cols c) row (nth (nth key-rdrs c) i0)))
           (dotimes [a np]
             (let [spec (nth specs a)
                   v (if (map? spec)
@@ -491,23 +512,25 @@
                         (math/quantiles-of-doubles buf (:ps spec) (:min-n spec)))
                       (let [pr (nth pairs a)]
                         (eval-agg sub (first pr) (second pr))))]
-              (aset ^objects (nth agg-cols a) row v)))
-          (aset gi 0 (inc row))))
+              (aset ^objects (nth agg-cols a) row v)))))
       (reduce (fn [d [cname cdata]] (ds/add-column d (ds/new-column cname cdata)))
               (ds/->dataset {})
               (concat (map vector by key-cols)
                       (map vector (map first pairs) agg-cols))))))
 
 (defn- apply-group-agg
-  ([dataset by aggregations] (apply-group-agg dataset by aggregations nil))
-  ([dataset by aggregations within-order]
+  ([dataset by aggregations] (apply-group-agg dataset by aggregations nil nil))
+  ([dataset by aggregations within-order] (apply-group-agg dataset by aggregations within-order nil))
+  ([dataset by aggregations within-order grouping]
    (if (zero? (ds/row-count dataset))
      dataset
      (let [pairs (if (map? aggregations) (seq aggregations) aggregations)]
        (if (keyword-only-by? by)
          ;; Fast path: plain keyword :by (no markers/fn) — manual row-index group
          ;; + assemble-once, avoiding ds/group-by's eager all-column split.
-         (fast-group-agg dataset by (vec pairs) within-order)
+         ;; A prepared grouping only ever arrives here: prepare-grouping
+         ;; validates its :by as keyword-only.
+         (fast-group-agg dataset by (vec pairs) within-order grouping)
          ;; General path. Compound case (cut marker + exact keys): first partition
          ;; by exact keys so cut breakpoints are computed per sub-dataset.
          (let [partitions (if (needs-per-partition-resolution? by)
@@ -580,7 +603,7 @@
   "Ops that compute row-independently — safe to evaluate once over the whole
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
-  #{:+ :- :* :div :div0 :sq :log :> :< :>= :<= := :and :or :not :in :between?
+  #{:+ :- :* :div :div0 :sq :log :log1p :expm1 :> :< :>= :<= := :and :or :not :in :between?
     :abs :exp :sqrt :pow :floor :ceil :round :signum
     :asinh :na2zero :neg2na :nonfin2na :when-finite
     :year :month :day :dow :quarter})
@@ -842,14 +865,16 @@
 
 (defn prepare-grouping
   "Precompute the grouping + `:within-order` permutation for `dataset` so it can be
-  reused across many `:set` + `:by` passes (e.g. a multi-pass per-entity ETL),
-  amortising the grouping + sort that each pass would otherwise repeat. `by` is a
-  non-empty vector of keyword column names; `within-order` is an optional sort spec
-  (same form as `:within-order`). Pass the result directly as `:by` to `dt`, in
-  place of the column vector + `:within-order`:
+  reused across many `:set`/`:agg` + `:by` passes (a multi-pass per-entity ETL,
+  or repeated aggregations over the same keys), amortising the grouping + sort
+  that each pass would otherwise repeat — at panel scale the per-call group-index
+  build is a fixed cost that dominates cheap passes. `by` is a non-empty vector
+  of keyword column names; `within-order` is an optional sort spec (same form as
+  `:within-order`). Pass the result directly as `:by` to `dt`, in place of the
+  column vector + `:within-order`:
 
       (let [g (prepare-grouping ds [:gvkey] [(asc :datadate)])]
-        (-> ds (dt :set {…} :by g) (dt :set {…} :by g) …))
+        (-> ds (dt :set {…} :by g) (dt :agg {…} :by g) …))
 
   The grouping stays valid for any dataset with the SAME rows in the SAME order —
   adding columns between passes is fine, since `:set :by` preserves input row order.
@@ -1360,9 +1385,10 @@
                    per-group path (slow on wide data; a one-time NOTE says so).
   :agg           - collapse to summary. Accepts map or seq-of-pairs. Use (nrow)/[:nrow] for row count.
   :by            - grouping for :agg or :set (partitioned window mode). A vector of
-                   keywords, a fn of the row, or (for :set) a prepared grouping from
-                   `prepare-grouping` — which bundles the group keys and the
-                   :within-order sort, amortising them across multi-pass transforms.
+                   keywords, a fn of the row, or (for :set and :agg) a prepared
+                   grouping from `prepare-grouping` — which bundles the group keys
+                   and the :within-order sort, amortising them across multi-pass
+                   transforms and repeated aggregations.
                    #dt/e expressions / data-form vectors are NOT accepted as entries
                    (structured :expr-in-by error) — derive the key with :set first.
   :within-order  - the order rows are WALKED within each partition (or across the
@@ -1407,9 +1433,9 @@
       (throw (ex-info ":within-order requires :set or :agg."
                       {:dt/error :within-order-invalid})))
     (when grouping
-      (when (or agg (not set))
-        (throw (ex-info "a prepared grouping as :by requires :set (it is not for :agg)."
-                        {:dt/error :grouping-requires-set})))
+      (when-not (or set agg)
+        (throw (ex-info "a prepared grouping as :by requires :set or :agg."
+                        {:dt/error :grouping-requires-set-or-agg})))
       (when within-order
         (throw (ex-info "a prepared grouping already encodes :within-order — don't pass it alongside."
                         {:dt/error :grouping-conflict})))
@@ -1452,8 +1478,30 @@
         (and set eff-by) (apply-group-set eff-by set eff-wo off-heap grouping)
         (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order off-heap)
         (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
-        (and agg by) (apply-group-agg by agg within-order)
-        (and agg (not by)) (apply-agg agg within-order)
+        (and agg eff-by) (apply-group-agg eff-by agg eff-wo grouping)
+        (and agg (not eff-by)) (apply-agg agg eff-wo)
         select (apply-select select)
         order-by (apply-order-by order-by :order-by)
         (some? take) (apply-take take)))))
+
+(defn dt1
+  "Run [[dt]] with the same arguments and return the single result row as a
+  plain map — the scalar-read companion for whole-table `:agg`, replacing the
+  `(first (ds/mapseq-reader (dt …)))` ceremony:
+
+      (let [span (dt1 panel :agg {:lo #dt/e (min :mindex)
+                                  :hi #dt/e (max :mindex)})]
+        (- (:hi span) (:lo span)))
+
+  Throws a structured `:dt1-not-single-row` error when the result does not
+  have exactly one row — silently taking the first of several would mask a
+  grouping or filtering bug. Use `dt` (plus `:take`/`:order-by`) when several
+  rows are expected."
+  [dataset & args]
+  (let [res (apply dt dataset args)
+        n (ds/row-count res)]
+    (when (not= 1 n)
+      (throw (ex-info (str "dt1 expects exactly one result row, got " n
+                           ". Use dt for multi-row results.")
+                      {:dt/error :dt1-not-single-row :dt/row-count n})))
+    (first (ds/mapseq-reader res))))
