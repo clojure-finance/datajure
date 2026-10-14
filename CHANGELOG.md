@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.7] - 2026-10-14
+
+A single-fix correctness release, from the post-2.7.6 consistency audit.
+Affects every version since 2.7.0 (`:set`) and 2.7.6 (`:agg`); upgrade if you
+combine a prepared-grouping `:by` with `:where` in one `dt` call.
+
 ### Fixed
 
 - **A row-dropping `:where` combined with a prepared-grouping `:by` in one
@@ -676,7 +682,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.6...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.7...HEAD
+[2.7.7]: https://github.com/clojure-finance/datajure/compare/v2.7.6...v2.7.7
 [2.7.6]: https://github.com/clojure-finance/datajure/compare/v2.7.5...v2.7.6
 [2.7.5]: https://github.com/clojure-finance/datajure/compare/v2.7.4...v2.7.5
 [2.7.4]: https://github.com/clojure-finance/datajure/compare/v2.7.3...v2.7.4
