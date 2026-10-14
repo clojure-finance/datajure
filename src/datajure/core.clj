@@ -734,6 +734,35 @@
                (recur (next ps) (conj derived col-kw))))
         true))))
 
+(defn- narrow-for-set
+  "Mirror of narrow-for-aggs for the general per-group :set path: project the
+  dataset down to just the :by keys, the :within-order sort columns, and every
+  column any derivation references, so the per-group sub-datasets cover a
+  handful of columns instead of all of them (the wide-data hazard the
+  :group-set-general-path NOTE warns about). apply-group-set re-attaches the
+  derived columns to the untouched full dataset after assembly. Returns nil
+  when narrowing doesn't apply: non-keyword :by (marker/fn selectors may
+  reference arbitrary columns), a plain-fn derivation (which may read any
+  column), or a reference to a column that exists neither in the dataset nor
+  as a derivation target (keep the full view so the structured :unknown-column
+  error suggests against all columns)."
+  [dataset by derivations within-order]
+  (when (keyword-only-by? by)
+    (let [pairs (if (map? derivations) (seq derivations) derivations)
+          refs (mapv (fn [[_ dval]]
+                       (if-let [ast (deriv-ast dval)] (expr/col-refs ast) :all))
+                     pairs)]
+      (when-not (some #{:all} refs)
+        (let [targets (into #{} (map first) pairs)
+              all-refs (reduce into #{} refs)
+              available (clojure.core/set (ds/column-names dataset))]
+          (when (every? #(or (available %) (targets %)) all-refs)
+            (let [needed (into (clojure.core/set by)
+                               (concat all-refs
+                                       (when within-order
+                                         (map order-spec-col within-order))))]
+              (ds/select-columns dataset (filterv needed (ds/column-names dataset))))))))))
+
 (defn- apply-group-set [dataset by derivations within-order off-heap? grouping]
   (if (zero? (ds/row-count dataset))
     dataset
@@ -749,26 +778,41 @@
         (when (keyword-only-by? by)
           (info-note :group-set-general-path
                      (str ":set with :by took the general per-group path (cross-referencing"
-                          " pairs or plain-fn derivations) — it builds per-group sub-datasets"
-                          " over ALL columns, which is slow and memory-hungry on wide data."
-                          " Independent expression derivations ride the fast one-pass path.")))
-        (let [n (ds/row-count dataset)
-              indexed (ds/add-column dataset (ds/new-column ::orig-idx (int-array (range n))))
+                          " pairs or plain-fn derivations) — slower than the fast one-pass"
+                          " path that independent expression derivations ride. Expression"
+                          " derivations are at least narrowed to the columns they reference;"
+                          " plain-fn derivations build per-group sub-datasets over ALL"
+                          " columns, which is memory-hungry on wide data.")))
+        ;; narrow (when every derivation is introspectable) so per-group
+        ;; sub-datasets cover only the referenced columns; untouched columns
+        ;; are re-attached below. nil narrow = run on the full dataset as before.
+        (let [narrow (narrow-for-set dataset by derivations within-order)
+              src (or narrow dataset)
+              n (ds/row-count src)
+              indexed (ds/add-column src (ds/new-column ::orig-idx (int-array (range n))))
               partitions (if (needs-per-partition-resolution? by)
                            (let [exact-keys (filterv keyword? by)]
                              (vals (ds/group-by indexed (fn [row] (select-keys row exact-keys)))))
-                           [indexed])]
-          (-> (->> partitions
-                   (mapcat (fn [partition-ds]
-                             (let [group-fn (by->group-fn partition-ds by)
-                                   groups (ds/group-by partition-ds group-fn)]
-                               (map (fn [[_group-key sub-ds]]
-                                      (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
-                                        (apply-set sorted derivations)))
-                                    groups))))
-                   (apply ds/concat))
-              (ds/sort-by-column ::orig-idx)
-              (dissoc ::orig-idx)))))))
+                           [indexed])
+              result (-> (->> partitions
+                              (mapcat (fn [partition-ds]
+                                        (let [group-fn (by->group-fn partition-ds by)
+                                              groups (ds/group-by partition-ds group-fn)]
+                                          (map (fn [[_group-key sub-ds]]
+                                                 (let [sorted (if within-order (apply-order-by sub-ds within-order :within-order) sub-ds)]
+                                                   (apply-set sorted derivations)))
+                                               groups))))
+                              (apply ds/concat))
+                         (ds/sort-by-column ::orig-idx)
+                         (dissoc ::orig-idx))]
+          (if narrow
+            ;; re-attach: derived columns land on the untouched full dataset in
+            ;; derivation order (add-column replaces an overwritten column in
+            ;; place and appends new ones, matching apply-set on the full view)
+            (reduce (fn [d col-kw] (ds/add-column d (ds/column result col-kw)))
+                    dataset
+                    (map first (if (map? derivations) (seq derivations) derivations)))
+            result))))))
 
 (defn- apply-window-set
   "Window mode without :by — the entire dataset is one partition. Same output

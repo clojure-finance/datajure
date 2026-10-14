@@ -13,6 +13,9 @@
     lst   = last-val (last element)
     wa    = wavg (weighted average)
     ws    = wsum (weighted sum)
+    cov   = sample covariance of two columns
+    corr  = sample Pearson correlation of two columns
+    tstat = one-sample t-statistic (mean / (sd / sqrt n))
     mx    = max* (column maximum)
     mi    = min* (column minimum)
 
@@ -55,6 +58,9 @@
 (def ^{:doc "Last value in a column. Delegates to `expr/last-val`."} lst expr/last-val)
 (def ^{:doc "Weighted average. Delegates to `expr/wavg`. Args: weight-col value-col."} wa expr/wavg)
 (def ^{:doc "Weighted sum. Delegates to `expr/wsum`. Args: weight-col value-col."} ws expr/wsum)
+(def ^{:doc "Sample covariance. Delegates to `expr/cov`. Args: x-col y-col; skips nil pairs."} cov expr/cov)
+(def ^{:doc "Sample Pearson correlation. Delegates to `expr/corr`. Args: x-col y-col; skips nil pairs."} corr expr/corr)
+(def ^{:doc "One-sample t-statistic: mean / (sd / sqrt n). Delegates to `expr/tstat`."} tstat expr/tstat)
 
 (def ^{:doc "Column maximum. Short alias for `core/max*`."} mx core/max*)
 (def ^{:doc "Column minimum. Short alias for `core/min*`."} mi core/min*)

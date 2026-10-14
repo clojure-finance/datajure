@@ -63,8 +63,10 @@
   For each unique combination of :id column values, pivots the :from column's
   distinct values into new columns filled from the :value column. New column
   names are derived from the :from values (keywords passed through; strings
-  and other types converted via keyword). They appear in order of first
-  occurrence in the :from column.
+  and other types converted via keyword). Columns appear in the natural sort
+  order of the :from VALUES (so numeric 1..10 yields :1 :2 … :10, not the
+  lexicographic :1 :10 :2 …); when the distinct values are not mutually
+  comparable, they fall back to first-occurrence order in the :from column.
 
   Arguments:
     dataset - a tech.v3.dataset
@@ -100,7 +102,14 @@
         from-rdr (dtype/->reader (ds/column dataset from))
         val-rdr (dtype/->reader (ds/column dataset value))
         n (ds/row-count dataset)
-        new-cols (vec (distinct (map cast-col-name from-rdr)))
+        ;; order new columns by the natural order of the :from VALUES, not of
+        ;; the keywordized names (keyword sort would put :10 between :1 and :2)
+        ;; and not first-encounter row order (which follows the input shuffle);
+        ;; mixed incomparable value types fall back to first-encounter order
+        distinct-vals (distinct from-rdr)
+        sorted-vals (try (sort distinct-vals)
+                         (catch ClassCastException _ distinct-vals))
+        new-cols (vec (distinct (map cast-col-name sorted-vals)))
         idx (reduce
              (fn [acc i]
                (let [id-key (mapv #(nth % i) id-rdrs)

@@ -197,6 +197,77 @@
                   (range n))]
     (if (empty? wvs) nil (reduce + wvs))))
 
+(defn- complete-double-pairs
+  "Extract the complete (both-non-nil) pairs of two equal-length columns as
+  [^double x ^double y] tuples — the shared nil-skipping convention of the
+  bivariate aggregations (cov/corr), matching wavg's pair-skipping."
+  [op-name x y]
+  (let [xr (dtype/->reader x)
+        yr (dtype/->reader y)]
+    (check-equal-lengths! op-name xr yr)
+    (into []
+          (keep (fn [i]
+                  (let [xi (nth xr i) yi (nth yr i)]
+                    (when (and (some? xi) (some? yi))
+                      [(double xi) (double yi)]))))
+          (range (dtype/ecount xr)))))
+
+(defn- sample-var*
+  "Sample variance (n-1 denominator) of a seq of doubles; nil when fewer than
+  two values."
+  [xs]
+  (let [m (count xs)]
+    (when (> m 1)
+      (let [mu (/ (reduce + xs) m)]
+        (/ (reduce + (map (fn [v] (let [d (- v mu)] (* d d))) xs))
+           (dec m))))))
+
+(defn cov
+  "Sample covariance of two columns (n-1 denominator). Args: x-col y-col.
+  Skips pairs where either value is nil, matching wavg's convention; nil when
+  fewer than two complete pairs remain.
+  Throws :unequal-column-lengths when x and y have different lengths."
+  [x y]
+  (let [pairs (complete-double-pairs "cov" x y)
+        m (count pairs)]
+    (when (> m 1)
+      (let [mx (/ (reduce + (map first pairs)) m)
+            my (/ (reduce + (map second pairs)) m)]
+        (/ (reduce + (map (fn [[xi yi]] (* (- xi mx) (- yi my))) pairs))
+           (dec m))))))
+
+(defn corr
+  "Sample Pearson correlation of two columns. Args: x-col y-col. Skips pairs
+  where either value is nil, matching wavg's convention; nil when fewer than
+  two complete pairs remain or either column is constant over the complete
+  pairs (zero variance makes the correlation undefined — guarded like div0's
+  zero denominator, not thrown).
+  Throws :unequal-column-lengths when x and y have different lengths."
+  [x y]
+  (let [pairs (complete-double-pairs "corr" x y)
+        m (count pairs)]
+    (when (> m 1)
+      (let [mx (/ (reduce + (map first pairs)) m)
+            my (/ (reduce + (map second pairs)) m)
+            sxy (reduce + (map (fn [[xi yi]] (* (- xi mx) (- yi my))) pairs))
+            sxx (reduce + (map (fn [[xi _]] (let [d (- xi mx)] (* d d))) pairs))
+            syy (reduce + (map (fn [[_ yi]] (let [d (- yi my)] (* d d))) pairs))]
+        (when (and (pos? sxx) (pos? syy))
+          (/ sxy (Math/sqrt (* sxx syy))))))))
+
+(defn tstat
+  "One-sample t-statistic of a column: mean / (sd / sqrt n), with sample sd,
+  over the non-nil values. nil when fewer than two non-nil values remain or
+  the column is constant (zero sd — undefined, guarded like corr)."
+  [col]
+  (let [vs (into [] (comp (remove nil?) (map double)) (dtype/->reader col))
+        m (count vs)]
+    (when (> m 1)
+      (let [v (sample-var* vs)]
+        (when (pos? v)
+          (/ (* (/ (reduce + vs) m) (Math/sqrt m))
+             (Math/sqrt v)))))))
+
 (defn col-max
   "Column maximum, skipping nil/missing; nil for an all-missing column.
   `dfn/reduce-max` corrupts the reduction when the column has missing values
@@ -398,7 +469,10 @@
    :first-val first-val
    :last-val last-val
    :wavg wavg
-   :wsum wsum})
+   :wsum wsum
+   :cov cov
+   :corr corr
+   :tstat tstat})
 
 (def ^:private sym->op
   "Maps source-form symbols to canonical keyword op names."
@@ -423,6 +497,7 @@
    'in :in, 'between? :between?, 'count-distinct :nuniq
    'first-val :first-val, 'last-val :last-val
    'wavg :wavg, 'wsum :wsum
+   'cov :cov, 'corr :corr, 'tstat :tstat
    'div0 :div0
    'when-finite :when-finite
    ;; row count as a real nullary op — #dt/e (nrow) / (N) — so it composes in
@@ -558,8 +633,14 @@
                  n-args ".")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
 
+    (and (#{:cov :corr} op-kw) (not= 2 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly two arguments (x column, y column). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
     (and (#{:mn :sm :md :sd :variance :mx :mi :ct :nuniq :prod
-            :first-val :last-val} op-kw)
+            :first-val :last-val :tstat} op-kw)
          (not= 1 n-args))
     (throw (ex-info
             (str "`" op-sym "` is a column aggregation and takes exactly one argument. Got "

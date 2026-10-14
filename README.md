@@ -48,7 +48,7 @@ Datajure takes inspiration from whichever library got a given idea right:
 
 - **R's `data.table`** — `DT[i, j, by]` maps onto `(dt ds :where i :set-or-agg j :by by)`. Immutable (no in-place mutation).
 - **Python's Polars** — expressions as first-class values, nil-safe comparisons and arithmetic.
-- **q/kdb+** — `win/*` gives you `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `grr`, plus `wavg`, `wsum`, `first-val`, `last-val`. `xbar` for time-series bars. As-of and window joins built in.
+- **q/kdb+** — `win/*` gives you `deltas`, `ratios`, `mavg`, `msum`, `mdev`, `ema`, `fills`, `scan`, `grr`, plus `wavg`, `wsum`, `corr`, `cov`, `tstat`, `first-val`, `last-val`. `xbar` for time-series bars. As-of and window joins built in.
 - **Julia's `DataFramesMeta.jl`** — `#dt/e` serves the same role as `@transform`/`@subset`; Clojure's reader tag mechanism makes it integrate naturally.
 
 The distinctive feature: `#dt/e` expressions are first-class AST values. Store them in vars, compose across queries, build a shared vocabulary:
@@ -653,7 +653,7 @@ Supported units: `:seconds`, `:minutes`, `:hours`, `:days`, `:weeks` (singular s
     (cast {:id [:species :year] :from :variable :value :value}))
 ```
 
-`cast` options: `:id` (required), `:from` (required), `:value` (required), `:agg` (fn applied to a vector of values when multiple rows share the same id+from combination; default: first value), `:fill` (value for missing cells; default: nil).
+`cast` options: `:id` (required), `:from` (required), `:value` (required), `:agg` (fn applied to a vector of values when multiple rows share the same id+from combination; default: first value), `:fill` (value for missing cells; default: nil). New columns are ordered by the natural sort order of the `:from` values (numeric `1..10` → `:1 :2 … :10`); mutually incomparable values fall back to first-encounter order.
 
 ### Panel Gap-Filling (`tsfill`)
 
@@ -915,6 +915,9 @@ Inside `#dt/e` (and data-forms) every aggregation accepts its full name, its con
 | `lst`  | last-val |
 | `wa`   | wavg (weighted average) |
 | `ws`   | wsum (weighted sum) |
+| `cov`  | sample covariance of two columns (skips nil pairs) |
+| `corr` | sample Pearson correlation of two columns (skips nil pairs) |
+| `tstat`| one-sample t-statistic: mean / (sd / sqrt n) |
 | `N`    | row count (alias for `nrow`) |
 | `standardize` | stat/stat-standardize |
 | `demean`      | stat/stat-demean |

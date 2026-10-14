@@ -1678,6 +1678,98 @@
                         (datajure.expr/wavg [1.0 2.0 3.0] [10.0 20.0 30.0])))
            1e-9))))
 
+;; ---------------------------------------------------------------------------
+;; Bivariate aggregations: cov, corr; one-sample tstat
+;; ---------------------------------------------------------------------------
+
+(deftest cov-corr-basic
+  (testing "cov/corr compute sample statistics in grouped :agg"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:g ["A" "A" "A" "B" "B" "B"]
+                            :x [1.0 2.0 3.0 1.0 2.0 3.0]
+                            :y [2.0 4.0 6.0 6.0 4.0 2.0]})
+          result (core/dt ds :by [:g] :agg {:cv #dt/e (cov :x :y)
+                                            :r #dt/e (corr :x :y)})
+          rows (into {} (map (fn [r] [(:g r) r]) (ds/mapseq-reader result)))]
+      ;; A: y = 2x -> sample cov = 2 * var(x) = 2.0, corr = 1.0
+      (is (< (Math/abs (- 2.0 (:cv (rows "A")))) 1e-12))
+      (is (< (Math/abs (- 1.0 (:r (rows "A")))) 1e-12))
+      ;; B: y = -2x + 8 -> cov = -2.0, corr = -1.0
+      (is (< (Math/abs (- -2.0 (:cv (rows "B")))) 1e-12))
+      (is (< (Math/abs (- -1.0 (:r (rows "B")))) 1e-12))))
+  (testing "corr matches the sample-moment reconstruction it replaces"
+    ;; the momentum replication reconstructed corr from mn/sd/mxy moments with a
+    ;; hand-written n/(n-1) correction; (corr :x :y) must agree with it
+    (let [xs [1.2 -0.4 3.1 0.7 -2.2 1.9]
+          ys [0.8 0.1 2.5 -0.6 -1.9 2.4]
+          ds (ds/->dataset {:x xs :y ys})
+          s (first (ds/mapseq-reader
+                    (core/dt ds :agg {:mean-x #dt/e (mn :x) :sd-x #dt/e (sd :x)
+                                      :mean-y #dt/e (mn :y) :sd-y #dt/e (sd :y)
+                                      :mxy #dt/e (mn (* :x :y)) :n #dt/e (nrow)})))
+          n (:n s)
+          recon (/ (* (/ n (dec n))
+                      (- (:mxy s) (* (:mean-x s) (:mean-y s))))
+                   (* (:sd-x s) (:sd-y s)))
+          r (first (vec (:r (core/dt ds :agg {:r #dt/e (corr :x :y)}))))]
+      (is (< (Math/abs (- recon r)) 1e-12)))))
+
+(deftest cov-corr-nil-and-degenerate
+  (testing "cov/corr skip pairs where either value is nil (wavg's convention)"
+    (let [ds (ds/->dataset {:x [1.0 nil 4.0 5.0] :y [2.0 5.0 nil 8.0]})
+          result (core/dt ds :agg {:cv #dt/e (cov :x :y)
+                                   :r #dt/e (corr :x :y)})]
+      ;; complete pairs (1,2) (5,8): cov = (1-3)(2-5) + (5-3)(8-5) / 1 = 12
+      (is (< (Math/abs (- 12.0 (first (vec (:cv result))))) 1e-12))
+      (is (< (Math/abs (- 1.0 (first (vec (:r result))))) 1e-12))))
+  (testing "fewer than two complete pairs -> nil"
+    (is (nil? (datajure.expr/cov [1.0 nil] [nil 2.0])))
+    (is (nil? (datajure.expr/corr [1.0] [2.0]))))
+  (testing "constant column: cov is 0.0, corr is nil (undefined, guarded not thrown)"
+    (is (= 0.0 (datajure.expr/cov [3.0 3.0 3.0] [1.0 2.0 3.0])))
+    (is (nil? (datajure.expr/corr [3.0 3.0 3.0] [1.0 2.0 3.0]))))
+  (testing "unequal lengths throw :unequal-column-lengths naming the op"
+    (let [ed (try (datajure.expr/corr [1.0 2.0] [1.0 2.0 3.0]) nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :unequal-column-lengths (:dt/error ed)))
+      (is (= "corr" (:dt/op ed))))))
+
+(deftest tstat-basic
+  (testing "tstat = mean / (sd / sqrt n) with sample sd, skipping nils"
+    (let [ds (ds/->dataset {:x [1.0 2.0 3.0 4.0 5.0]})
+          t (first (vec (:t (core/dt ds :agg {:t #dt/e (tstat :x)}))))]
+      ;; mean 3, sd sqrt(2.5), n 5 -> 3 * sqrt(5) / sqrt(2.5) = 3*sqrt(2)
+      (is (< (Math/abs (- (* 3.0 (Math/sqrt 2.0)) t)) 1e-12)))
+    (let [t (datajure.expr/tstat [1.0 nil 2.0 3.0])]
+      ;; over [1 2 3]: mean 2, sd 1 -> 2*sqrt(3)
+      (is (< (Math/abs (- (* 2.0 (Math/sqrt 3.0)) t)) 1e-12))))
+  (testing "degenerate inputs -> nil"
+    (is (nil? (datajure.expr/tstat [1.0])))            ; n < 2
+    (is (nil? (datajure.expr/tstat [2.0 2.0 2.0])))))  ; zero sd
+
+(deftest cov-corr-tstat-arity-and-data-form
+  (testing "cov/corr wrong arity throws :wrong-arity at read time"
+    (let [ed (try (read-string "#dt/e (corr :x)") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :wrong-arity (:dt/error ed)))
+      (is (= 2 (:dt/expected ed))))
+    (let [msg (try (read-string "#dt/e (cov :x :y :z)") nil
+                   (catch clojure.lang.ExceptionInfo e (.getMessage e)))]
+      (is (re-find #"takes exactly two arguments \(x column, y column\)" msg))))
+  (testing "tstat is a 1-arg column aggregation"
+    (let [ed (try (read-string "#dt/e (tstat :x :y)") nil
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :wrong-arity (:dt/error ed)))
+      (is (= 1 (:dt/expected ed)))))
+  (testing "data-form spellings work"
+    (let [ds (ds/->dataset {:x [1.0 2.0 3.0] :y [2.0 4.0 6.0]})
+          result (core/dt ds :agg {:r [:corr :x :y]
+                                   :cv [:cov :x :y]
+                                   :t [:tstat :x]})]
+      (is (< (Math/abs (- 1.0 (first (vec (:r result))))) 1e-12))
+      (is (< (Math/abs (- 2.0 (first (vec (:cv result))))) 1e-12))
+      (is (some? (first (vec (:t result))))))))
+
 (deftest div0-basic
   (testing "div0 returns float division when denominator is non-zero"
     (let [ds (ds/->dataset {:a [10.0 6.0] :b [2.0 3.0]})
@@ -2932,6 +3024,59 @@
       (let [g (core/prepare-grouping d [:k] [(core/asc :t)])]
         (is (= (mapv #(vec (via-map %)) [:lg :gm :x2])
                (mapv #(vec ((core/dt d :set pairs :by g) %)) [:lg :gm :x2])))))))
+
+(deftest group-set-general-path-narrows-to-referenced-columns
+  ;; wrds-scratch DATAJURE-NOTES §5: the general per-group :set path used to build
+  ;; per-group sub-datasets over ALL columns (the wide-data hazard its NOTE warns
+  ;; about). Introspectable derivations are now narrowed to the referenced columns
+  ;; (mirroring narrow-for-aggs) and re-attached to the untouched full dataset.
+  (let [d (ds/->dataset {:g [1 1 2 2]
+                         :t [2 1 2 1]
+                         :x [10.0 20.0 100.0 200.0]
+                         :untouched ["a" "b" "c" "d"]
+                         :extra [7 8 9 10]})]
+    (testing "cross-referencing pairs: values, column order, untouched columns preserved"
+      (let [r (core/dt d :by [:g] :within-order [(core/asc :t)]
+                       :set [[:c #dt/e (win/cumsum :x)]
+                             [:c2 #dt/e (+ :c 1)]])]
+        (is (= [:g :t :x :untouched :extra :c :c2] (vec (ds/column-names r))))
+        ;; per-group cumsum in :t order, scattered back to input row order
+        (is (= [30.0 20.0 300.0 200.0] (vec (:c r))))
+        (is (= [31.0 21.0 301.0 201.0] (vec (:c2 r))))
+        (is (= ["a" "b" "c" "d"] (vec (:untouched r))))
+        (is (= [7 8 9 10] (vec (:extra r))))))
+    (testing "narrowing really happens: a plain-fn probe sees only the referenced columns"
+      (let [seen (atom nil)
+            orig-apply-set @#'datajure.core/apply-set]
+        (with-redefs-fn {#'datajure.core/apply-set
+                         (fn [sub derivations]
+                           (swap! seen (fnil into #{}) (ds/column-names sub))
+                           (orig-apply-set sub derivations))}
+          #(core/dt d :by [:g] :within-order [(core/asc :t)]
+                    :set [[:c #dt/e (win/cumsum :x)]
+                          [:c2 #dt/e (+ :c 1)]]))
+        (is (not (contains? @seen :untouched)))
+        (is (not (contains? @seen :extra)))
+        (is (contains? @seen :x))))
+    (testing "overwriting an existing column keeps its position and value semantics"
+      (let [r (core/dt d :by [:g]
+                       :set [[:x #dt/e (* 10 :x)]
+                             [:xx #dt/e (+ :x 1)]])]   ; :xx sees the overwritten :x
+        (is (= [:g :t :x :untouched :extra :xx] (vec (ds/column-names r))))
+        (is (= [100.0 200.0 1000.0 2000.0] (vec (:x r))))
+        (is (= [101.0 201.0 1001.0 2001.0] (vec (:xx r))))))
+    (testing "plain-fn derivations still see every column (narrowing disabled)"
+      (let [r (core/dt d :by [:g]
+                       :set (list [:m10 [:* :x 10]]
+                                  [:combo (fn [row] (str (:untouched row) (:m10 row)))]))]
+        (is (= ["a100.0" "b200.0" "c1000.0" "d2000.0"] (vec (:combo r))))))
+    (testing "unknown column reference still raises the structured error"
+      (let [ed (try (core/dt d :by [:g]
+                             :set [[:a #dt/e (* 2 :x)]
+                                   [:b #dt/e (+ :typo-col 1)]])
+                    nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :unknown-column (:dt/error ed)))))))
 
 (deftest order-specs-accept-data-form-vectors
   (testing ":order-by accepts [:asc :col]/[:desc :col] alongside (asc …)/(desc …)"

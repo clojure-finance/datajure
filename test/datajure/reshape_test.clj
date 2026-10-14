@@ -143,6 +143,25 @@
       (is (contains? (set (ds/column-names wide)) :mass))
       (is (contains? (set (ds/column-names wide)) :flipper)))))
 
+(deftest cast-column-order-by-value
+  (testing "pivoted columns follow the natural order of the :from values, not row order"
+    ;; repro from the momentum replication: shuffled long deciles must come out
+    ;; :1 … :10 regardless of row order (and not keyword-lexicographic, which
+    ;; would put :10 between :1 and :2)
+    (let [cells (ds/->dataset (for [id [2000 2010] q [9 1 6 4 5 8 10 3 2 7]]
+                                {:id id :q q :v (+ id q)}))
+          wide (cast cells {:id :id :from :q :value :v})]
+      (is (= [:id :1 :2 :3 :4 :5 :6 :7 :8 :9 :10] (vec (ds/column-names wide))))
+      (is (= [2009 2019] (vec (:9 wide))))))
+  (testing "string :from values sort alphabetically"
+    (let [long (ds/->dataset {:id [1 1 1] :metric ["c" "a" "b"] :val [3 1 2]})
+          wide (cast long {:id [:id] :from :metric :value :val})]
+      (is (= [:id :a :b :c] (vec (ds/column-names wide))))))
+  (testing "mutually incomparable :from values fall back to first-encounter order"
+    (let [long (ds/->dataset {:id [1 1] :metric [:b 1] :val [10 20]})
+          wide (cast long {:id [:id] :from :metric :value :val})]
+      (is (= [:id :b :1] (vec (ds/column-names wide)))))))
+
 (deftest cast-pipeline
   (testing "cast result threads into dt"
     (let [long (ds/->dataset {:id [1 1 2 2] :metric ["a" "b" "a" "b"] :val [10 20 30 40]})

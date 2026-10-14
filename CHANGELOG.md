@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cov`, `corr` — bivariate aggregation ops** — sample covariance and sample
+  Pearson correlation as 2-arg aggregations next to `wavg`/`wsum`, in `#dt/e`
+  and data-forms (`(corr :x :y)`, `[:cov :x :y]`): skip pairs where either
+  value is nil (wavg's convention), nil when fewer than two complete pairs
+  remain; `corr` additionally returns nil when either column is constant over
+  the complete pairs (zero variance — guarded like `div0`, not thrown).
+  Unequal column lengths throw the structured `:unequal-column-lengths`;
+  wrong arity is a read-time `:wrong-arity`. Also exported from
+  `datajure.concise`. (From the wrds-scratch momentum replication — the one
+  statistic in the whole JT93 replication that had to leave `dt`.)
+- **`tstat` — one-sample t-statistic aggregation** — `mean / (sd / sqrt n)`
+  with sample sd over the non-nil values; nil when fewer than two non-nil
+  values remain or the column is constant. The most common summary line in
+  asset-pricing tables, now one op instead of assembled arithmetic.
+
 - **Structured `:not-a-dataset` guard on every dataset-taking data-path entry
   point** — passing a non-dataset where a dataset belongs (a plain column map, a
   sequence of maps, `nil`, anything else) previously died with a raw NPE
@@ -26,6 +41,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `drop-constant-columns`, `coerce-columns`, `blank->nil`, `parse-numeric`).
   The display-only clay/clerk viewers are deliberately unguarded — they fail
   visibly at render time. (Reported from quanajure smoke testing.)
+
+### Changed
+
+- **`reshape/cast` orders pivoted columns by the `:from` VALUES** — new
+  columns now come out in the natural sort order of the distinct `:from`
+  values (numeric `1..10` → `:1 :2 … :10`), not in first-encounter row order,
+  which followed whatever order the input rows arrived in (a grouped `:agg`
+  feeding `cast` emitted deciles as `:9 :1 :6 …`). Value-order, not
+  keyword-name order — lexicographic keyword sort would put `:10` between
+  `:1` and `:2`. Mutually incomparable `:from` values fall back to the old
+  first-encounter order. (From the wrds-scratch momentum replication's
+  decade × decile table.)
+- **General per-group `:set` path narrows to the referenced columns** — when
+  every derivation is an introspectable expression (the cross-referencing
+  seq-of-pairs case), the general path now projects the dataset down to the
+  `:by` keys, `:within-order` columns, and the columns the derivations
+  reference before grouping (mirroring the `:agg` path's `narrow-for-aggs`),
+  re-attaching the untouched columns afterwards — removing the wide-data
+  memory hazard the `:group-set-general-path` NOTE warns about. Plain-fn
+  derivations (which may read any column) still see the full dataset; the
+  NOTE's wording now reflects both cases.
 
 ## [2.7.4] - 2026-08-31
 
