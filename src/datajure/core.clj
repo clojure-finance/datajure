@@ -436,6 +436,22 @@
                   (let [[p min-n] (mapv :lit/value (rest args))]
                     {:col col-kw :ps p :min-n min-n}))))))))))
 
+(defn- check-grouping-rows!
+  "A prepared grouping is only valid for the exact rows (count AND order) of
+  the dataset the grouped step actually runs on. Checked here — at the apply
+  site, not the dt call boundary — because `:where` runs first: a row-dropping
+  `:where` in the same call would otherwise feed the stale permutation a
+  smaller dataset and silently compute over wrong rows."
+  [grouping dataset]
+  (when (and grouping (not= (:row-count grouping) (ds/row-count dataset)))
+    (throw (ex-info (str "the prepared grouping was built for " (:row-count grouping)
+                         " rows but the grouped step received " (ds/row-count dataset)
+                         " — it must be reused on the same rows in the same order."
+                         " (A row-dropping :where in the same dt call does this:"
+                         " filter in a separate dt call BEFORE prepare-grouping.)")
+                    {:dt/error :grouping-row-mismatch
+                     :dt/expected (:row-count grouping) :dt/actual (ds/row-count dataset)}))))
+
 (defn- fast-group-agg
   "Fast path for keyword-only :by. Narrows the dataset to the columns the agg
   actually touches, groups row indices over the key-column readers in a single
@@ -522,6 +538,7 @@
   ([dataset by aggregations] (apply-group-agg dataset by aggregations nil nil))
   ([dataset by aggregations within-order] (apply-group-agg dataset by aggregations within-order nil))
   ([dataset by aggregations within-order grouping]
+   (check-grouping-rows! grouping dataset)
    (if (zero? (ds/row-count dataset))
      dataset
      (let [pairs (if (map? aggregations) (seq aggregations) aggregations)]
@@ -787,6 +804,7 @@
               (ds/select-columns dataset (filterv needed (ds/column-names dataset))))))))))
 
 (defn- apply-group-set [dataset by derivations within-order off-heap? grouping]
+  (check-grouping-rows! grouping dataset)
   (if (zero? (ds/row-count dataset))
     dataset
     (if (and (keyword-only-by? by)
@@ -878,7 +896,9 @@
 
   The grouping stays valid for any dataset with the SAME rows in the SAME order —
   adding columns between passes is fine, since `:set :by` preserves input row order.
-  `dt` checks the row count matches; reusing it on reordered rows is undefined."
+  `dt` checks the row count against the dataset the grouped step receives (so a
+  row-dropping `:where` in the same call throws — filter first, then prepare);
+  reusing it on reordered rows is undefined."
   ([dataset by] (prepare-grouping dataset by nil))
   ([dataset by within-order]
    (#'util/ensure-dataset! dataset "prepare-grouping")
@@ -1438,12 +1458,7 @@
                         {:dt/error :grouping-requires-set-or-agg})))
       (when within-order
         (throw (ex-info "a prepared grouping already encodes :within-order — don't pass it alongside."
-                        {:dt/error :grouping-conflict})))
-      (when (not= (:row-count grouping) (ds/row-count dataset))
-        (throw (ex-info (str "the prepared grouping was built for " (:row-count grouping) " rows but the dataset has "
-                             (ds/row-count dataset) " — it must be reused on the same rows in the same order.")
-                        {:dt/error :grouping-row-mismatch
-                         :dt/expected (:row-count grouping) :dt/actual (ds/row-count dataset)}))))
+                        {:dt/error :grouping-conflict}))))
     (let [where (if (vector? where) (expr/data->ast where) where)
           set (normalise-derivations set)
           agg (normalise-derivations agg)

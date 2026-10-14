@@ -3304,7 +3304,24 @@
       (is (= :grouping-requires-set-or-agg
              (-> (try (core/dt d :by g :select [:k]) nil
                       (catch clojure.lang.ExceptionInfo e e))
-                 ex-data :dt/error))))))
+                 ex-data :dt/error))))
+    (testing "a row-dropping :where in the same call is caught, not silently wrong"
+      ;; regression: :where runs BEFORE the grouped step, so the row-count check
+      ;; must validate the dataset the grouped step receives — the old dt-entry
+      ;; check passed (built for the full dataset) and the stale permutation
+      ;; then computed over wrong rows (a 3-row filter even yielded 4 output
+      ;; rows pre-fix)
+      (is (= :grouping-row-mismatch
+             (-> (try (core/dt d :where #dt/e (> :x 50.0) :by g :set {:c [:win/cumsum :x]}) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error)))
+      (is (= :grouping-row-mismatch
+             (-> (try (core/dt d :where #dt/e (> :x 50.0) :by g :agg {:m [:mn :x]}) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))
+    (testing "an all-rows-kept :where in the same call stays valid (same rows, same order)"
+      (is (= (mapv vec (ds/rowvecs (core/dt d :by [:k] :agg {:m [:mn :x]})))
+             (mapv vec (ds/rowvecs (core/dt d :where #dt/e (> :x 0.0) :by g :agg {:m [:mn :x]}))))))))
 
 (deftest dt1-scalar-reads
   ;; wrds-scratch DATAJURE-NOTES §7: the (first (ds/mapseq-reader (dt …)))

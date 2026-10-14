@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A row-dropping `:where` combined with a prepared-grouping `:by` in one
+  call silently computed over wrong rows** (since 2.7.0 for `:set`, 2.7.6 for
+  `:agg`): the grouping's row-count guard ran at the `dt` call boundary
+  against the pre-`:where` dataset, but `:where` executes first, so the stale
+  permutation was applied to the filtered rows — a 4-row grouping over a
+  3-row filter even produced 4 output rows. The guard now runs at the apply
+  site, against the dataset the grouped step actually receives: a
+  row-dropping `:where` throws the structured `:grouping-row-mismatch` (with
+  a hint to filter in a separate `dt` call before `prepare-grouping`), while
+  an all-rows-kept `:where` remains valid (same rows, same order).
+
 ## [2.7.6] - 2026-10-14
 
 The second momentum-replication batch, closing out the wrds-scratch
