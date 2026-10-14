@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.6] - 2026-10-14
+
+The second momentum-replication batch, closing out the wrds-scratch
+DATAJURE-NOTES backlog (items 6-8): the grouping amortization extended to
+`:agg`, scalar reads as one fn, and the log-return vocabulary. No breaking
+changes (one error-data key renamed: `:grouping-requires-set` →
+`:grouping-requires-set-or-agg`).
+
 ### Added
 
 - **`dt1` — scalar reads from single-row results** — same arguments as `dt`,
@@ -655,7 +663,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.5...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.6...HEAD
+[2.7.6]: https://github.com/clojure-finance/datajure/compare/v2.7.5...v2.7.6
 [2.7.5]: https://github.com/clojure-finance/datajure/compare/v2.7.4...v2.7.5
 [2.7.4]: https://github.com/clojure-finance/datajure/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/clojure-finance/datajure/compare/v2.7.2...v2.7.3
