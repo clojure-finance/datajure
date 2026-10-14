@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.5] - 2026-10-14
+
+The consumer-feedback release: structured input validation from quanajure's
+smoke testing, plus the first harvest from the wrds-scratch JT93 momentum
+replication (3.39M CRSP stock-months) — a column-ordering fix, the correlation
+vocabulary the replication had to reconstruct by hand, and a memory-hazard
+removal in the general grouped-`:set` path. No breaking changes.
+
 ### Added
 
 - **`cov`, `corr` — bivariate aggregation ops** — sample covariance and sample
@@ -622,7 +630,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.4...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.5...HEAD
+[2.7.5]: https://github.com/clojure-finance/datajure/compare/v2.7.4...v2.7.5
 [2.7.4]: https://github.com/clojure-finance/datajure/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/clojure-finance/datajure/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/clojure-finance/datajure/compare/v2.7.1...v2.7.2
