@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.9] - 2026-10-24
+
+A correctness release, from writing the datajure-website v2 pages. Results
+change only where they were wrong: composed window expressions now respect
+`:by` and `:within-order`, and a missing value inside a computed argument
+is treated as missing everywhere. No API changes; upgrade if you compose
+stored `#dt/e` expressions or pass arithmetic into window ops, `ct`/`mx`/
+`nuniq`, `coalesce` or `row/*`.
+
 ### Fixed
 
 - **A stored `#dt/e` expression containing a window op, composed into
@@ -768,7 +777,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.8...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.9...HEAD
+[2.7.9]: https://github.com/clojure-finance/datajure/compare/v2.7.8...v2.7.9
 [2.7.8]: https://github.com/clojure-finance/datajure/compare/v2.7.7...v2.7.8
 [2.7.7]: https://github.com/clojure-finance/datajure/compare/v2.7.6...v2.7.7
 [2.7.6]: https://github.com/clojure-finance/datajure/compare/v2.7.5...v2.7.6
