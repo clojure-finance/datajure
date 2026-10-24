@@ -27,6 +27,7 @@
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.datetime :as dtype-dt]
             [tech.v3.dataset :as ds]
+            [tech.v3.dataset.column :as ds-col]
             [datajure.window :as win]
             [datajure.row :as row]
             [datajure.stat :as stat]
@@ -1130,6 +1131,47 @@
                                   b (if (>= r 0) r (- (- r) 1))]
                               (min (inc b) n))))))))
 
+(def ^:private nan-tolerant-ops
+  "Ops that read a computed argument's NaN-for-missing correctly as is:
+  arithmetic and math (NaN propagates, and is stored as missing), comparisons
+  (NaN compares false, like nil), boolean ops, the finite-aware cleaners, and
+  the aggregators that already drop NaN. They get computed arguments unchanged;
+  every other consumer gets them through `nan->missing`."
+  #{:+ :- :* :div :div0 :sq :log :log1p :expm1 :abs :exp :sqrt :pow
+    :floor :ceil :round :signum
+    :> :< :>= :<= := :between? :and :or :not
+    :asinh :na2zero :neg2na :nonfin2na :when-finite
+    :mn :sm :md :qnt :sd :variance})
+
+(defn- nan->missing
+  "A computed value as a consumer would see it once stored in a column.
+  Arithmetic on a missing value yields NaN in its primitive double result, but
+  window ops, ct/mx/nuniq, coalesce, row/* and the like recognise missing only
+  as nil, which is how a stored column reads back. A float reader becomes a
+  column with NaN marked missing (still primitive for dfn); an object reader
+  maps NaN to nil. Columns, scalars and other readers pass through."
+  [v]
+  (if (or (not (dtype/reader? v)) (ds-col/is-column? v))
+    v
+    (case (dtype/elemwise-datatype v)
+      (:float64 :float32) (ds-col/new-column :datajure/arg (dtype/clone v))
+      :object (let [r (dtype/->reader v)]
+                (dtype/make-reader :object (dtype/ecount r)
+                                   (let [x (nth r idx)]
+                                     (when-not (and (float? x) (Double/isNaN (double x)))
+                                       x))))
+      v)))
+
+(defn- missing-aware
+  "Wrap the compiled fn `f` of argument node `node` with `nan->missing`, so a
+  computed argument behaves like the same expression stored as a column first.
+  Column refs and plain literals need no wrapping and pass through."
+  [node f]
+  (if (or (= :col (:node/type node))
+          (and (= :lit (:node/type node)) (not (expr-node? (:lit/value node)))))
+    f
+    (fn [ds] (nan->missing (f ds)))))
+
 (defn compile-expr
   "Compile an AST node to a fn [ds] -> column/scalar.
   Column keywords resolve to dataset columns; literals pass through;
@@ -1166,7 +1208,7 @@
                                     (let [t (if (dtype/reader? then) (nth then idx) then)
                                           e (if (dtype/reader? else) (nth else idx) else)]
                                       (if (nth pred idx) t e)))))))
-     :coalesce (let [arg-fns (mapv #(compile-expr % env) (:coalesce/args node))
+     :coalesce (let [arg-fns (mapv #(missing-aware % (compile-expr % env)) (:coalesce/args node))
                      ;; coalesce → first non-nil; coalesce-finite → first finite
                      ;; (skips nil AND NaN/±Inf; number? guards finite-double? which
                      ;; would throw on a non-numeric fallback)
@@ -1189,20 +1231,21 @@
                 body-fn (compile-expr (:let/body node) final-env)]
             (fn [ds] (body-fn ds)))
      :scan (let [op-kw (:scan/op node)
-                 arg-fn (compile-expr (:scan/arg node) env)]
+                 arg-fn (missing-aware (:scan/arg node) (compile-expr (:scan/arg node) env))]
              (fn [ds]
                (win/win-scan op-kw (arg-fn ds))))
      :each-prior (let [op-kw (:each-prior/op node)
-                       arg-fn (compile-expr (:each-prior/arg node) env)]
+                       arg-fn (missing-aware (:each-prior/arg node)
+                                             (compile-expr (:each-prior/arg node) env))]
                    (fn [ds]
                      (win/win-each-prior op-kw (arg-fn ds))))
-     :cut (let [col-fn (compile-expr (:cut/col node) env)
+     :cut (let [col-fn (missing-aware (:cut/col node) (compile-expr (:cut/col node) env))
                 n-fn (compile-expr (:cut/n node) env)
                 mask-fn (when-let [from (:cut/from node)]
                           (compile-expr from env))]
             (fn [ds]
               (cut-bucket (col-fn ds) (n-fn ds) (when mask-fn (mask-fn ds)))))
-     :xbar (let [col-fn (compile-expr (:xbar/col node) env)
+     :xbar (let [col-fn (missing-aware (:xbar/col node) (compile-expr (:xbar/col node) env))
                  width-fn (compile-expr (:xbar/width node) env)
                  unit (:xbar/unit node)]
              (fn [ds]
@@ -1211,7 +1254,7 @@
                 win-fn (or (win-op-table win-op-kw)
                            (throw (ex-info (str "Unknown window op: " win-op-kw)
                                            {:dt/error :unknown-win-op :win-op win-op-kw})))
-                arg-fns (mapv #(compile-expr % env) (:win/args node))]
+                arg-fns (mapv #(missing-aware % (compile-expr % env)) (:win/args node))]
             (fn [ds]
               (let [args (map #(% ds) arg-fns)]
                 (apply win-fn args))))
@@ -1219,7 +1262,7 @@
                 row-fn (or (row-op-table row-op-kw)
                            (throw (ex-info (str "Unknown row op: " row-op-kw)
                                            {:dt/error :unknown-row-op :row-op row-op-kw})))
-                arg-fns (mapv #(compile-expr % env) (:row/args node))]
+                arg-fns (mapv #(missing-aware % (compile-expr % env)) (:row/args node))]
             (fn [ds]
               (let [args (map #(% ds) arg-fns)]
                 (apply row-fn args))))
@@ -1227,7 +1270,7 @@
                  stat-fn (or (stat-op-table stat-op-kw)
                              (throw (ex-info (str "Unknown stat op: " stat-op-kw)
                                              {:dt/error :unknown-stat-op :stat-op stat-op-kw})))
-                 arg-fns (mapv #(compile-expr % env) (:stat/args node))]
+                 arg-fns (mapv #(missing-aware % (compile-expr % env)) (:stat/args node))]
              (fn [ds]
                (let [args (map #(% ds) arg-fns)]
                  (apply stat-fn args))))
@@ -1239,7 +1282,10 @@
                  op-fn (or (op-table op-kw)
                            (throw (ex-info "Unknown op in #dt/e expression"
                                            {:op op-kw})))
-                 arg-fns (mapv #(compile-expr % env) (:op/args node))
+                 arg-fns (mapv (if (nan-tolerant-ops op-kw)
+                                 #(compile-expr % env)
+                                 #(missing-aware % (compile-expr % env)))
+                               (:op/args node))
                  cmp? (comparison-ops op-kw)]
              (fn [ds]
                (let [args (map #(% ds) arg-fns)]

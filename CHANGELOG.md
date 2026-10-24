@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stored `#dt/e` expression containing a window op, composed into
+  another expression, was computed over the whole dataset.** With
+  `(def ret #dt/e (- (win/ratio :price) 1))` and
+  `(def log-ret #dt/e (log (+ 1 ret)))` (the README's "Why Datajure"
+  example), `:by [:permno] :set {:log-ret log-ret}` ignored the groups: each
+  firm's first row got a value computed from the previous firm's last price
+  instead of nil. Without `:by`, the same composed expression ignored
+  `:within-order`. Writing the expression inline was unaffected. Affects
+  every version since 2.4.0 (`:by`) and 2.7.0 (`:within-order` without
+  `:by`). A composed window expression is now also correctly rejected as a
+  computed `:by` key.
+- **A stored literal used as a parameter crashed.** `(def w #dt/e 20)` in
+  `(win/mavg :price w)`, or a stored probability in `(qnt :x p)`, threw a
+  `ClassCastException` from the single-column fast paths.
+- **Arithmetic on a missing value hid it from ops that skip missing
+  values.** Arithmetic yields NaN for a missing input, and most consumers
+  recognised missing only as nil. So `(win/scan * (+ 1 :ret))` (the README's
+  wealth index) was missing on every row once any return was missing, and
+  the same expression stored as a column first gave a different answer than
+  inline. Affected, when the argument was computed: `win/cumsum`, `cummin`,
+  `cummax`, `cummean`, `mavg`, `msum`, `mdev`, `mmin`, `mmax`, `ema`,
+  `fills`, `bfill`, `scan`; `ct`, `mx`, `mi`, `prod`, `nuniq`, `wavg`,
+  `wsum`, `cov`, `corr`, `tstat`; `coalesce`, `in`; all `row/*`;
+  `stat/rescale`. A computed argument now reaches these exactly as it would
+  after being stored as a column (where NaN is missing). Arithmetic,
+  comparisons, `mn`/`sm`/`md`/`qnt`/`sd`/`variance` and the finite-aware
+  cleaners already handled NaN and skip the conversion.
+- **Unknown-column errors could themselves crash.** `:select [1]`, a typo
+  on a dataset with integer column names, or a malformed `:within-order`
+  entry threw a raw `ClassCastException`/`NullPointerException` while
+  building the suggestion; they now throw the structured `:unknown-column`
+  error.
+
+### Changed
+
+- **Unknown-column errors now say what they suggest.** The message gains a
+  `Did you mean: :height (edit distance 1)` line and an `Available:` line
+  (first 20 names; the full list stays in `:dt/available`), as the README
+  already showed; before, the suggestion was only in `:dt/closest`.
+  `:within-order` and `prepare-grouping` unknown columns now get
+  suggestions too.
+
 ## [2.7.8] - 2026-10-14
 
 Two additive syntax features from an external review of the query DSL (its

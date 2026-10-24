@@ -3761,3 +3761,136 @@
     (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
       (is (= :not-a-dataset (err #(core/prepare-grouping {:a [1]} [:a]))))
       (is (= :not-a-dataset (err #(core/rename nil {:a :b})))))))
+
+;; ---------------------------------------------------------------------------
+;; Regression: a composed #dt/e var holding win/* ran over the whole dataset
+;; ---------------------------------------------------------------------------
+
+(def ^:private two-firms
+  ;; prices double each day, so ret = 1.0 exactly and wealth = 2, 4
+  (ds/->dataset {:permno [1 1 1 2 2 2]
+                 :date [1 2 3 1 2 3]
+                 :price [100.0 200.0 400.0 10.0 20.0 40.0]}))
+
+(deftest composed-window-expr-stays-per-group
+  (let [ret #dt/e (- (win/ratio :price) 1)
+        log-ret #dt/e (log (+ 1 ret))
+        wealth #dt/e (win/scan * (+ 1 ret))
+        l2 (Math/log 2.0)]
+    (testing "README headline example: composed log-ret restarts in each :by group"
+      (let [r (core/dt two-firms :by [:permno] :within-order [(core/asc :date)]
+                       :set {:ret ret :log-ret log-ret :wealth wealth})]
+        (is (= [nil l2 l2 nil l2 l2] (vec (:log-ret r))))
+        (is (= [nil 2.0 4.0 nil 2.0 4.0] (vec (:wealth r))))))
+    (testing "composed and inline spellings agree"
+      (is (= (vec (:a (core/dt two-firms :by [:permno] :set {:a log-ret})))
+             (vec (:a (core/dt two-firms :by [:permno]
+                               :set {:a #dt/e (log (+ 1 (- (win/ratio :price) 1)))}))))))
+    (testing "without :by, a composed window expr follows :within-order"
+      (let [shuffled (ds/->dataset {:date [3 1 2] :price [400.0 100.0 200.0]})
+            r (core/dt shuffled :within-order [(core/asc :date)] :set {:log-ret log-ret})]
+        (is (= [l2 nil l2] (vec (:log-ret r))))))
+    (testing "a composed window expr is rejected as a computed :by key"
+      (is (= :by-expr-not-elementwise
+             (try (core/dt two-firms :by [{:k log-ret}] :agg {:n core/nrow}) nil
+                  (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))))
+    (testing "a stored #dt/e literal works as a window size or quantile (was a ClassCastException)"
+      (let [w #dt/e 2
+            p #dt/e 0.5]
+        (is (= [100.0 150.0 300.0 10.0 15.0 30.0]
+               (vec (:m (core/dt two-firms :by [:permno] :set {:m #dt/e (win/mavg :price w)})))))
+        (is (= [200.0 20.0]
+               (vec (:q (core/dt two-firms :by [:permno] :agg {:q #dt/e (qnt :price p)})))))))))
+
+;; ---------------------------------------------------------------------------
+;; Regression: arithmetic turns a missing value into NaN, which consumers that
+;; skip nil (window ops, ct/mx/nuniq, coalesce, row/*, ...) did not recognise
+;; ---------------------------------------------------------------------------
+
+(def ^:private with-gaps
+  (ds/->dataset {:x [nil 1.0 nil 3.0 -4.0 2.0 nil 5.0]
+                 :y [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0]
+                 :g [1 1 1 1 2 2 2 2]}))
+
+(deftest computed-missing-reads-as-missing
+  (testing "op over a computed arg equals op over the column it was computed from"
+    ;; (+ 0 :x) is :x with its missing values as NaN; every consumer must agree
+    (let [run (fn [mode form by]
+                (try (vec (:r (if (= mode :set)
+                                (core/dt with-gaps :by by :set {:r form})
+                                (core/dt with-gaps :by by :agg {:r form}))))
+                     (catch Throwable e (str "ERR " (ex-message e)))))
+          cases [[:set #(vector :win/cumsum %)] [:set #(vector :win/cummax %)]
+                 [:set #(vector :win/cummean %)] [:set #(vector :win/mavg % 2)]
+                 [:set #(vector :win/mdev % 3)] [:set #(vector :win/ema % 2)]
+                 [:set #(vector :win/fills %)] [:set #(vector :win/bfill %)]
+                 [:set #(vector :win/scan :* %)] [:set #(vector :win/scan :max %)]
+                 [:agg #(vector :ct %)] [:agg #(vector :mx %)] [:agg #(vector :mi %)]
+                 [:agg #(vector :prod %)] [:agg #(vector :nuniq %)]
+                 [:agg #(vector :cov % :y)] [:agg #(vector :wavg % :y)]
+                 [:agg #(vector :tstat %)]
+                 [:set #(vector :coalesce % 9.0)] [:set #(vector :in % #{1.0 nil})]
+                 [:set #(vector :row/sum % :y)] [:set #(vector :row/count-nil % :y)]
+                 [:set #(vector :row/any-nil? % :y)] [:set #(vector :stat/rescale %)]
+                 [:set #(vector :cut % 2)]]]
+      (doseq [[mode tmpl] cases
+              by [nil [:g]]]
+        (let [plain (binding [*out* (java.io.StringWriter.)] (run mode (tmpl :x) by))]
+          ;; two identical errors would also compare equal, so require a result
+          (is (vector? plain) (str (first (tmpl :x)) " :by " by " -> " plain))
+          (is (= plain (binding [*out* (java.io.StringWriter.)] (run mode (tmpl [:+ 0 :x]) by)))
+              (str (first (tmpl :x)) " :by " by))))))
+  (testing "README wealth index: (win/scan * (+ 1 :ret)) skips a leading missing return"
+    (let [r (core/dt (ds/->dataset {:ret [nil 1.0 1.0]})
+                     :set {:w #dt/e (win/scan * (+ 1 :ret)) :wd [:win/scan :* [:+ 1 :ret]]})]
+      (is (= [nil 2.0 4.0] (vec (:w r))))
+      (is (= [nil 2.0 4.0] (vec (:wd r))))))
+  (testing "an inline expression equals the same expression stored first (0/0 included)"
+    (let [d (ds/->dataset {:x [1.0 nil 0.0 4.0] :y [1.0 1.0 0.0 1.0]})
+          inline (core/dt d :set {:c #dt/e (coalesce (/ :x :y) 0.0) :n #dt/e (win/cumsum (/ :x :y))})
+          stored (-> d
+                     (core/dt :set {:b #dt/e (/ :x :y)})
+                     (core/dt :set {:c #dt/e (coalesce :b 0.0) :n #dt/e (win/cumsum :b)}))]
+      (is (= [1.0 0.0 0.0 4.0] (vec (:c inline)) (vec (:c stored))))
+      (is (= [1.0 1.0 1.0 5.0] (vec (:n inline)) (vec (:n stored)))))))
+
+;; ---------------------------------------------------------------------------
+;; Unknown-column messages carry the suggestion and the available columns
+;; ---------------------------------------------------------------------------
+
+(deftest unknown-column-message-text
+  (let [d (ds/->dataset {:species ["A"] :mass [3500.0] :height [40.0]})
+        err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e e)))]
+    (testing "single typo: suggestion with edit distance, then the available columns"
+      (let [e (err #(core/dt d :set {:bmi #dt/e (/ :mass :hieght)}))]
+        (is (= (str "Unknown column(s) #{:hieght} in :set :bmi expression\n"
+                    "Did you mean: :height (edit distance 1)\n"
+                    "Available: :height :mass :species")
+               (ex-message e)))
+        (is (= {:hieght [:height]} (:dt/closest (ex-data e))))))
+    (testing "several typos name the column each suggestion is for"
+      (is (re-find #"Did you mean: :height for :hieght \(edit distance 1\), :mass for :maas \(edit distance 1\)"
+                   (ex-message (err #(core/dt d :set {:bmi #dt/e (/ :maas :hieght)}))))))
+    (testing "no close match: no Did-you-mean line"
+      (let [m (ex-message (err #(core/dt d :select [:zzzzzz])))]
+        (is (not (re-find #"Did you mean" m)))
+        (is (re-find #"Available: :height :mass :species$" m))))
+    (testing ":within-order and prepare-grouping suggest too"
+      (is (re-find #"Did you mean: :species"
+                   (ex-message (err #(core/dt d :by [:species] :within-order [(core/asc :spcies)]
+                                              :set {:r #dt/e (win/rank :mass)})))))
+      (is (re-find #"Did you mean: :species"
+                   (ex-message (err #(core/prepare-grouping d [:specie]))))))
+    (testing "non-name columns and malformed specs still get the structured error"
+      (let [kind (fn [f] (:dt/error (ex-data (err f))))]
+        (is (= :unknown-column (kind #(core/dt d :select [1]))))
+        (is (= :unknown-column (kind #(core/dt d :by [:species] :within-order [1]
+                                               :set {:r #dt/e (win/rank :mass)}))))
+        (is (= :unknown-column (kind #(core/dt (ds/->dataset [{0 1 :b 2}]) :select [:bb]))))
+        (is (re-find #"Did you mean: :b " (ex-message (err #(core/dt (ds/->dataset [{0 1 :b 2}])
+                                                                     :select [:bb])))))))
+    (testing "a wide dataset lists only the first 20 available names"
+      (let [wide (ds/->dataset (into {} (map (fn [i] [(keyword (format "c%02d" i)) [1]])) (range 30)))
+            m (ex-message (err #(core/dt wide :select [:nope])))]
+        (is (re-find #"c19 \.\.\. \(10 more in :dt/available\)$" m))
+        (is (not (re-find #":c20" m)))))))

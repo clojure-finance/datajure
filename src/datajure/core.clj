@@ -15,6 +15,60 @@
 (defn- expr-node? [x]
   (and (map? x) (contains? x :node/type)))
 
+(defn- plain-lit?
+  "True for a :lit node holding a plain value. A composed #dt/e var is also
+  embedded as a :lit, but holding an AST, which is not a usable parameter."
+  [node]
+  (and (= :lit (:node/type node)) (not (expr-node? (:lit/value node)))))
+
+(def ^:private max-available-in-message
+  "How many available column names an unknown-column message lists; the full
+  list is always in :dt/available."
+  20)
+
+(defn- unknown-columns-error
+  "The structured :unknown-column ex-info. Each unknown name gets its closest
+  available name (Damerau-Levenshtein, distance <= 3), shown in the message
+  and in :dt/closest. The message also lists the available columns. `where`
+  completes the message (\"... in <where>\"); `context` goes to :dt/context
+  when given."
+  [unknown available where context]
+  (let [avail-names (try (vec (sort available))
+                         ;; mixed name types (e.g. keywords and integers) don't compare
+                         (catch ClassCastException _ (vec (sort-by str available))))
+        ;; only names (keyword/string/symbol) get suggestions: a column may be
+        ;; named by an integer, and a malformed spec may yield nil
+        nm (fn [x] (when (or (keyword? x) (string? x) (symbol? x)) (name x)))
+        best (into {}
+                   (map (fn [col]
+                          (let [c (when-let [s (nm col)]
+                                    (->> avail-names
+                                         (keep (fn [a] (when-let [t (nm a)]
+                                                         [a (expr/damerau-levenshtein s t)])))
+                                         (sort-by second)
+                                         first))]
+                            [col (when (and c (<= (second c) 3)) c)])))
+                   unknown)
+        hits (filter val (sort-by (comp str key) best))
+        hint (cond
+               (empty? hits) nil
+               (= 1 (count unknown)) (let [[a d] (val (first hits))]
+                                       (str a " (edit distance " d ")"))
+               :else (clojure.string/join
+                      ", " (map (fn [[col [a d]]] (str a " for " col " (edit distance " d ")"))
+                                hits)))
+        shown (take max-available-in-message avail-names)
+        more (- (count avail-names) (count shown))]
+    (ex-info (str "Unknown column(s) " unknown " in " where
+                  (when hint (str "\nDid you mean: " hint))
+                  "\nAvailable: " (if (seq shown) (clojure.string/join " " shown) "(none)")
+                  (when (pos? more) (str " ... (" more " more in :dt/available)")))
+             (cond-> {:dt/error :unknown-column
+                      :dt/columns unknown
+                      :dt/available avail-names
+                      :dt/closest (update-vals best #(when % [(first %)]))}
+               context (assoc :dt/context context)))))
+
 (defn- validate-expr-cols
   "Pre-execution column validation for #dt/e AST nodes.
   Extracts column refs from the AST and checks against the dataset.
@@ -24,22 +78,7 @@
         available (set (ds/column-names dataset))
         unknown (clojure.set/difference refs available)]
     (when (seq unknown)
-      (let [avail-names (vec (sort available))
-            suggestions (into {}
-                              (map (fn [col]
-                                     (let [col-str (name col)
-                                           closest (->> avail-names
-                                                        (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
-                                                        (sort-by second)
-                                                        first)]
-                                       [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
-                              unknown)]
-        (throw (ex-info (str "Unknown column(s) " unknown " in " context " expression")
-                        {:dt/error :unknown-column
-                         :dt/columns unknown
-                         :dt/context context
-                         :dt/available avail-names
-                         :dt/closest suggestions}))))))
+      (throw (unknown-columns-error unknown available (str context " expression") context)))))
 
 (defn- validate-no-win
   "Checks that an #dt/e AST does not contain win/* references.
@@ -429,7 +468,7 @@
         (let [args (:op/args node)
               c (first args)]
           (when (and c (= :col (:node/type c))
-                     (every? #(= :lit (:node/type %)) (rest args)))
+                     (every? plain-lit? (rest args)))
             (let [col-kw (:col/name c)
                   dt (some-> (ds/column dataset col-kw) meta :datatype)]
               (when (and dt (casting/numeric-type? dt) (not (dtype-dt/datetime-datatype? dt)))
@@ -633,7 +672,11 @@
   unknown node types → false (run per group, always correct)."
   [node]
   (case (:node/type node)
-    (:col :lit :binding-ref) true
+    (:col :binding-ref) true
+    ;; a composed #dt/e var is embedded as a :lit holding its AST: classify that
+    ;; AST, or a stored win/* expression would run once over the whole dataset
+    :lit (let [v (:lit/value node)]
+           (or (not (expr-node? v)) (element-wise-ast? v)))
     :op (and (contains? elementwise-op-kws (:op/name node))
              (every? element-wise-ast? (:op/args node)))
     :if (every? element-wise-ast? [(:if/pred node) (:if/then node) (:if/else node)])
@@ -741,7 +784,7 @@
       (let [args (:win/args node)
             c (first args)]
         (when (and c (= :col (:node/type c))
-                   (every? #(= :lit (:node/type %)) (rest args)))
+                   (every? plain-lit? (rest args)))
           (when-let [f (expr/win-op-fn (:win/op node))]
             {:win-fn f :col (:col/name c) :args (mapv :lit/value (rest args))}))))))
 
@@ -832,9 +875,7 @@
     (let [available (set (ds/column-names dataset))
           unknown (vec (remove available (map order-spec-col within-order)))]
       (when (seq unknown)
-        (throw (ex-info (str "Unknown column(s) " unknown " in :within-order expression")
-                        {:dt/error :unknown-column :dt/columns unknown
-                         :dt/context :within-order :dt/available (vec (sort available))})))))
+        (throw (unknown-columns-error unknown available ":within-order expression" :within-order)))))
   (let [{:keys [perm bounds]} (or grouping (group-perm dataset by within-order))
         base (ds/select-rows dataset perm)]
     (reduce (fn [d [col-kw dval]]
@@ -1000,9 +1041,7 @@
                               (concat by (when within-order
                                            (map order-spec-col within-order)))))]
      (when (seq unknown)
-       (throw (ex-info (str "Unknown column(s) " unknown " in prepare-grouping")
-                       {:dt/error :unknown-column :dt/columns unknown
-                        :dt/available (vec (sort available))})))
+       (throw (unknown-columns-error unknown available "prepare-grouping" nil)))
      (let [{:keys [perm bounds]} (group-perm dataset (vec by) within-order)]
        {:dt/selector :grouping
         :by (vec by) :within-order within-order :perm perm :bounds bounds
@@ -1351,22 +1390,7 @@
    (let [available (set (ds/column-names dataset))
          unknown (set/difference (set requested) available)]
      (when (seq unknown)
-       (let [avail-names (vec (sort available))
-             suggestions (into {}
-                               (map (fn [col]
-                                      (let [col-str (name col)
-                                            closest (->> avail-names
-                                                         (map (fn [a] [a (expr/damerau-levenshtein col-str (name a))]))
-                                                         (sort-by second)
-                                                         first)]
-                                        [col (when (and closest (<= (second closest) 3)) [(first closest)])])))
-                               unknown)]
-         (throw (ex-info (str "Unknown column(s) " unknown " in " context)
-                         {:dt/error :unknown-column
-                          :dt/columns unknown
-                          :dt/context context
-                          :dt/available avail-names
-                          :dt/closest suggestions})))))))
+       (throw (unknown-columns-error unknown available (str context) context))))))
 
 (defn- apply-select [dataset selector]
   (let [all-cols (ds/column-names dataset)

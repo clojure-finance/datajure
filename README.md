@@ -173,6 +173,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | Comparison op with a nil *literal* in `#dt/e`         | evaluates to `false` (nil is unambiguous in a predicate) |
 | Arithmetic op with a nil *literal* in `#dt/e`         | clear read-time error — use `coalesce`/`div0` to handle nils explicitly |
 | Column-level nils (nil values within a column)        | depends on the `dfn` op  |
+| A missing value inside a computed argument, e.g. `(win/scan * (+ 1 :ret))` | same as if the expression were stored as a column first: arithmetic's `NaN` counts as missing, so window ops, `ct`, `coalesce` etc. skip or replace it |
 | Aggregation helpers (`mn`/`sm`/`md`/`sd`/`nrow`/...)  | skip nil; `nil` if all missing (never `0`/`-Inf`/`NaN`) |
 | `win/fills :col`                                      | forward-fill nils        |
 | `coalesce :col default`                               | replace nils with fallback (first non-nil) |
@@ -1041,7 +1042,7 @@ Structured `ex-info` with suggestions. All errors carry a `:dt/error` key in `ex
 (dt ds :set {:bmi #dt/e (/ :mass :hieght)})
 ;; => ExceptionInfo: Unknown column(s) #{:hieght} in :set :bmi expression
 ;;    Did you mean: :height (edit distance 1)
-;;    Available: :species :year :mass :height :flipper
+;;    Available: :flipper :height :mass :species :year
 ```
 
 **Unknown op — namespace-aware suggestions at read time:**
