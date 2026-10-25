@@ -1563,11 +1563,15 @@
                    gigabytes of heap to ~0. Pass :off-heap false for on-heap output.
                    No effect on other query shapes or non-numeric derived columns."
   [dataset & args]
-  (#'util/ensure-dataset! dataset "dt"
-                          (when (or (contains? dt-query-keys dataset)
-                                    (and (map? dataset) (seq dataset)
-                                         (every? dt-query-keys (keys dataset))))
-                            "did you forget the dataset? dt takes it as the first argument: (dt dataset :where ...)"))
+  ;; build the hint only once the check has failed, and never hash the argument:
+  ;; hashing a dataset reads every value of every column (forcing lazy columns,
+  ;; and throwing on an all-missing lazy comparison column)
+  (when-not (ds/dataset? dataset)
+    (#'util/ensure-dataset! dataset "dt"
+                            (when (or (and (keyword? dataset) (contains? dt-query-keys dataset))
+                                      (and (map? dataset) (seq dataset)
+                                           (every? dt-query-keys (keys dataset))))
+                              "did you forget the dataset? dt takes it as the first argument: (dt dataset :where ...)")))
   (let [{:keys [where set agg by select order-by within-order take off-heap]
          :or {off-heap true}} (dt-query-map args)
         grouping (when (grouping? by) by)]

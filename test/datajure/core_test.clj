@@ -1,6 +1,7 @@
 (ns datajure.core-test
   (:require [clojure.test :refer [deftest is testing]]
             [tech.v3.dataset :as ds]
+            [tech.v3.dataset.column :as ds-col]
             [tech.v3.datatype :as dtype]
             [datajure.core :as core]
             [datajure.row :as row]
@@ -3941,3 +3942,36 @@
       (is (= 3 (ds/row-count (core/dt d :where #dt/e (> (coalesce (sm :x) 0.0) 1)))))
       (is (= 3 (ds/row-count (core/dt d :where [:> [:sm :x] 1]))))
       (is (= [:g :x] (vec (ds/column-names (core/dt d :where #dt/e (> (sm :x) 100)))))))))
+
+;; ---------------------------------------------------------------------------
+;; dt never hashes its input: hashing a dataset reads every value of every
+;; column, which cost seconds on large panels and threw on an all-missing lazy
+;; comparison column (the not-a-dataset hint was built on every call)
+;; ---------------------------------------------------------------------------
+
+(deftest dt-does-not-read-untouched-columns
+  (testing "an all-missing lazy comparison column no longer throws"
+    (let [d (-> (ds/->dataset {:x [1.0 2.0 3.0]})
+                (core/dt :set {:sma [:win/mavg :x 5 {:min-periods 5}]})
+                (core/dt :set {:up? [:> :x :sma]}))]
+      (is (= [1.0 2.0 3.0] (vec (:x (core/dt d :select [:x])))))))
+  (testing "a query reads no value of a column it does not use"
+    (let [reads (atom 0)
+          counting-ds (fn []
+                        (ds/new-dataset
+                         [(ds-col/new-column :x (dtype/make-reader :float64 1000
+                                                                   (do (swap! reads inc) (double idx)))
+                                             {} (org.roaringbitmap.RoaringBitmap.))
+                          (ds-col/new-column :y (dtype/make-reader :int64 1000 (rem idx 10))
+                                             {} (org.roaringbitmap.RoaringBitmap.))]))
+          x-reads (fn [f] (reset! reads 0) (f (counting-ds)) @reads)]
+      (is (= 0 (x-reads #(core/dt % :select [:y]))))
+      (is (= 0 (x-reads #(core/dt % :set {:z #dt/e (* :y 2)}))))
+      (is (= 0 (x-reads #(core/dt % :by [:y] :agg {:n #dt/e (nrow)}))))
+      (is (= 0 (x-reads #(core/prepare-grouping % [:y]))))
+      (is (= 0 (x-reads #(core/rename % {:y :yy}))))))
+  (testing "the misplaced-query hint still fires for a non-dataset"
+    (is (re-find #"did you forget the dataset"
+                 (ex-message (try (core/dt {:where [:> :x 1]}) (catch Exception e e)))))
+    (is (re-find #"did you forget the dataset"
+                 (ex-message (try (core/dt :where) (catch Exception e e)))))))
