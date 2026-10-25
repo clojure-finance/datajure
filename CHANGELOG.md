@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.10] - 2026-10-25
+
+A correctness release, from reviewing 2.7.9. Aggregators now return `nil`
+when there is nothing to aggregate, as the README and spec always said.
+**One result change:** `sm` over an empty or all-missing group is now `nil`
+instead of `0.0`; use `(coalesce (sm :x) 0.0)` to keep the zero. Also fixes
+`coalesce` over scalars and a crash on a one-boolean `:where`.
+
+### Fixed
+
+- **`sm`, `sd` and `variance` returned a number when there was nothing to
+  aggregate.** On an empty or all-missing group, `sm` gave `0.0` and `sd`/
+  `variance` gave `-0.0`, although the README and spec promise `nil`, as
+  `mx`/`mi`/`prod` already do. `sd`/`variance` of a single value now also give
+  `nil` (they were `NaN`, shown as missing only once stored). **Results change:**
+  a group whose values are all missing now has a missing sum instead of `0.0`;
+  write `#dt/e (coalesce (sm :x) 0.0)` to keep the zero. A real zero, such as
+  the variance of a constant column, is unchanged. Covers `#dt/e`, the data
+  forms, and the plain helpers `core/mean`, `sum`, `stddev`, `variance` (and the
+  concise `mn`/`sm`/`sd`), which also returned `NaN`/`0.0`/`-0.0` instead of
+  `nil`.
+- **`coalesce` over scalars returned a column.** In `:agg`,
+  `#dt/e (coalesce (mn :x) 0)` put a vector of the group's length into the
+  cell instead of a number; it also never applied, since the aggregator's
+  `NaN` is not `nil`. When every argument is a scalar, `coalesce` now returns
+  a scalar.
+- **A `:where` predicate that evaluates to one boolean crashed.**
+  `:where #dt/e (> (sm :x) 1)` threw a `ClassCastException`; it now keeps
+  every row when true and none when false or `nil`.
+
 ## [2.7.9] - 2026-10-24
 
 A correctness release, from writing the datajure-website v2 pages. Results
@@ -777,7 +807,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.9...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.10...HEAD
+[2.7.10]: https://github.com/clojure-finance/datajure/compare/v2.7.9...v2.7.10
 [2.7.9]: https://github.com/clojure-finance/datajure/compare/v2.7.8...v2.7.9
 [2.7.8]: https://github.com/clojure-finance/datajure/compare/v2.7.7...v2.7.8
 [2.7.7]: https://github.com/clojure-finance/datajure/compare/v2.7.6...v2.7.7
