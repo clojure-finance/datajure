@@ -409,7 +409,7 @@
     (let [result (core/dt penguins :agg {:n core/N :total #dt/e (sm :mass)})]
       (is (= 1 (ds/row-count result)))
       (is (= 5 (first (vec (result :n)))))
-      (is (= 20850.0 (first (vec (result :total))))))))
+      (is (= 20850 (first (vec (result :total))))))))
 
 (deftest threading-pipeline
   (testing "threaded pipeline with HAVING equivalent"
@@ -2075,11 +2075,11 @@
       (is (= 5 (ds/row-count result)))
       (is (contains? (set (ds/column-names result)) :price))
       (is (not (contains? (set (ds/column-names result)) :xbar-0)))
-      (is (= {:price 0 :n 2 :total 3.0} (select-keys (nth rows 0) [:price :n :total])))
-      (is (= {:price 10 :n 2 :total 7.0} (select-keys (nth rows 1) [:price :n :total])))
-      (is (= {:price 20 :n 2 :total 11.0} (select-keys (nth rows 2) [:price :n :total])))
-      (is (= {:price 30 :n 1 :total 7.0} (select-keys (nth rows 3) [:price :n :total])))
-      (is (= {:price 40 :n 1 :total 8.0} (select-keys (nth rows 4) [:price :n :total]))))))
+      (is (= {:price 0 :n 2 :total 3} (select-keys (nth rows 0) [:price :n :total])))
+      (is (= {:price 10 :n 2 :total 7} (select-keys (nth rows 1) [:price :n :total])))
+      (is (= {:price 20 :n 2 :total 11} (select-keys (nth rows 2) [:price :n :total])))
+      (is (= {:price 30 :n 1 :total 7} (select-keys (nth rows 3) [:price :n :total])))
+      (is (= {:price 40 :n 1 :total 8} (select-keys (nth rows 4) [:price :n :total]))))))
 
 (deftest xbar-by-mixed-keyword-and-fn
   (testing ":by with xbar fn + keyword produces correct groups, xbar col named after column"
@@ -2164,7 +2164,7 @@
       ;; bar with 2 rows has vol sum 30
       (let [bar-of-2 (first (filter #(= 2 (:n %)) (ds/mapseq-reader result)))]
         (is (some? bar-of-2))
-        (is (= 30.0 (:total bar-of-2)))))))
+        (is (= 30 (:total bar-of-2)))))))
 
 (deftest xbar-unknown-unit-error
   (testing "unknown temporal unit throws :xbar-unknown-unit"
@@ -4003,3 +4003,112 @@
                  (ex-message (try (core/dt {:where [:> :x 1]}) (catch Exception e e)))))
     (is (re-find #"did you forget the dataset"
                  (ex-message (try (core/dt :where) (catch Exception e e)))))))
+
+;; ---------------------------------------------------------------------------
+;; wrds-scratch DATAJURE-NOTES §9 (FF92 replication papercuts)
+;; ---------------------------------------------------------------------------
+
+(defn- notes-printed
+  "The NOTE lines `f` prints, starting from a clean slate."
+  [f]
+  (core/reset-notes!)
+  (vec (re-seq #"NOTE: [^\n]*" (with-out-str (f)))))
+
+(deftest quot-rem-mod-ops
+  (let [d (ds/->dataset {:a [-7 7 nil 7 10] :b [2 2 2 0 3] :f [-7.5 7.5 ##NaN 1.0 ##Inf]})
+        r (core/dt d :set {:q #dt/e (quot :a :b) :r #dt/e (rem :a :b) :m #dt/e (mod :a :b)
+                           :fq #dt/e (quot :f 2) :fm #dt/e (mod :f 2)})]
+    (testing "Clojure semantics: quot/rem truncate, mod floors; long in, long out"
+      (is (= [-3 3 nil nil 3] (vec (:q r))))
+      (is (= [-1 1 nil nil 1] (vec (:r r))))
+      (is (= [1 1 nil nil 1] (vec (:m r))))
+      (is (= :int64 (dtype/elemwise-datatype (:q r)))))
+    (testing "doubles give doubles; NaN, ±Inf and a zero divisor give missing"
+      (is (= [-3.0 3.0 nil 0.0 nil] (vec (:fq r))))
+      (is (= [0.5 1.5 nil 1.0 nil] (vec (:fm r)))))
+    (testing "month-index arithmetic: year and month-of-year from year*12 + month-1"
+      (let [p (ds/->dataset {:mindex [24239 24240 24245]})
+            r (core/dt p :set {:yr #dt/e (quot :mindex 12) :mo #dt/e (+ 1 (mod :mindex 12))})]
+        (is (= [2019 2020 2020] (vec (:yr r))))
+        (is (= [12 1 6] (vec (:mo r))))))
+    (testing "scalars, data-forms and computed :by keys"
+      (is (= -1 (:m (core/dt1 d :agg {:m #dt/e (mod 7 -2)}))))
+      (is (= [-3 3 nil 3 5] (vec (:q (core/dt d :set {:q [:quot :a 2]})))))
+      (is (= [[0 4] [1 1]]
+             (mapv vec (ds/rowvecs (core/dt d :by [{:k #dt/e (mod :b 2)}] :agg {:n #dt/e (nrow)}))))))
+    (testing "read-time checks"
+      (is (= :wrong-arity (:dt/error (ex-data (try (read-string "#dt/e (quot :a)")
+                                                   (catch Exception e e))))))
+      (is (= :arith-nil-literal (:dt/error (ex-data (try (read-string "#dt/e (mod :a nil)")
+                                                         (catch Exception e e)))))))))
+
+(deftest sm-integer-sum-is-long
+  (let [d (ds/->dataset {:g [1 1 2] :i (long-array [1 1 1]) :n (int-array [1 2 3])
+                         :x [1.0 2.0 3.0] :b [true false true] :im [1 nil 3]})]
+    (testing "integer columns and integer-valued expressions sum to a long, like R"
+      (let [s (core/dt1 d :agg {:i #dt/e (sm :i) :n #dt/e (sm :n) :im #dt/e (sm :im)
+                                :ind #dt/e (sm (if (> :x 1.5) 1 0)) :plus #dt/e (sm (+ :i 1))})]
+        (is (= {:i 3 :n 6 :im 4 :ind 2 :plus 6} s))
+        (is (every? #(instance? Long %) (vals s)))))
+    (testing "booleans count their trues"
+      (is (= {:b 2 :c 2} (core/dt1 d :agg {:b #dt/e (sm :b) :c #dt/e (sm (> :x 1.5))}))))
+    (testing "any double makes it a double"
+      (is (= 6.0 (:x (core/dt1 d :agg {:x #dt/e (sm :x)}))))
+      (is (= 4.0 (:s (core/dt1 d :agg {:s #dt/e (sm (+ :im 0.0))})))))
+    (testing "per group, broadcast in :set, and core/sum"
+      (is (= [[1 2 1] [2 1 3]]
+             (mapv vec (ds/rowvecs (core/dt d :by [:g] :agg {:i #dt/e (sm :i) :im #dt/e (sm :im)})))))
+      (is (= [1 1 3] (vec (:s (core/dt d :by [:g] :set {:s #dt/e (sm :im)})))))
+      (is (= 3 (core/sum (:i d)))))
+    (testing "all-missing is still nil; a sum too big for a long falls back to a double"
+      (is (nil? (:s (core/dt1 (ds/->dataset [{:x nil} {:x nil}]) :agg {:s #dt/e (sm :x)}))))
+      (is (= (+ (double Long/MAX_VALUE) 1.0)
+             (:s (core/dt1 (ds/->dataset {:i (long-array [Long/MAX_VALUE 1])})
+                           :agg {:s #dt/e (sm :i)})))))))
+
+(deftest dt1-keeps-every-key
+  (testing "a missing aggregate is a nil value, not an absent key"
+    (is (= {:s nil :n 0}
+           (core/dt1 (ds/->dataset {:x (double-array 0)}) :agg {:s #dt/e (sm :x) :n #dt/e (nrow)})))
+    (is (= {:s nil :m nil}
+           (core/dt1 (ds/->dataset [{:x nil} {:x nil}]) :agg {:s #dt/e (sm :x) :m #dt/e (mn :x)})))))
+
+(deftest notes-only-when-they-apply
+  (let [d (ds/->dataset {:g [1 1 2] :x [1.0 2.0 3.0]})]
+    (testing "dt1 is whole-table by design: no :agg-without-:by note"
+      (is (empty? (notes-printed #(core/dt1 d :agg {:n #dt/e (nrow)}))))
+      (is (= 1 (count (notes-printed #(core/dt d :agg {:n #dt/e (nrow)}))))))
+    (testing "the :within-order hint only fires when row order can change the result"
+      (let [hint? (fn [f] (boolean (some #(re-find #"Use :within-order" %) (notes-printed f))))]
+        (is (not (hint? #(core/dt d :by [:g] :set {:w #dt/e (stat/winsorize :x 0.1)}))))
+        (is (not (hint? #(core/dt d :by [:g] :set {:m #dt/e (- :x (mn :x))}))))
+        (is (hint? #(core/dt d :by [:g] :set {:c #dt/e (win/cumsum :x)})))
+        (is (hint? #(core/dt d :by [:g] :set {:f #dt/e (fst :x)})))
+        (is (hint? #(core/dt d :by [:g] :set {:f (fn [sub] (:x sub))})))
+        (is (not (hint? #(core/dt d :by [:g] :set {:c #dt/e (win/cumsum :x)}
+                                  :within-order [(core/asc :x)]))))))))
+
+(deftest set-bare-keyword-copies-column
+  (let [d (ds/->dataset {:g [1 1 2] :x [1.0 2.0 3.0] :im [1 nil 3]})]
+    (testing "{:y :x} is #dt/e :x"
+      (is (= [1.0 2.0 3.0] (vec (:y (core/dt d :set {:y :x})))))
+      (is (= [1 nil 3] (vec (:y (core/dt d :by [:g] :set {:y :im})))))
+      (is (= [2.0 4.0 6.0] (vec (:y (core/dt d :set [[:a #dt/e (* 2 :x)] [:y :a]]))))))
+    (testing "a misspelt name is an unknown-column error, not an all-missing column"
+      (is (= :unknown-column
+             (:dt/error (ex-data (try (core/dt d :set {:y :nope}) (catch Exception e e)))))))))
+
+(deftest group-set-copies-keep-missing
+  ;; the :by window-mode fast path rebuilt a derived column that IS a source
+  ;; column (#dt/e :x, or an `if` that picks one) without its missing-set, so an
+  ;; int column's missing sentinel came back as a value (Long/MIN_VALUE)
+  (let [d (ds/->dataset {:g [1 1 2] :x [1.0 2.0 3.0] :im [1 nil 3] :s ["a" nil "c"]})]
+    (doseq [off-heap [true false]]
+      (testing (str ":off-heap " off-heap)
+        (let [r (core/dt d :by [:g] :off-heap off-heap
+                         :set {:a #dt/e :im :b #dt/e (if (> :x 1.5) :im 0) :c #dt/e :s})]
+          (is (= [1 nil 3] (vec (:a r))))
+          (is (= [0 nil 3] (vec (:b r))))
+          (is (= ["a" nil "c"] (vec (:c r))))
+          (is (= [1 1 1] (mapv #(.getCardinality ^org.roaringbitmap.RoaringBitmap (ds-col/missing (% r)))
+                               [:a :b :c]))))))))

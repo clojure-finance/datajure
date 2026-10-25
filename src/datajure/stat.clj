@@ -56,7 +56,9 @@
   "Winsorize a column at the given tail probability p (0 < p < 0.5).
   Values below the p-th percentile are clipped to that percentile;
   values above the (1-p)-th percentile are clipped to that percentile.
-  nil values are preserved as nil.
+  nil values are preserved as nil. The percentiles are R type-7 quantiles,
+  which interpolate: at p = 0.1, [1.0 2.0] clips to [1.1 1.9], not to an
+  observed value.
 
   An optional trailing options map restricts clipping to one tail
   (mbmisc winsor.bm / winsor.tp): {:tail :lower} clips only the bottom p,

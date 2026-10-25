@@ -17,6 +17,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   combinations). This matches `:within-order` and a prepared grouping, which
   already threw in the same situation; a prepared grouping keeps its
   `:grouping-requires-set-or-agg` key. Only code that was a no-op breaks.
+- **`sm` of integers is a long.** `(sm :shares)` on an int64 column gave
+  `3.0`; it now gives `3`, like R's `sum()` of integers. The same holds for
+  an integer-valued expression such as `(sm (if (> :ret 0) 1 0))`, and a
+  boolean column or predicate counts its trues. Any double in the input
+  still gives a double, and so does a sum too large for a long. Code that
+  compares a sum with `=` against a double literal (`(= 3.0 …)`) needs
+  updating; arithmetic on the result is unaffected.
+- **A bare keyword in `:set` is a column reference.** `:set {:fm :mindex}`
+  copied `:mindex` only because keywords are functions: a misspelt name gave
+  an all-missing column, and under `:by` it took the slow general path. It
+  now means exactly `#dt/e :mindex`, so a misspelt name throws
+  `:unknown-column` and a map `:set` that swaps two columns through bare
+  keywords throws `:map-set-cross-reference`, as the `#dt/e` spelling does.
+
+### Added
+
+- **`quot`, `rem` and `mod` in `#dt/e`** (and data-forms, `[:mod :x 12]`),
+  with Clojure semantics: `quot` and `rem` truncate toward zero, `mod`
+  floors, so its result takes the divisor's sign, like R's `%%`. Two
+  integers give a long, a double on either side gives a double; a missing or
+  non-finite operand, or a zero divisor, gives `nil`. Year and month from a
+  `year*12 + month-1` index are `(quot :mindex 12)` and
+  `(+ 1 (mod :mindex 12))`.
+
+### Fixed
+
+- **`:by … :set` turned a copied int column's missing values into
+  `-9223372036854775808`.** When a derivation evaluated to an existing
+  column, as `#dt/e :x` does (or an `if` whose branches pick one), the fast
+  path rebuilt it without its missing set. With the default off-heap output
+  an int column's missing sentinel came back as a real value; with
+  `:off-heap false`, and for date columns, the values read `nil` but the
+  column reported no missing rows. Float and string columns were unaffected.
+  The sentinel leak affects every version since 2.5.0, when off-heap output
+  became the default.
+- **`dt1` dropped keys whose value is missing.** `(dt1 empty :agg {:s (sm
+  :x) :n (nrow)})` returned `{:n 0}`, and with every aggregate missing it
+  returned `{}`. Every result column is now a key, `nil` where missing.
+- **NOTEs that didn't apply.** `dt1 … :agg` no longer prints "Aggregating
+  over entire dataset. Use :by …", since `dt1` is whole-table by design.
+  The "Use :within-order" hint in `:by … :set` now appears only when a
+  derivation's result can depend on row order (a `win/*` op, `first-val`,
+  `last-val`, or a plain function), not for order-independent ones such as
+  `stat/winsorize` or a group mean.
+
+### Documentation
+
+- README: `stat/winsorize` and `stat/trim` cut at interpolated type-7
+  quantiles, not at observed values (FF92 defines winsorizing as "set equal
+  to the fractile"); a bare keyword in `:set` copies a column.
 
 ## [2.7.11] - 2026-10-25
 

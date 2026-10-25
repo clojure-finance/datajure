@@ -319,12 +319,48 @@
   [col]
   (when (at-least-n-present? col 1) (dfn/mean col)))
 
+(def ^:private integral-dtypes
+  #{:int8 :int16 :int32 :int64 :uint8 :uint16 :uint32 :uint64 :boolean})
+
+(defn- integral-values?
+  "True when every present value of `col` is an integer or a boolean: an
+  integer or boolean column, or an object reader holding only those (and nil)."
+  [col]
+  (let [dt (dtype/elemwise-datatype col)]
+    (cond
+      (contains? integral-dtypes dt) true
+      (identical? :object dt) (every? (fn [v] (or (nil? v) (integer? v) (boolean? v)))
+                                      (dtype/->reader col))
+      :else false)))
+
+(defn- integral-sum
+  "Exact long sum of the non-missing integer/boolean values of `col` (a boolean
+  counts 1 for true), or nil when the sum overflows a long."
+  [col]
+  (let [r (dtype/->reader col)
+        n (dtype/ecount r)]
+    (try
+      (loop [i 0 acc 0]
+        (if (< i n)
+          (let [v (nth r i)]
+            (recur (inc i)
+                   (cond
+                     (nil? v) acc
+                     (boolean? v) (if v (inc acc) acc)
+                     :else (Math/addExact acc (long v)))))
+          acc))
+      (catch ArithmeticException _ nil))))
+
 (defn col-sum
   "Sum of the non-missing values in a column; nil for an empty or all-missing
-  column (`dfn/sum` gives 0.0, which reads as a real total). Backs the #dt/e
-  `:sm` op and `core/sum`."
+  column (`dfn/sum` gives 0.0, which reads as a real total). Integer and boolean
+  values sum to a long, like R's `sum()` (a boolean counts its trues); any
+  double makes it a double, and so does a sum too large for a long. Backs the
+  #dt/e `:sm` op and `core/sum`."
   [col]
-  (when (at-least-n-present? col 1) (dfn/sum col)))
+  (when (at-least-n-present? col 1)
+    (or (when (integral-values? col) (integral-sum col))
+        (dfn/sum col))))
 
 (defn col-sd
   "Sample standard deviation of the non-missing values in a column; nil below
@@ -347,6 +383,24 @@
   [num den]
   (when (and (some? num) (some? den) (not (zero? den)))
     (/ (double num) (double den))))
+
+(defn- int-div-op
+  "Element-wise nil-safe integer division backing the #dt/e `quot`/`rem`/`mod`
+  ops, with Clojure's semantics: `quot` and `rem` truncate toward zero, `mod`
+  floors (its result takes the divisor's sign, like R's `%%`). A missing or
+  non-finite operand, or a zero divisor, gives nil. Two integers give a long,
+  a double on either side gives a double. Scalars in, scalar out."
+  [f]
+  (let [ok? (fn [v] (and (some? v) (or (not (float? v)) (math/finite-double? v))))
+        scalar (fn [a b] (when (and (ok? a) (ok? b) (not (zero? b))) (f a b)))]
+    (fn [a b]
+      (let [a-reader? (dtype/reader? a)
+            b-reader? (dtype/reader? b)]
+        (if (or a-reader? b-reader?)
+          (dtype/make-reader :object (if a-reader? (dtype/ecount a) (dtype/ecount b))
+                             (scalar (if a-reader? (nth a idx) a)
+                                     (if b-reader? (nth b idx) b)))
+          (scalar a b))))))
 
 (defn- temporal-part
   "Element-wise nil-safe calendar-field extraction backing the #dt/e date-part
@@ -428,6 +482,10 @@
    :ceil dfn/ceil
    :round dfn/round
    :signum dfn/signum
+   ;; integer division (Clojure semantics; nil-safe, zero divisor -> nil)
+   :quot (int-div-op quot)
+   :rem (int-div-op rem)
+   :mod (int-div-op mod)
    ;; element-wise non-finite cleaners (mbmisc na2zero/neg2na/nonfin2na) + stable
    ;; inverse-hyperbolic-sine. Per-element nil/NaN/±Inf handling → object readers.
    :asinh (fn [col] (dtype/make-reader :object (dtype/ecount col)
@@ -526,6 +584,7 @@
    'sq :sq, 'log :log, 'log1p :log1p, 'expm1 :expm1, 'asinh :asinh
    'abs :abs, 'exp :exp, 'sqrt :sqrt, 'pow :pow
    'floor :floor, 'ceil :ceil, 'round :round, 'signum :signum
+   'quot :quot, 'rem :rem, 'mod :mod
    'na2zero :na2zero, 'neg2na :neg2na, 'nonfin2na :nonfin2na
    ;; calendar date-parts, with a long alias for dow matching java.time naming
    'year :year, 'month :month, 'day :day, 'dow :dow, 'quarter :quarter
@@ -679,6 +738,12 @@
                  n-args ".")
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
 
+    (and (#{:quot :rem :mod} op-kw) (not= 2 n-args))
+    (throw (ex-info
+            (str "`" op-sym "` takes exactly two arguments (dividend, divisor). Got "
+                 n-args ".")
+            {:dt/error :wrong-arity :dt/op op-sym :dt/expected 2 :dt/got n-args}))
+
     (and (#{:cov :corr} op-kw) (not= 2 n-args))
     (throw (ex-info
             (str "`" op-sym "` takes exactly two arguments (x column, y column). Got "
@@ -725,7 +790,8 @@
   rule, so this check is scoped to arithmetic only."
   [op-kw op-sym args]
   (when (and (#{:+ :- :* :div :sq :log :log1p :expm1
-                :abs :exp :sqrt :pow :floor :ceil :round :signum} op-kw)
+                :abs :exp :sqrt :pow :floor :ceil :round :signum
+                :quot :rem :mod} op-kw)
              (some nil? args))
     (throw (ex-info
             (str "Arithmetic op `" op-sym "` received a literal nil. Arithmetic "
@@ -1110,6 +1176,21 @@
     :let (into (into #{} (mapcat (comp win-refs :binding/expr)) (:let/bindings node))
                (win-refs (:let/body node)))))
 
+(defn order-dependent?
+  "True if the value of AST `node` can depend on row order: it holds a window
+  op (any win/*, scan or each-prior) or first-val/last-val. Element-wise ops,
+  the other aggregations and stat/* transforms give the same result in any
+  order. Searches composed sub-expressions too."
+  [node]
+  (boolean
+   (some (fn [x]
+           (and (map? x)
+                (case (:node/type x)
+                  (:win :scan :each-prior) true
+                  :op (contains? #{:first-val :last-val} (:op/name x))
+                  false)))
+         (tree-seq coll? seq node))))
+
 (defn- xbar-bucket
   "Floor-divide a column by width to produce xbar bucket values.
   For numeric columns: quot(col, width) * width.
@@ -1181,7 +1262,7 @@
   the aggregators that already drop NaN. They get computed arguments unchanged;
   every other consumer gets them through `nan->missing`."
   #{:+ :- :* :div :div0 :sq :log :log1p :expm1 :abs :exp :sqrt :pow
-    :floor :ceil :round :signum
+    :floor :ceil :round :signum :quot :rem :mod
     :> :< :>= :<= := :between? :and :or :not
     :asinh :na2zero :neg2na :nonfin2na :when-finite
     :mn :sm :md :qnt :sd :variance})

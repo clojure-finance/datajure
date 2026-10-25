@@ -1,5 +1,6 @@
 (ns datajure.core
   (:require [tech.v3.dataset :as ds]
+            [tech.v3.dataset.column :as ds-col]
             [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as dfn]
             [tech.v3.datatype.casting :as casting]
@@ -108,6 +109,17 @@
             (and (expr-node? col-fn) (seq (expr/win-refs col-fn))))
           pairs)))
 
+(defn- derivations-order-dependent?
+  "True if any derivation's result can depend on row order (see
+  expr/order-dependent?). A plain fn can't be inspected, so it counts as
+  order-dependent."
+  [derivations]
+  (let [pairs (if (map? derivations) (seq derivations) derivations)]
+    (boolean
+     (some (fn [[_col-kw col-fn]]
+             (or (not (expr-node? col-fn)) (expr/order-dependent? col-fn)))
+           pairs))))
+
 (defn- validate-map-set-cross-refs
   "For map-form :set, detect expressions that reference sibling columns being derived.
   Map semantics are simultaneous — cross-references silently see original column values,
@@ -139,15 +151,23 @@
   [v]
   (if (vector? v) (expr/data->ast v) v))
 
+(defn- normalise-set-value
+  "A :set value as normalise-expr-value sees it, except that a bare keyword is
+  a column reference: `{:y :x}` copies :x, exactly like `{:y #dt/e :x}`, so a
+  misspelt name is an unknown-column error instead of an all-missing column."
+  [v]
+  (if (keyword? v) (expr/col-node v) (normalise-expr-value v)))
+
 (defn- normalise-derivations
-  "Normalise every value of a :set/:agg map or seq-of-pairs via
-  normalise-expr-value, preserving the container shape (map stays a map —
+  "Normalise every value of a :set/:agg map or seq-of-pairs via `f` (default
+  normalise-expr-value), preserving the container shape (map stays a map —
   simultaneous semantics; a seq of pairs stays sequential)."
-  [derivations]
-  (cond
-    (nil? derivations) nil
-    (map? derivations) (update-vals derivations normalise-expr-value)
-    :else (mapv (fn [[k v]] [k (normalise-expr-value v)]) derivations)))
+  ([derivations] (normalise-derivations derivations normalise-expr-value))
+  ([derivations f]
+   (cond
+     (nil? derivations) nil
+     (map? derivations) (update-vals derivations f)
+     :else (mapv (fn [[k v]] [k (f v)]) derivations))))
 
 (defn- normalise-order-spec
   "Normalise a sort spec to {:order :asc|:desc :col <kw>}. Accepts a bare column
@@ -667,7 +687,7 @@
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
   #{:+ :- :* :div :div0 :sq :log :log1p :expm1 :> :< :>= :<= := :and :or :not :in :between?
-    :abs :exp :sqrt :pow :floor :ceil :round :signum
+    :abs :exp :sqrt :pow :floor :ceil :round :signum :quot :rem :mod
     :asinh :na2zero :neg2na :nonfin2na :when-finite
     :year :month :day :dow :quarter})
 
@@ -852,9 +872,14 @@
   carrying the same missing-set (GC-tracked, so it frees when the dataset is GC'd) —
   taking a wide `:set` from ~6 GB on-heap to ~0 JVM heap. Because it relocates the
   already-packed column, off-heap output is identical to on-heap by construction.
-  Non-numeric columns and the on-heap default are returned as built."
+  Non-numeric columns and the on-heap default are returned as built. When `raw`
+  is itself a column (a bare `#dt/e :x`, or an `if` that picks one), its
+  missing-set is carried over: `new-column` alone drops it, which let an int
+  column's missing sentinel through as a value."
   [col-kw raw off-heap?]
-  (let [col (ds/new-column col-kw raw)]
+  (let [col (if (ds-col/is-column? raw)
+              (ds/new-column col-kw raw {} (ds/missing raw))
+              (ds/new-column col-kw raw))]
     (if-let [ndt (and off-heap? (native-dtype-family (dtype/elemwise-datatype col)))]
       (let [n (ds/row-count col)
             buf (dtype/make-container :native-heap ndt {:resource-type :gc} n)]
@@ -1059,11 +1084,15 @@
 
 (def ^:private shown-notes (atom #{}))
 
+(def ^:private ^:dynamic *silenced-notes*
+  "Note keys that don't apply to the current call (dt1 binds :agg-no-by)."
+  #{})
+
 (defn- info-note
   "Print a one-time informational note identified by key.
   Subsequent calls with the same key are silent."
   [key msg]
-  (when-not (contains? @shown-notes key)
+  (when-not (or (contains? @shown-notes key) (contains? *silenced-notes* key))
     (swap! shown-notes conj key)
     (println (str "[datajure] NOTE: " msg))))
 
@@ -1600,7 +1629,7 @@
         (throw (ex-info "a prepared grouping already encodes :within-order — don't pass it alongside."
                         {:dt/error :grouping-conflict}))))
     (let [where (if (vector? where) (expr/data->ast where) where)
-          set (normalise-derivations set)
+          set (normalise-derivations set normalise-set-value)
           agg (normalise-derivations agg)
           eff-by (if grouping (:by grouping) by)
           {dataset :dataset eff-by :by by-temp-cols :temp-cols}
@@ -1624,7 +1653,7 @@
         (info-note :agg-no-by "Aggregating over entire dataset. Use :by for group aggregation."))
       (when window-mode?
         (info-note :window-mode "Window mode: computing within groups, keeping all rows in input order.")
-        (when (not eff-wo)
+        (when (and (not eff-wo) (derivations-order-dependent? set))
           (info-note :window-no-order "Window mode computes in current row order. Use :within-order to set the per-group computation order (output stays in input order).")))
       (when (and set-has-win? (not eff-by))
         (info-note :window-mode-no-by "Window mode (whole dataset): computing over entire dataset, keeping all rows in input order.")
@@ -1656,12 +1685,16 @@
   Throws a structured `:dt1-not-single-row` error when the result does not
   have exactly one row — silently taking the first of several would mask a
   grouping or filtering bug. Use `dt` (plus `:take`/`:order-by`) when several
-  rows are expected."
+  rows are expected.
+
+  Every result column is a key, with nil for a missing value, so the map's
+  shape doesn't depend on the data."
   [dataset & args]
-  (let [res (apply dt dataset args)
+  (let [res (binding [*silenced-notes* #{:agg-no-by}] (apply dt dataset args))
         n (ds/row-count res)]
     (when (not= 1 n)
       (throw (ex-info (str "dt1 expects exactly one result row, got " n
                            ". Use dt for multi-row results.")
                       {:dt/error :dt1-not-single-row :dt/row-count n})))
-    (first (ds/mapseq-reader res))))
+    (let [row (first (ds/mapseq-reader res))]
+      (into {} (map (fn [k] [k (get row k)])) (ds/column-names res)))))

@@ -83,7 +83,8 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
 (dt ds :agg {:total #dt/e (sm :mass) :n nrow})
 
 ;; Same, as a plain map — dt1 returns THE single result row
-;; (structured error if the result isn't exactly one row)
+;; (structured error if the result isn't exactly one row); every column is
+;; a key, nil where the aggregate is missing
 (dt1 ds :agg {:total #dt/e (sm :mass) :n nrow})   ;; => {:total … :n …}
 
 ;; Partitioned window — compute within groups, keep all rows
@@ -106,6 +107,8 @@ Two orthogonal keywords produce four distinct operations with no new concepts:
 |---|---|
 | Map `{:a e1 :b e2}` | Independent derivations against the input (a cross-reference between siblings throws a structured error) |
 | Seq of pairs `[[:a e1] [:b e2]]` | Ordered — later pairs see earlier-derived columns |
+
+A bare keyword as the value copies a column: `:set {:fm :mindex}` is the same as `{:fm #dt/e :mindex}`, so a misspelt name is an unknown-column error.
 
 ```clojure
 (dt ds :set [[:bmi   #dt/e (/ :mass (sq :height))]
@@ -174,7 +177,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | Arithmetic op with a nil *literal* in `#dt/e`         | clear read-time error — use `coalesce`/`div0` to handle nils explicitly |
 | Column-level nils (nil values within a column)        | depends on the `dfn` op  |
 | A missing value inside a computed argument, e.g. `(win/scan * (+ 1 :ret))` | same as if the expression were stored as a column first: arithmetic's `NaN` counts as missing, so window ops, `ct`, `coalesce` etc. skip or replace it |
-| Aggregation helpers (`mn`/`sm`/`md`/`sd`/`nrow`/...)  | skip nil; `nil` if all missing (never `0`/`-Inf`/`NaN`) |
+| Aggregation helpers (`mn`/`sm`/`md`/`sd`/`nrow`/...)  | skip nil; `nil` if all missing (never `0`/`-Inf`/`NaN`). `sm` of integers or booleans is a long, like R's `sum()` (a boolean counts its trues) |
 | `win/fills :col`                                      | forward-fill nils        |
 | `coalesce :col default`                               | replace nils with fallback (first non-nil) |
 | `coalesce-finite :col default` (alias `coalescef`)    | first **finite** value — also skips `NaN`/`±Inf` |
@@ -216,6 +219,7 @@ Beyond `+ - * /`, the element-wise vocabulary covers the elementary functions a 
 | `log1p`, `expm1` | log-return pair: `(log1p :ret)` = `(log (+ 1.0 :ret))`, numerically better near zero; `expm1` inverts back to simple returns |
 | `abs`, `signum` | `(abs (- (day :date) 15))` — nearest-date idioms |
 | `floor`, `ceil`, `round` | `round` returns longs |
+| `quot`, `rem`, `mod` | binary, Clojure semantics: `quot`/`rem` truncate toward zero, `mod` floors (sign of the divisor, like R's `%%`). Longs in, long out; a zero divisor gives `nil`. `(quot :mindex 12)` is the year of a `year*12 + month-1` index, `(+ 1 (mod :mindex 12))` its month |
 | `asinh` | numerically-stable inverse hyperbolic sine (nil for non-finite) |
 | `na2zero`, `nonfin2na`, `neg2na` | non-finite cleaners (mbmisc) |
 
@@ -514,6 +518,8 @@ Column-level transforms via `stat/*` inside `#dt/e`. All are nil-safe — nil va
 ```
 
 Functions: `stat/standardize`, `stat/demean`, `stat/winsorize`, `stat/trim`, `stat/rescale`. A constant column has no defined scale, so `rescale` returns all nil (matching `standardize`'s zero-sd behavior).
+
+`winsorize` and `trim` cut at R type-7 quantiles, which interpolate between observed values: at p = 0.1, `[1.0 2.0]` clips to `[1.1 1.9]`. Papers that define winsorizing as "set equal to the fractile", or code that uses a nearest-rank quantile, clip to an observed value instead, so results can differ slightly on small groups.
 
 ## Joins
 
