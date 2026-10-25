@@ -144,7 +144,7 @@ A window-mode `:set` **preserves the input row order** — with or without `:by`
 | —      | —       | ✓       | optional        | Whole-table aggregate (sorted first if `:within-order`) |
 | ✓      | —       | ✓       | optional        | Group aggregate (sorted within group if `:within-order`)|
 
-Disallowed: `:set` and `:agg` in the same call (use `->` threading); `:within-order` without `:set` or `:agg`. Unknown query keywords throw a structured error with a typo suggestion (`:wehre -> :where`) rather than being silently ignored.
+Disallowed: `:set` and `:agg` in the same call (use `->` threading); `:by` or `:within-order` without `:set` or `:agg`. Unknown query keywords throw a structured error with a typo suggestion (`:wehre -> :where`) rather than being silently ignored.
 
 `dt` also accepts its whole query as a **single map** — `(dt ds {:where [:> :mass 4000] :by [:species] :agg {:n [:nrow]}})` — equivalent to the kwargs form. Combined with data-form expressions (next sections), a query is pure EDN: storable, mergeable, and built programmatically without `apply` gymnastics.
 

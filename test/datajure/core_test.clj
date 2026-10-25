@@ -671,6 +671,25 @@
       (is (some? ed))
       (is (= :within-order-invalid (:dt/error ed))))))
 
+(deftest by-requires-set-or-agg
+  (let [err (fn [f] (try (f) nil (catch clojure.lang.ExceptionInfo e (:dt/error (ex-data e)))))]
+    (testing "a bare :by throws instead of being silently ignored"
+      (is (= :by-requires-set-or-agg (err #(core/dt penguins :by [:species]))))
+      (is (= :by-requires-set-or-agg (err #(core/dt penguins :by :species))))
+      (is (= :by-requires-set-or-agg (err #(core/dt penguins :by (fn [r] (:species r)))))))
+    (testing "alongside other non-grouping keys it still throws"
+      (is (= :by-requires-set-or-agg
+             (err #(core/dt penguins :where #dt/e (> :mass 0) :by [:species]
+                            :select [:species] :order-by [:species] :take 2)))))
+    (testing "the message points at the alternatives"
+      (let [msg (try (core/dt penguins :by [:species]) nil
+                     (catch clojure.lang.ExceptionInfo e (ex-message e)))]
+        (is (re-find #":agg" msg))
+        (is (re-find #":order-by" msg))
+        (is (re-find #"distinct-rows" msg))))
+    (testing "an absent or nil :by is fine"
+      (is (ds/dataset? (core/dt penguins :by nil :select [:species]))))))
+
 (deftest within-order-with-agg
   (testing ":within-order with :agg + :by enables OHLC in one call"
     (core/reset-notes!)
@@ -2734,9 +2753,11 @@
                        :agg {:n core/N})]
         (is (= [:year :rev-q2 :n] (vec (ds/column-names r))))
         (is (= 4 (ds/row-count r)))))
-    (testing "bare :by with no :set/:agg does not leak the temp column"
-      (is (= [:region :date :rev]
-             (vec (ds/column-names (core/dt sales :by [{:year #dt/e (year :date)}]))))))))
+    (testing "bare computed :by with no :set/:agg is rejected"
+      (is (= :by-requires-set-or-agg
+             (-> (try (core/dt sales :by [{:year #dt/e (year :date)}]) nil
+                      (catch clojure.lang.ExceptionInfo e e))
+                 ex-data :dt/error))))))
 
 (deftest computed-by-validation
   (let [d (ds/->dataset {:g ["a" "b"] :x [1.0 2.0]})

@@ -1531,7 +1531,9 @@
                    keywords, a fn of the row, or (for :set and :agg) a prepared
                    grouping from `prepare-grouping` — which bundles the group keys
                    and the :within-order sort, amortising them across multi-pass
-                   transforms and repeated aggregations.
+                   transforms and repeated aggregations. Without :set or :agg,
+                   :by throws (:by-requires-set-or-agg) — it neither groups nor
+                   sorts on its own.
                    A vector entry may also be a SINGLE-entry map naming a computed
                    key — :by [:region {:year #dt/e (year :date)}] — whose value is
                    an element-wise #dt/e expression or data-form vector ([:year
@@ -1585,10 +1587,15 @@
     (when (and within-order (not set) (not agg))
       (throw (ex-info ":within-order requires :set or :agg."
                       {:dt/error :within-order-invalid})))
+    (when (and by (not set) (not agg))
+      (throw (if grouping
+               (ex-info "a prepared grouping as :by requires :set or :agg."
+                        {:dt/error :grouping-requires-set-or-agg})
+               (ex-info (str ":by requires :set or :agg — on its own it neither groups nor sorts."
+                             " Use :agg for one row per group, :set to compute within groups,"
+                             " :order-by to sort, or datajure.util/distinct-rows for the distinct key combinations.")
+                        {:dt/error :by-requires-set-or-agg}))))
     (when grouping
-      (when-not (or set agg)
-        (throw (ex-info "a prepared grouping as :by requires :set or :agg."
-                        {:dt/error :grouping-requires-set-or-agg})))
       (when within-order
         (throw (ex-info "a prepared grouping already encodes :within-order — don't pass it alongside."
                         {:dt/error :grouping-conflict}))))
@@ -1629,7 +1636,7 @@
         (and set (not eff-by) (or within-order set-has-win?)) (apply-window-set set within-order off-heap)
         (and set (not eff-by) (not within-order) (not set-has-win?)) (apply-set set)
         ;; computed :by keys are temp columns everywhere but :agg (where they ARE
-        ;; the group-key output columns) — drop them from :set / bare-:by output
+        ;; the group-key output columns) — drop them from :set output
         (and (seq by-temp-cols) (not agg)) (ds/remove-columns by-temp-cols)
         (and agg eff-by) (apply-group-agg eff-by agg eff-wo grouping)
         (and agg (not eff-by)) (apply-agg agg eff-wo)

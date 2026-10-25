@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- **A `:by` without `:set` or `:agg` now throws `:by-requires-set-or-agg`.**
+  It used to be ignored without a word: `(dt prices :by [:sym])` returned
+  `prices` unchanged, so a query that meant to group or sort did neither.
+  The error points at `:agg` (one row per group), `:set` (compute within
+  groups), `:order-by` (sort) and `datajure.util/distinct-rows` (distinct key
+  combinations). This matches `:within-order` and a prepared grouping, which
+  already threw in the same situation; a prepared grouping keeps its
+  `:grouping-requires-set-or-agg` key. Only code that was a no-op breaks.
+
 ## [2.7.11] - 2026-10-25
 
 A performance and crash fix, reported from the Weinstein project. Upgrade if
