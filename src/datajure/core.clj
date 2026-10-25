@@ -267,31 +267,38 @@
   (or (ds/dataset? v)
       (instance? tech.v3.dataset.impl.column.Column v)))
 
-(defn- eval-agg [dataset col-kw agg-fn]
+(defn- agg-evaluator
+  "Check and compile one :agg value against `dataset` once, and return a fn
+  [group-ds] -> value, so a grouped :agg does not redo the work per group."
+  [dataset col-kw agg-fn]
   (check-misplaced-selector! agg-fn (str ":agg " col-kw))
   (cond
     (expr-node? agg-fn)
     (do (validate-expr-cols dataset agg-fn (str ":agg " col-kw))
-        ((expr/compile-expr agg-fn) dataset))
+        (expr/compile-expr agg-fn))
     ;; runtime data-form vector, e.g. [:qnt :saleq 0.2] — see apply-where/derive-column
     (vector? agg-fn)
     (let [node (expr/data->ast agg-fn :agg)]
       (validate-expr-cols dataset node (str ":agg " col-kw))
-      ((expr/compile-expr node) dataset))
+      (expr/compile-expr node))
     :else
-    (let [result (agg-fn dataset)]
-      (when (agg-result-footgun? result)
-        (throw (ex-info
-                (str ":agg plain function for column " col-kw
-                     " returned a " (if (ds/dataset? result) "dataset" "column")
-                     ", not a scalar. In :agg, plain functions receive the group"
-                     " dataset, so `(:col %)` returns a column vector, not a scalar."
-                     " Use `(dfn/mean (:col %))` for aggregation, or prefer"
-                     " `#dt/e (mn :col)` which handles both cases uniformly.")
-                {:dt/error :agg-plain-fn-returned-non-scalar
-                 :dt/column col-kw
-                 :dt/returned-type (if (ds/dataset? result) :dataset :column)})))
-      result)))
+    (fn [group-ds]
+      (let [result (agg-fn group-ds)]
+        (when (agg-result-footgun? result)
+          (throw (ex-info
+                  (str ":agg plain function for column " col-kw
+                       " returned a " (if (ds/dataset? result) "dataset" "column")
+                       ", not a scalar. In :agg, plain functions receive the group"
+                       " dataset, so `(:col %)` returns a column vector, not a scalar."
+                       " Use `(dfn/mean (:col %))` for aggregation, or prefer"
+                       " `#dt/e (mn :col)` which handles both cases uniformly.")
+                  {:dt/error :agg-plain-fn-returned-non-scalar
+                   :dt/column col-kw
+                   :dt/returned-type (if (ds/dataset? result) :dataset :column)})))
+        result))))
+
+(defn- eval-agg [dataset col-kw agg-fn]
+  ((agg-evaluator dataset col-kw agg-fn) dataset))
 
 (defn- apply-agg
   ([dataset aggregations] (apply-agg dataset aggregations nil))
@@ -455,6 +462,7 @@
   (cond
     (expr-node? agg-fn) (expr/col-refs agg-fn)
     (vector? agg-fn) (expr/col-refs (expr/data->ast agg-fn :agg))
+    (identical? agg-fn ds/row-count) #{}
     :else :all))
 
 (defn- narrow-for-aggs
@@ -472,35 +480,227 @@
             needed (into (set by) (concat (apply concat refs) order-cols))]
         (ds/select-columns dataset (filterv needed (ds/column-names dataset)))))))
 
-(def ^:private prim-quantile-ops
-  "Aggregator ops eligible for the primitive double[] gather. Limited to the
-  quantile ops because they drop non-finite values, so a gathered double[] with
-  NaN-for-missing is exactly correct (unlike mn/sd, where missing != NaN)."
-  #{:qnt :md})
+(declare group-perm validate-order-specs elementwise-op-kws)
 
-(defn- prim-quantile-spec
-  "When `agg-fn` is a single-column `qnt`/`md` op over a numeric, non-temporal
-  column (literal prob/min-n args) and there is no `within-order` sort, return a
-  spec `{:col :ps :min-n}` for the allocation-light primitive gather. Otherwise nil
-  (the agg goes through the general per-group `eval-agg` path — which also yields
-  the structured `:quantile-non-numeric` error for a temporal column)."
-  [dataset agg-fn within-order]
-  (when (nil? within-order)
-    (let [node (cond (expr-node? agg-fn) agg-fn
-                     (vector? agg-fn) (try (expr/data->ast agg-fn :agg) (catch Throwable _ nil))
-                     :else nil)]
-      (when (and node (= :op (:node/type node)) (prim-quantile-ops (:op/name node)))
-        (let [args (:op/args node)
-              c (first args)]
-          (when (and c (= :col (:node/type c))
+;; ---------------------------------------------------------------------------
+;; Segment aggregation: grouped :agg without per-group datasets
+;;
+;; A grouped :agg used to build a sub-dataset per group (ds/select-rows), about
+;; 10 µs per group before any work, which dominates when groups are small. The
+;; segment path computes common aggregations straight from each group's slice
+;; of the grouping permutation instead. Each reducer returns exactly what the op
+;; returns on the group's sub-dataset (same values, same order, same boxed type),
+;; and anything it does not cover keeps the sub-dataset path.
+;; ---------------------------------------------------------------------------
+
+(defn- seg-numeric-col?
+  "True when column `kw` is numeric, but not boolean, temporal or uint64, so the
+  segment reducers read the same values as the dfn reductions."
+  [dataset kw]
+  (let [dt (some-> (ds/column dataset kw) meta :datatype)]
+    (boolean (and dt (casting/numeric-type? dt)
+                  (not= :uint64 dt)
+                  (not (dtype-dt/datetime-datatype? dt))))))
+
+(defn- seg-leaf?
+  "True for an aggregation the segment path computes from a group's rows:
+  `nrow`; `ct`/`first-val`/`last-val` of a column; `mn`/`sm`/`mx`/`mi`/`sd`/
+  `variance`/`md`/`wavg` of numeric columns; `qnt` with literal arguments."
+  [dataset node]
+  (and (= :op (:node/type node))
+       (let [args (:op/args node)
+             col? #(= :col (:node/type %))
+             num-col? #(and (col? %) (seg-numeric-col? dataset (:col/name %)))]
+         (case (:op/name node)
+           :nrow (empty? args)
+           (:ct :first-val :last-val) (and (= 1 (count args)) (col? (first args)))
+           (:mn :sm :mx :mi :sd :variance :md) (and (= 1 (count args)) (num-col? (first args)))
+           :qnt (and (<= 2 (count args) 3) (num-col? (first args))
                      (every? plain-lit? (rest args)))
-            (let [col-kw (:col/name c)
-                  dt (some-> (ds/column dataset col-kw) meta :datatype)]
-              (when (and dt (casting/numeric-type? dt) (not (dtype-dt/datetime-datatype? dt)))
-                (if (= :md (:op/name node))
-                  {:col col-kw :ps 0.5 :min-n nil}
-                  (let [[p min-n] (mapv :lit/value (rest args))]
-                    {:col col-kw :ps p :min-n min-n}))))))))))
+           :wavg (and (= 2 (count args)) (every? num-col? args))
+           false))))
+
+(defn- seg-plan
+  "Split an :agg AST into segment leaves and a wrapper over them, or nil when
+  some part needs the sub-dataset path. Each leaf becomes a binding-ref in the
+  wrapper, which may use literals, element-wise ops, `if`/`cond` and
+  `coalesce`; on either path these see the same scalar leaf values."
+  [dataset node]
+  (let [leaves (java.util.ArrayList.)
+        walk (fn walk [n]
+               (if (seg-leaf? dataset n)
+                 (let [k (keyword "datajure.seg" (str (.size leaves)))]
+                   (.add leaves n)
+                   {:node/type :binding-ref :binding-ref/name k})
+                 (case (:node/type n)
+                   :lit (let [v (:lit/value n)] (if (expr-node? v) (walk v) n))
+                   :op (when (contains? elementwise-op-kws (:op/name n))
+                         (let [args (mapv walk (:op/args n))]
+                           (when (every? some? args) (assoc n :op/args args))))
+                   :if (let [p (walk (:if/pred n)) t (walk (:if/then n)) e (walk (:if/else n))]
+                         (when (and p t e) (assoc n :if/pred p :if/then t :if/else e)))
+                   :coalesce (let [args (mapv walk (:coalesce/args n))]
+                               (when (every? some? args) (assoc n :coalesce/args args)))
+                   nil)))
+        wrapper (walk node)]
+    (when (and wrapper (pos? (.size leaves)))
+      {:leaves (vec leaves) :wrapper wrapper})))
+
+(defn- missing-mask
+  "boolean[] marking the missing rows of `col`."
+  ^booleans [col]
+  (let [mask (boolean-array (dtype/ecount col))]
+    (.forEach ^RoaringBitmap (ds/missing col)
+              (reify org.roaringbitmap.IntConsumer
+                (accept [_ i] (aset mask i true))))
+    mask))
+
+(defn- present-doubles
+  "The non-NaN values of `darr` at perm[s, e), in order (NaN marks missing)."
+  ^doubles [^doubles darr ^ints perm ^long s ^long e]
+  (let [k (loop [j s k 0]
+            (if (< j e)
+              (recur (inc j) (if (Double/isNaN (aget darr (aget perm j))) k (inc k)))
+              k))
+        out (double-array k)]
+    (loop [j s k 0]
+      (when (< j e)
+        (let [v (aget darr (aget perm j))]
+          (if (Double/isNaN v)
+            (recur (inc j) k)
+            (do (aset out k v) (recur (inc j) (inc k)))))))
+    out))
+
+(def ^:private seg-array-max
+  "Largest group whose values a dfn reduction gets as a primitive array. From
+  about 1000 values dfn sums in parallel chunks, which split an array and a
+  column view differently, so a larger group gets a column view, as on the
+  sub-dataset path, and the result stays bit-for-bit the same."
+  512)
+
+(defn- dfn-reducer
+  "Segment reducer for a dfn-backed aggregation of column `c`: `f-arr` on the
+  group's present values (nil below `min-k` of them) for a small group, the
+  expr op `f-col` on a column view of the group otherwise."
+  [c min-k f-arr f-col]
+  (let [^doubles a (dtype/->double-array c)
+        min-k (long min-k)]
+    (fn [^ints perm ^long s ^long e]
+      (if (< (- e s) (long seg-array-max))
+        (let [^doubles p (present-doubles a perm s e)]
+          (when (>= (alength p) min-k) (f-arr p)))
+        (f-col (ds-col/select c (java.util.Arrays/copyOfRange perm (int s) (int e))))))))
+
+(defn- seg-reducer
+  "fn [perm s e] -> the value of aggregation `node` for the group whose rows are
+  perm[s, e), matching the op on that group's sub-dataset (see datajure.expr's
+  col-mean, col-sum, count-non-nil, col-max, wavg, ...)."
+  [dataset node]
+  (let [args (:op/args node)
+        col #(ds/column dataset (:col/name %))
+        rdr #(dtype/->reader (col %))
+        darr #(dtype/->double-array (col %))]
+    (case (:op/name node)
+      :nrow (fn [_ ^long s ^long e] (- e s))
+      :ct (let [r (rdr (first args))]
+            (fn [^ints perm ^long s ^long e]
+              (loop [j s k 0]
+                (if (< j e)
+                  (recur (inc j) (if (nil? (nth r (aget perm j))) k (inc k)))
+                  (Integer/valueOf (int k))))))
+      :first-val (let [r (rdr (first args))]
+                   (fn [^ints perm ^long s _] (nth r (aget perm s))))
+      :last-val (let [r (rdr (first args))]
+                  (fn [^ints perm _ ^long e] (nth r (aget perm (dec e)))))
+      (:mx :mi) (let [r (rdr (first args))
+                      pick (if (= :mx (:op/name node)) max min)]
+                  ;; (apply max present-values), folded left to right
+                  (fn [^ints perm ^long s ^long e]
+                    (loop [j s acc nil]
+                      (if (< j e)
+                        (let [v (nth r (aget perm j))]
+                          (recur (inc j) (cond (nil? v) acc (nil? acc) v :else (pick acc v))))
+                        acc))))
+      :mn (dfn-reducer (col (first args)) 1 dfn/mean expr/col-mean)
+      :sd (dfn-reducer (col (first args)) 2 dfn/standard-deviation expr/col-sd)
+      :variance (dfn-reducer (col (first args)) 2 dfn/variance expr/col-variance)
+      :sm (let [c (col (first args))
+                double-sum (dfn-reducer c 1 dfn/sum expr/col-sum)]
+            (if (casting/integer-type? (dtype/elemwise-datatype c))
+              ;; integers sum to an exact long, a double on overflow
+              (let [^longs la (dtype/->long-array c)
+                    ^booleans miss (missing-mask c)]
+                (fn [^ints perm ^long s ^long e]
+                  (let [r (try
+                            (loop [j s acc 0 seen false]
+                              (if (< j e)
+                                (let [i (aget perm j)]
+                                  (if (aget miss i)
+                                    (recur (inc j) acc seen)
+                                    (recur (inc j) (Math/addExact acc (aget la i)) true)))
+                                (when seen acc)))
+                            (catch ArithmeticException _ ::overflow))]
+                    (if (identical? ::overflow r) (double-sum perm s e) r))))
+              double-sum))
+      (:md :qnt) (let [^doubles a (darr (first args))
+                       [ps min-n] (if (= :md (:op/name node))
+                                    [0.5 nil]
+                                    (mapv :lit/value (rest args)))]
+                   ;; all the group's values, NaN for missing, which
+                   ;; quantiles-of-doubles drops
+                   (fn [^ints perm ^long s ^long e]
+                     (let [m (- e s)
+                           buf (double-array m)]
+                       (dotimes [j m] (aset buf j (aget a (aget perm (+ s j)))))
+                       (math/quantiles-of-doubles buf ps min-n))))
+      :wavg (let [wr (rdr (first args))
+                  vr (rdr (second args))]
+              ;; expr/wavg's loop over the group's rows
+              (fn [^ints perm ^long s ^long e]
+                (loop [j s swv 0.0 sw 0.0]
+                  (if (< j e)
+                    (let [i (aget perm j) wi (nth wr i) vi (nth vr i)]
+                      (if (and (some? wi) (some? vi))
+                        (recur (inc j) (+ swv (* (double wi) (double vi))) (+ sw (double wi)))
+                        (recur (inc j) swv sw)))
+                    (when-not (zero? sw) (/ swv sw)))))))))
+
+(def ^:private scalar-ds
+  "A stand-in dataset for evaluating a segment wrapper, whose inputs are all
+  scalars: the compiled ops only read the dataset to size a column."
+  (delay (ds/->dataset {})))
+
+(defn- seg-evaluator
+  "fn [perm s e] -> the value of a segment plan for one group."
+  [dataset {:keys [leaves wrapper]}]
+  (let [reducers (object-array (map #(seg-reducer dataset %) leaves))
+        nl (alength reducers)
+        vals (object-array nl)]
+    (if (= :binding-ref (:node/type wrapper))
+      (let [f (aget reducers 0)]
+        (fn [perm s e] (f perm s e)))
+      (let [env (into {} (map (fn [i] [(keyword "datajure.seg" (str i))
+                                       (fn [_] (aget vals i))]))
+                      (range nl))
+            wrapper-fn (expr/compile-expr wrapper env)
+            sds @scalar-ds]
+        (fn [perm s e]
+          (dotimes [i nl] (aset vals i ((aget reducers i) perm s e)))
+          (wrapper-fn sds))))))
+
+(defn- agg-ast
+  "The AST of an :agg value, or nil for a plain fn."
+  [agg-fn]
+  (cond (expr-node? agg-fn) agg-fn
+        (vector? agg-fn) (expr/data->ast agg-fn :agg)
+        ;; the `nrow`/`N` helpers are ds/row-count itself
+        (identical? agg-fn ds/row-count) (expr/op-node :nrow [])
+        :else nil))
+
+(def ^:private ^:dynamic *segment-aggs*
+  "When false, grouped :agg takes the sub-dataset path for every aggregation.
+  For tests that compare the two paths."
+  true)
 
 (defn- check-grouping-rows!
   "A prepared grouping is only valid for the exact rows (count AND order) of
@@ -520,85 +720,58 @@
 
 (defn- fast-group-agg
   "Fast path for keyword-only :by. Narrows the dataset to the columns the agg
-  actually touches, groups row indices over the key-column readers in a single
-  pass (no per-row maps, no eager per-group split of every column), and assembles
-  the result columns once — no per-group result datasets, no `ds/concat`.
+  actually touches, groups the rows once into a permutation (`group-perm`,
+  first-seen group order, each group's rows sorted by `within-order`), and
+  assembles the result columns once — no per-group result datasets, no
+  `ds/concat`.
 
-  Single-column quantile aggregators (`qnt`/`md`) take a primitive path: each
-  referenced column is pulled once as a `double[]`, and per group its slice is
-  gathered by row index and reduced with no boxing. Every other agg (composite
-  #dt/e, plain fn, order-sensitive) is fed a lazy `ds/select-rows` view through
-  `eval-agg`. Same result as the general path: key columns first (in :by order),
-  then agg columns (in :agg order); one row per group in first-seen order.
+  Aggregations the segment path covers (`seg-plan`) run on each group's slice
+  of the permutation with no per-group dataset. Every other agg (plain fn,
+  window op, computed argument, ...) is checked and compiled once and fed a
+  `ds/select-rows` view of the group, built at most once per group and
+  already in `within-order`. Same result as the general path: key columns
+  first (in :by order), then agg columns (in :agg order); one row per group in
+  first-seen order.
 
   A precomputed `grouping` ({:perm :bounds} from `prepare-grouping`) is reused
-  as-is — each group is a contiguous perm slice whose rows already carry the
-  grouping's `:within-order` sort, so both the per-call group pass and the
-  per-group sort are skipped (the amortised multi-pass path, same as
-  fast-group-set)."
+  as-is; its slices already carry the grouping's `:within-order` sort."
   [dataset0 by pairs within-order grouping]
   (let [dataset (narrow-for-aggs dataset0 by pairs within-order)
+        {:keys [perm bounds]} (or grouping
+                                  (do (when within-order
+                                        (validate-order-specs dataset within-order :within-order))
+                                      (group-perm dataset by within-order)))
+        ^ints perm perm
         key-rdrs (mapv #(dtype/->reader (ds/column dataset %)) by)
         nk (count by)
         np (count pairs)
-        n (ds/row-count dataset)
-        ;; per-agg: a prim-quantile spec map, or :general
-        specs (mapv (fn [pr] (or (prim-quantile-spec dataset (second pr) within-order) :general)) pairs)
-        prim-cols (into #{} (comp (filter map?) (map :col)) specs)
-        darrs (persistent! (reduce (fn [m c] (assoc! m c (dtype/->double-array (ds/column dataset c))))
-                                   (transient {}) prim-cols))
-        need-sub? (boolean (some #{:general} specs))
-        ;; per-group row-index arrays, in first-seen group order: contiguous
-        ;; perm slices from the prebuilt grouping, or one pass over the key readers
-        entries (if grouping
-                  (let [^ints perm (:perm grouping)]
-                    (mapv (fn [[s e]]
-                            (let [s (long s) m (- (long e) s)
-                                  idx-arr (int-array m)]
-                              (dotimes [j m] (aset idx-arr j (aget perm (+ s j))))
-                              idx-arr))
-                          (:bounds grouping)))
-                  (let [groups (java.util.LinkedHashMap.)]
-                    (dotimes [i n]
-                      (let [k (mapv #(nth % i) key-rdrs)
-                            ^java.util.ArrayList lst (or (.get groups k)
-                                                         (let [a (java.util.ArrayList.)] (.put groups k a) a))]
-                        (.add lst (int i))))
-                    (mapv (fn [^java.util.ArrayList idxs]
-                            (let [m (.size idxs)
-                                  idx-arr (int-array m)]
-                              (dotimes [j m] (aset idx-arr j (int (.get idxs j))))
-                              idx-arr))
-                          (.values groups))))]
-    (let [g (count entries)
-          key-cols (vec (repeatedly nk #(object-array g)))
-          agg-cols (vec (repeatedly np #(object-array g)))]
-      (dotimes [row g]
-        (let [^ints idx-arr (nth entries row)
-              m (alength idx-arr)
-              i0 (aget idx-arr 0)
-              sub (when need-sub?
-                    (let [s0 (ds/select-rows dataset idx-arr)]
-                      ;; a prebuilt grouping's slices are already within-order sorted
-                      (if (and within-order (not grouping))
-                        (apply-order-by s0 within-order :within-order)
-                        s0)))
-              ;; one scratch buffer per group, re-gathered per prim agg
-              ^doubles buf (when (pos? (count darrs)) (double-array m))]
-          (dotimes [c nk] (aset ^objects (nth key-cols c) row (nth (nth key-rdrs c) i0)))
-          (dotimes [a np]
-            (let [spec (nth specs a)
-                  v (if (map? spec)
-                      (let [^doubles darr (darrs (:col spec))]
-                        (dotimes [j m] (aset buf j (aget darr (aget idx-arr j))))
-                        (math/quantiles-of-doubles buf (:ps spec) (:min-n spec)))
-                      (let [pr (nth pairs a)]
-                        (eval-agg sub (first pr) (second pr))))]
-              (aset ^objects (nth agg-cols a) row v)))))
-      (reduce (fn [d [cname cdata]] (ds/add-column d (ds/new-column cname cdata)))
-              (ds/->dataset {})
-              (concat (map vector by key-cols)
-                      (map vector (map first pairs) agg-cols))))))
+        ;; per agg: [:seg f] with f [perm s e] -> value, or [:general f] with
+        ;; f [group-ds] -> value
+        evals (mapv (fn [[col-kw agg-fn]]
+                      (let [general (agg-evaluator dataset0 col-kw agg-fn)
+                            plan (when *segment-aggs*
+                                   (some->> (agg-ast agg-fn) (seg-plan dataset)))]
+                        (if plan
+                          [:seg (seg-evaluator dataset plan)]
+                          [:general general])))
+                    pairs)
+        g (count bounds)
+        key-cols (vec (repeatedly nk #(object-array g)))
+        agg-cols (vec (repeatedly np #(object-array g)))]
+    (dotimes [row g]
+      (let [[s e] (nth bounds row)
+            s (long s) e (long e)
+            i0 (aget perm s)
+            sub (delay (ds/select-rows dataset (java.util.Arrays/copyOfRange perm (int s) (int e))))]
+        (dotimes [c nk] (aset ^objects (nth key-cols c) row (nth (nth key-rdrs c) i0)))
+        (dotimes [a np]
+          (let [[kind f] (nth evals a)]
+            (aset ^objects (nth agg-cols a) row
+                  (if (identical? kind :seg) (f perm s e) (f @sub)))))))
+    (reduce (fn [d [cname cdata]] (ds/add-column d (ds/new-column cname cdata)))
+            (ds/->dataset {})
+            (concat (map vector by key-cols)
+                    (map vector (map first pairs) agg-cols)))))
 
 (defn- apply-group-agg
   ([dataset by aggregations] (apply-group-agg dataset by aggregations nil nil))
@@ -654,11 +827,10 @@
         n (ds/row-count dataset)
         groups (java.util.LinkedHashMap.)]
     (dotimes [i n]
-      (let [k (mapv #(nth % i) key-rdrs)]
-        (.add ^java.util.ArrayList
-         (or (.get groups k)
-             (let [a (java.util.ArrayList.)] (.put groups k a) a))
-              (int i))))
+      (let [k (mapv #(nth % i) key-rdrs)
+            ^java.util.ArrayList lst (or (.get groups k)
+                                         (let [a (java.util.ArrayList.)] (.put groups k a) a))]
+        (.add lst (int i))))
     (let [cmp (when within-order
                 (let [specs (mapv normalise-order-spec within-order)
                       rdrs (mapv #(dtype/->reader (ds/column dataset (:col %))) specs)

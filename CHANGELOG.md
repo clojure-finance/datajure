@@ -50,7 +50,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(if (some? :g) body nil)` gives `body` where `:g` is present and missing
   elsewhere, for any type (`when-finite` is the numeric version).
 
+### Changed
+
+- **Grouped `:agg` with many small groups is about 9× faster.** A keyword
+  `:by` used to build a sub-dataset for every group, which cost about 10 µs
+  per group before any work was done. `nrow`, `ct`, `mn`, `sm`, `mx`, `mi`,
+  `sd`, `variance`, `md`, `qnt`, `first-val`, `last-val` and `wavg` of plain
+  columns now reduce each group's rows directly. That includes expressions
+  over them such as `(coalesce-finite (wavg :w :ret) (mn :ret))`, `if` and
+  arithmetic, and the `nrow`/`N` helpers. `:within-order` is applied in the
+  single grouping pass instead of re-sorting each group, and other `:agg`
+  values are checked and compiled once instead of once per group. A
+  fund-month roll-up of 1.24M share-class rows into 575k groups (three
+  weighted averages with fallbacks, an ordered `first-val`, a sum and a row
+  count) went from 47 s to 5 s. Results are identical bit for bit, column
+  types included.
+
 ### Fixed
+
+- **A comparison over a missing aggregate returned a column in `:agg`.** On
+  a group with no values, `#dt/e (> (mn :x) 0)` stored a boolean reader as
+  long as the group in the result cell instead of `false`. A comparison whose
+  arguments are all scalars now gives a scalar.
 
 - **`wavg` threw `Divide by zero` when the weights summed to zero.** One
   group whose weights were all `0.0` failed the whole `:agg`. Such a group

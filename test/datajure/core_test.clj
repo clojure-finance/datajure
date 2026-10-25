@@ -4166,3 +4166,97 @@
                     (catch Exception ex (ex-data ex)))]
         (is (= :unknown-op (:dt/error ed)))
         (is (some #{'nil?} (:dt/suggestions ed)))))))
+
+;; ---------------------------------------------------------------------------
+;; Grouped :agg segment path: per-group reductions without sub-datasets must
+;; give exactly what the sub-dataset path gives (values, order, column types).
+;; ---------------------------------------------------------------------------
+
+(defn- result-cols
+  "Each result column as [name dtype printed-values], so doubles compare bit
+  for bit and NaN compares equal to itself."
+  [r]
+  (mapv (fn [c] [(ds-col/column-name c) (dtype/elemwise-datatype c) (mapv pr-str c)])
+        (ds/columns r)))
+
+(defn- both-agg-paths
+  "[segment-path-result sub-dataset-path-result] of a grouped :agg."
+  [d & args]
+  (core/reset-notes!)
+  [(result-cols (apply core/dt d args))
+   (with-bindings {#'datajure.core/*segment-aggs* false}
+     (result-cols (apply core/dt d args)))])
+
+(defn- random-agg-ds [seed n ngroups]
+  (let [r (java.util.Random. seed)
+        maybe (fn [p f] (fn [] (when (>= (.nextDouble r) p) (f))))]
+    (ds/->dataset
+     {:g (vec (repeatedly n #(.nextInt r ngroups)))
+      :h (vec (repeatedly n #(.nextInt r 2)))
+      :x (vec (repeatedly n (maybe 0.2 #(if (< (.nextDouble r) 0.05)
+                                          ##NaN
+                                          (- (* 100 (.nextDouble r)) 50)))))
+      :i (vec (repeatedly n (maybe 0.2 #(long (- (.nextInt r 1000) 500)))))
+      :big (vec (repeatedly n (maybe 0.1 #(if (< (.nextDouble r) 0.5)
+                                            Long/MAX_VALUE
+                                            (long (.nextInt r 10))))))
+      :s (vec (repeatedly n (maybe 0.2 #(["a" "b" "c"] (.nextInt r 3)))))
+      :w (vec (repeatedly n (maybe 0.2 #(double (- (.nextInt r 3) 1)))))
+      :o (vec (repeatedly n #(.nextInt r 4)))})))
+
+(deftest segment-agg-matches-subdataset-path
+  (let [aggs [{:n #dt/e (nrow) :n2 core/nrow :ct #dt/e (ct :x) :cts #dt/e (ct :s)
+               :mn #dt/e (mn :x) :mni #dt/e (mn :i) :sm #dt/e (sm :x) :smi #dt/e (sm :i)
+               :smb #dt/e (sm :big)}
+              {:mx #dt/e (mx :x) :mi #dt/e (mi :i) :sd #dt/e (sd :x) :var #dt/e (variance :i)
+               :fv #dt/e (first-val :s) :lv #dt/e (last-val :x) :fvi #dt/e (first-val :i)}
+              {:wa #dt/e (wavg :w :x) :wai #dt/e (wavg :i :w) :md #dt/e (md :x)
+               :q #dt/e (qnt :i 0.3) :q2 #dt/e (qnt :x [0.1 0.9]) :q3 #dt/e (qnt :x 0.5 3)}
+              {:cf #dt/e (coalesce-finite (wavg :w :x) (mn :x) -1.0)
+               :c #dt/e (coalesce (mx :i) 0)
+               :p #dt/e (> (mn :x) 0)
+               :ar #dt/e (+ (sm :i) (nrow))
+               :dv #dt/e (div0 (sm :x) (ct :x))
+               :if #dt/e (if (nil? (mn :x)) "none" (first-val :s))
+               :cnd #dt/e (cond (> (nrow) 3) (lit :many) :else (lit :few))
+               :nn #dt/e (some? (sd :x))}
+              ;; data-forms on the segment path, next to aggs it doesn't cover
+              {:data [:mn :x] :data2 [:coalesce-finite [:wavg :w :x] 0.0]
+               :gen #dt/e (nuniq :s) :gen2 #dt/e (sm (* :x 2)) :pf (fn [d] (ds/row-count d))}]]
+    (testing "random data with missing values, NaN, zero weights and long overflow"
+      (doseq [seed (range 6)
+              [n ng] [[30 8] [200 60] [500 3]]
+              :let [d (random-agg-ds seed n ng)]
+              by [[:g] [:g :h]]
+              opts [[] [:within-order [(core/desc :o)]] [:within-order [:o (core/desc :x)]]]
+              agg aggs]
+        (let [[seg sub] (apply both-agg-paths d :by by :agg agg opts)]
+          (is (= sub seg) (str "seed " seed ", " n " rows, :by " by " " opts)))))
+    (testing "groups on both sides of the array/column-view size threshold"
+      (let [r (java.util.Random. 11)
+            n 6000
+            d (ds/->dataset {:g (vec (repeatedly n #(.nextInt r 12)))
+                             :x (vec (repeatedly n #(when (>= (.nextDouble r) 0.1)
+                                                      (* 1e6 (- (.nextDouble r) 0.5)))))
+                             :o (vec (repeatedly n #(.nextInt r 50)))})
+            agg {:mn #dt/e (mn :x) :sm #dt/e (sm :x) :sd #dt/e (sd :x)
+                 :var #dt/e (variance :x)}]
+        (doseq [by [[:g] [:o]]
+                opts [[] [:within-order [:o]]]]
+          (let [[seg sub] (apply both-agg-paths d :by by :agg agg opts)]
+            (is (= sub seg) (str ":by " by " " opts))))))
+    (testing "a prepared grouping"
+      (let [d (random-agg-ds 3 400 40)
+            g (core/prepare-grouping d [:g] [(core/desc :o)])]
+        (doseq [agg aggs]
+          (let [[seg sub] (both-agg-paths d :by g :agg agg)]
+            (is (= sub seg))))))))
+
+(deftest agg-scalar-comparison-over-missing
+  ;; Regression: a comparison whose scalar argument is nil returned a reader as
+  ;; long as the group, which :agg stored as the cell value.
+  (core/reset-notes!)
+  (let [d (ds/->dataset {:g [1 1 2 2] :x [nil nil 1.0 2.0]})
+        r (core/dt d :by [:g] :agg {:p #dt/e (> (mn :x) 0)})]
+    (is (= [false true] (vec (:p r))))
+    (is (= :boolean (dtype/elemwise-datatype (:p r))))))

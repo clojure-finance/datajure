@@ -1441,7 +1441,10 @@
                  ;; nil?/some? answer for a nil argument instead of passing it on
                  (if (and (some nil? args) (not (#{:nil? :some?} op-kw)))
                    (if cmp?
-                     (dtype/make-reader :boolean (ds/row-count ds) false)
+                     ;; all-scalar args, e.g. (> (mn :x) 0) in :agg, give a scalar
+                     (if (some dtype/reader? args)
+                       (dtype/make-reader :boolean (ds/row-count ds) false)
+                       false)
                      nil)
                    (apply op-fn args)))))))))
 
