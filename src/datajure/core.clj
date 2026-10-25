@@ -203,7 +203,12 @@
                :else nil)]
     (if node
       (do (validate-expr-cols dataset node :where)
-          (ds/select-rows dataset ((expr/compile-expr node) dataset)))
+          (let [mask ((expr/compile-expr node) dataset)]
+            ;; a predicate with no row-level part, e.g. (> (sm :x) 1), gives one
+            ;; boolean: keep every row or none, as :set broadcasts a scalar
+            (if (or (boolean? mask) (nil? mask))
+              (if mask dataset (ds/select-rows dataset []))
+              (ds/select-rows dataset mask))))
       (ds/filter dataset predicate))))
 
 (defn- derive-column [dataset col-kw col-fn]
@@ -1086,12 +1091,14 @@
   ds/row-count)
 
 (def mean
-  "Column mean. Full-name alias for `dfn/mean`."
-  dfn/mean)
+  "Column mean, skipping nil/missing; nil for an empty or all-missing column.
+  Delegates to `expr/col-mean` (`dfn/mean` gives NaN there)."
+  expr/col-mean)
 
 (def sum
-  "Column sum. Full-name alias for `dfn/sum`."
-  dfn/sum)
+  "Column sum, skipping nil/missing; nil for an empty or all-missing column.
+  Delegates to `expr/col-sum` (`dfn/sum` gives 0.0 there)."
+  expr/col-sum)
 
 (defn median
   "Column median (R type-7, matching R's `median`). Drops nil and non-finite
@@ -1113,12 +1120,14 @@
                    (math/quantile-type7 col p min-n))))
 
 (def stddev
-  "Column standard deviation. Full-name alias for `dfn/standard-deviation`."
-  dfn/standard-deviation)
+  "Column sample standard deviation, skipping nil/missing; nil below two values.
+  Delegates to `expr/col-sd` (`dfn/standard-deviation` gives -0.0 or NaN there)."
+  expr/col-sd)
 
 (def variance
-  "Column variance. Full-name alias for `dfn/variance`."
-  dfn/variance)
+  "Column sample variance, skipping nil/missing; nil below two values.
+  Delegates to `expr/col-variance` (`dfn/variance` gives -0.0 or NaN there)."
+  expr/col-variance)
 
 (def max*
   "Column maximum, skipping nil/missing; nil for an all-missing column.

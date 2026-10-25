@@ -296,6 +296,49 @@
   (let [vs (remove nil? (dtype/->reader col))]
     (when (seq vs) (reduce * vs))))
 
+(defn- at-least-n-present?
+  "True when `col` holds at least `k` values a dfn reduction counts: not
+  missing (nil) and not NaN. Stops at the k-th, so on real data it reads only
+  the first few values."
+  [col k]
+  (let [r (dtype/->reader col)
+        n (dtype/ecount r)]
+    (loop [i 0 found 0]
+      (cond
+        (>= found k) true
+        (>= i n) false
+        :else (let [v (nth r i)]
+                (recur (inc i)
+                       (if (or (nil? v) (and (float? v) (Double/isNaN (double v))))
+                         found
+                         (inc found))))))))
+
+(defn col-mean
+  "Mean of the non-missing values in a column; nil for an empty or all-missing
+  column (`dfn/mean` gives NaN). Backs the #dt/e `:mn` op and `core/mean`."
+  [col]
+  (when (at-least-n-present? col 1) (dfn/mean col)))
+
+(defn col-sum
+  "Sum of the non-missing values in a column; nil for an empty or all-missing
+  column (`dfn/sum` gives 0.0, which reads as a real total). Backs the #dt/e
+  `:sm` op and `core/sum`."
+  [col]
+  (when (at-least-n-present? col 1) (dfn/sum col)))
+
+(defn col-sd
+  "Sample standard deviation of the non-missing values in a column; nil below
+  two values, where it is undefined (`dfn/standard-deviation` gives -0.0 for
+  none and NaN for one). Backs the #dt/e `:sd` op and `core/stddev`."
+  [col]
+  (when (at-least-n-present? col 2) (dfn/standard-deviation col)))
+
+(defn col-variance
+  "Sample variance of the non-missing values in a column; nil below two values
+  (see [[col-sd]]). Backs the #dt/e `:variance` op and `core/variance`."
+  [col]
+  (when (at-least-n-present? col 2) (dfn/variance col)))
+
 (defn div0
   "Nil-safe scalar division: returns nil when the numerator or denominator is nil,
   or the denominator is zero; otherwise `num` / `den` as a double. Non-numeric
@@ -444,8 +487,8 @@
    :and (fn [& args] (reduce dfn/and args))
    :or (fn [& args] (reduce dfn/or args))
    :not dfn/not
-   :mn dfn/mean
-   :sm dfn/sum
+   :mn col-mean
+   :sm col-sum
    ;; R type-7 (matches R's median; differs from dfn/median for some n). qnt at
    ;; p=0.5 and md agree by construction.
    :md (fn [col] (math/quantile-type7 col 0.5))
@@ -458,11 +501,11 @@
           ([col p min-n] (if (sequential? p)
                            (math/quantiles-type7 col p min-n)
                            (math/quantile-type7 col p min-n))))
-   :sd dfn/standard-deviation
+   :sd col-sd
    :mx col-max
    :mi col-min
    :prod col-prod
-   :variance dfn/variance
+   :variance col-variance
    :ct count-non-nil
    :in (fn [col s]
          (dtype/make-reader :boolean (dtype/ecount col)
@@ -1218,9 +1261,13 @@
                  (fn [ds]
                    (let [n (ds/row-count ds)
                          cols (mapv #(% ds) arg-fns)]
-                     (dtype/make-reader :object n
-                                        (let [vals (map #(if (dtype/reader? %) (nth % idx) %) cols)]
-                                          (first (filter present? vals)))))))
+                     ;; all scalars (e.g. (coalesce (sm :x) 0) in :agg) → a scalar,
+                     ;; not a row-length column, like :if with a scalar predicate
+                     (if (not-any? dtype/reader? cols)
+                       (first (filter present? cols))
+                       (dtype/make-reader :object n
+                                          (let [vals (map #(if (dtype/reader? %) (nth % idx) %) cols)]
+                                            (first (filter present? vals))))))))
      :let (let [final-env
                 (reduce (fn [acc-env b]
                           (let [kw (:binding/name b)

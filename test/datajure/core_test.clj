@@ -3894,3 +3894,50 @@
             m (ex-message (err #(core/dt wide :select [:nope])))]
         (is (re-find #"c19 \.\.\. \(10 more in :dt/available\)$" m))
         (is (not (re-find #":c20" m)))))))
+
+;; ---------------------------------------------------------------------------
+;; mean/sum/sd/variance return nil when there is nothing to aggregate
+;; (dfn gives NaN, 0.0 and -0.0 there), and coalesce/:where take scalars
+;; ---------------------------------------------------------------------------
+
+(deftest all-missing-aggregates-are-nil
+  (let [d (ds/->dataset {:g [1 1 1 2 2 3] :x [1.0 nil 3.0 nil nil 5.0]})
+        by-g (fn [aggs] (vec (ds/rows (core/dt d :by [:g] :agg aggs))))
+        all-missing (:x (ds/->dataset {:x [nil nil]} {:parser-fn {:x :float64}}))]
+    (testing "#dt/e: nil for an all-missing group; sd/variance nil below two values"
+      (is (= [{:g 1 :mn 2.0 :sm 4.0 :sd (Math/sqrt 2.0) :var 2.0}
+              {:g 2}
+              {:g 3 :mn 5.0 :sm 5.0}]
+             (by-g {:mn #dt/e (mn :x) :sm #dt/e (sm :x) :sd #dt/e (sd :x)
+                    :var #dt/e (variance :x)}))))
+    (testing "without :by, and via the data-form"
+      (let [none (core/dt d :where #dt/e (= :g 2) :agg {:sm [:sm :x] :sd [:sd :x]})]
+        (is (= [nil nil] [(first (:sm none)) (first (:sd none))]))))
+    (testing "the scalar reaches the enclosing expression as nil, so coalesce applies"
+      (is (= [4.0 0.0 5.0] (mapv :s (by-g {:s #dt/e (coalesce (sm :x) 0.0)}))))
+      (is (= [2.0 -1.0 5.0] (mapv :m (by-g {:m #dt/e (coalesce (mn :x) -1.0)}))))
+      (is (= [(Math/sqrt 2.0) 0.0 0.0] (mapv :s (by-g {:s #dt/e (coalesce (sd :x) 0.0)})))))
+    (testing "plain helpers: nil instead of NaN / 0.0 / -0.0"
+      (is (= [nil nil nil nil]
+             (mapv #(% all-missing) [core/mean core/sum core/stddev core/variance])))
+      (is (nil? (core/stddev (:x (ds/->dataset {:x [nil 2.0]})))))
+      (is (= [3.0 9.0 2.0 4.0]
+             (mapv #(% (:x d)) [core/mean core/sum core/stddev core/variance]))))
+    (testing "a real zero stays zero"
+      (is (= 0.0 (core/variance (:x (ds/->dataset {:x [2.0 2.0 nil]})))))
+      (is (= 0.0 (core/sum (:x (ds/->dataset {:x [-1.0 1.0]}))))))))
+
+(deftest coalesce-and-where-take-scalars
+  (let [d (ds/->dataset {:g [1 1 2] :x [1.0 3.0 nil]})]
+    (testing "coalesce over scalars in :agg yields a scalar, not a row-length column"
+      (is (= [4.0 0.0] (vec (:s (core/dt d :by [:g] :agg {:s #dt/e (coalesce (sm :x) 0.0)})))))
+      (is (= [3.0 "none"] (vec (:s (core/dt d :by [:g] :agg {:s #dt/e (coalesce (mx :x) "none")}))))))
+    (testing "a scalar coalesce in :set is broadcast per group; row-wise coalesce unchanged"
+      (is (= [4.0 4.0 0.0] (vec (:s (core/dt d :by [:g] :set {:s #dt/e (coalesce (sm :x) 0.0)})))))
+      (is (= [1.0 3.0 0.0] (vec (:c (core/dt d :set {:c #dt/e (coalesce :x 0.0)}))))))
+    (testing "a :where predicate that is one boolean keeps every row or none"
+      (is (= 3 (ds/row-count (core/dt d :where #dt/e (> (sm :x) 1)))))
+      (is (= 0 (ds/row-count (core/dt d :where #dt/e (> (sm :x) 100)))))
+      (is (= 3 (ds/row-count (core/dt d :where #dt/e (> (coalesce (sm :x) 0.0) 1)))))
+      (is (= 3 (ds/row-count (core/dt d :where [:> [:sm :x] 1]))))
+      (is (= [:g :x] (vec (ds/column-names (core/dt d :where #dt/e (> (sm :x) 100)))))))))
