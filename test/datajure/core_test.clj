@@ -3914,6 +3914,13 @@
     (testing "without :by, and via the data-form"
       (let [none (core/dt d :where #dt/e (= :g 2) :agg {:sm [:sm :x] :sd [:sd :x]})]
         (is (= [nil nil] [(first (:sm none)) (first (:sd none))]))))
+    (testing "data-form with a two-key :by and :within-order (weekly bars: a week with no volume)"
+      (let [daily (ds/->dataset {:id [1 1 1 1] :week-end [1 1 2 2] :date [1 2 3 4]
+                                 :volume [100.0 200.0 nil nil]})]
+        (is (= [{:id 1 :week-end 1 :volume 300.0 :days 2}
+                {:id 1 :week-end 2 :days 2}]
+               (vec (ds/rows (core/dt daily :by [:id :week-end] :within-order [(core/asc :date)]
+                                      :agg {:volume [:sm :volume] :days [:nrow]})))))))
     (testing "the scalar reaches the enclosing expression as nil, so coalesce applies"
       (is (= [4.0 0.0 5.0] (mapv :s (by-g {:s #dt/e (coalesce (sm :x) 0.0)}))))
       (is (= [2.0 -1.0 5.0] (mapv :m (by-g {:m #dt/e (coalesce (mn :x) -1.0)}))))
