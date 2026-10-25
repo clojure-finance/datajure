@@ -40,8 +40,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-finite operand, or a zero divisor, gives `nil`. Year and month from a
   `year*12 + month-1` index are `(quot :mindex 12)` and
   `(+ 1 (mod :mindex 12))`.
+- **`nil?` and `some?` in `#dt/e`** (and data-forms, `[:nil? :x]`), R's
+  `is.na` and `!is.na`: `(if (nil? :exp) 0.0 :exp)`,
+  `:where #dt/e (some? :ret)`. Missing means nil or `NaN`, so a computed
+  argument such as `(nil? (/ :a :b))` is true where an operand is missing;
+  `±Inf` is a value. The result is always `true` or `false`, never nil.
+  They also work on an aggregate: `(nil? (mn :x))` in `:agg` is true for a
+  group with no values.
+  `(if (some? :g) body nil)` gives `body` where `:g` is present and missing
+  elsewhere, for any type (`when-finite` is the numeric version).
 
 ### Fixed
+
+- **`wavg` threw `Divide by zero` when the weights summed to zero.** One
+  group whose weights were all `0.0` failed the whole `:agg`. Such a group
+  now gives `nil`, as one with no complete pairs already did. `wavg` of
+  integer weights and values also gave a Clojure ratio (`5/3`); it now
+  always gives a double, like R's `weighted.mean`.
 
 - **`:by … :set` turned a copied int column's missing values into
   `-9223372036854775808`.** When a derivation evaluated to an existing

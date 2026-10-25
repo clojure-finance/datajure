@@ -687,6 +687,7 @@
   reordered dataset. Excludes aggregators (mn/md/qnt/…), which in window-mode :set
   are GROUP reductions broadcast to the group's rows, so must run per group."
   #{:+ :- :* :div :div0 :sq :log :log1p :expm1 :> :< :>= :<= := :and :or :not :in :between?
+    :nil? :some?
     :abs :exp :sqrt :pow :floor :ceil :round :signum :quot :rem :mod
     :asinh :na2zero :neg2na :nonfin2na :when-finite
     :year :month :day :dow :quarter})

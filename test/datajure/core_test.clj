@@ -1624,6 +1624,23 @@
           result (core/dt ds :agg {:wa #dt/e (wavg :w :v)})]
       (is (= 10.0 (first (vec (:wa result))))))))
 
+(deftest wavg-zero-weight-sum
+  ;; Regression: weights summing to zero threw ArithmeticException (Clojure's
+  ;; boxed `/`), failing the whole :agg; integer inputs gave a Ratio.
+  (testing "weights summing to zero give nil instead of throwing"
+    (is (nil? (datajure.expr/wavg [0.0 0.0] [1.0 2.0])))
+    (is (nil? (datajure.expr/wavg [0 0] [1 2])))
+    (is (nil? (datajure.expr/wavg [1.0 -1.0] [1.0 2.0]))))
+  (testing "one all-zero-weight group does not fail the other groups"
+    (core/reset-notes!)
+    (let [ds (ds/->dataset {:g [1 1 2 2] :w [0.0 0.0 1.0 3.0] :v [1.0 2.0 1.0 2.0]})
+          r (core/dt ds :by [:g] :agg {:wa #dt/e (wavg :w :v)})]
+      (is (= [nil 1.75] (vec (:wa r))))))
+  (testing "integer weights and values give a double, not a Ratio"
+    (let [x (datajure.expr/wavg [1 2] [1 2])]
+      (is (instance? Double x))
+      (is (= (/ 5.0 3.0) x)))))
+
 (deftest wavg-wsum-arity-error
   (testing "wavg/wsum with wrong arity throw a structured :wrong-arity error at read time"
     (let [ed (try (read-string "#dt/e (wavg :v)") nil
@@ -4112,3 +4129,40 @@
           (is (= ["a" nil "c"] (vec (:c r))))
           (is (= [1 1 1] (mapv #(.getCardinality ^org.roaringbitmap.RoaringBitmap (ds-col/missing (% r)))
                                [:a :b :c]))))))))
+
+(deftest nil?-some?-ops
+  (let [d (ds/->dataset {:g [1 1 2 2] :x [1.0 nil ##NaN 4.0] :i [1 nil 3 4]
+                         :s ["a" nil "c" "d"] :y [0.0 1.0 2.0 3.0]})]
+    (testing "nil? and some? test each value; NaN in a float column is missing"
+      (let [r (core/dt d :set {:xn #dt/e (nil? :x) :in #dt/e (nil? :i)
+                               :sn #dt/e (some? :s) :xs #dt/e (some? :x)})]
+        (is (= [false true true false] (vec (:xn r))))
+        (is (= [false true false false] (vec (:in r))))
+        (is (= [true false true true] (vec (:sn r))))
+        (is (= [true false false true] (vec (:xs r))))))
+    (testing "in if, :where and data-forms"
+      (is (= [1 0 3 4] (vec (:f (core/dt d :set {:f #dt/e (if (nil? :i) 0 :i)})))))
+      (is (= 2 (ds/row-count (core/dt d :where #dt/e (some? :x)))))
+      (is (= [false true false false] (vec (:z (core/dt d :set {:z [:nil? :s]}))))))
+    (testing "under :by :set, same as without :by"
+      (core/reset-notes!)
+      (is (= [false true true false]
+             (vec (:m (core/dt d :by [:g] :set {:m #dt/e (nil? :x)}))))))
+    (testing "a computed argument: missing (NaN) is nil?, Inf is not"
+      (is (= [false true false false]
+             (vec (:c (core/dt d :set {:c #dt/e (nil? (/ :i :y))}))))))
+    (testing "scalar arguments: aggregates and a nil literal"
+      (core/reset-notes!)
+      (let [r (core/dt d :by [:g] :agg {:a #dt/e (nil? (wavg :y :x))
+                                        :b #dt/e (some? (mn :i))})]
+        (is (= [true false] (vec (:a r))))
+        (is (= [true true] (vec (:b r)))))
+      (is (= [true true true true] (vec (:z (core/dt d :set {:z #dt/e (nil? nil)}))))))
+    (testing "exactly one argument, and a misspelling suggests nil?"
+      (let [ed (try (read-string "#dt/e (nil? :x :y)") nil
+                    (catch Exception ex (ex-data ex)))]
+        (is (= :wrong-arity (:dt/error ed))))
+      (let [ed (try (read-string "#dt/e (nill? :x)") nil
+                    (catch Exception ex (ex-data ex)))]
+        (is (= :unknown-op (:dt/error ed)))
+        (is (some #{'nil?} (:dt/suggestions ed)))))))

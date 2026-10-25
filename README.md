@@ -184,6 +184,7 @@ Datajure has a layered nil story rather than blanket "nil-safety". The rules:
 | `div0 num den`                                        | `nil` if denominator is `nil` or zero |
 | `win/ratio :col`                                      | `nil` if previous value is `nil` or zero |
 | `when-finite :g body`                                 | body where `:g` is finite; `nil` where it is nil/`NaN`/`±Inf` (2.7.0) |
+| `nil? :col`, `some? :col`                             | `true`/`false` per row, never nil: R's `is.na`/`!is.na` (missing = nil or `NaN`). `(if (some? :g) body nil)` guards on presence for any type |
 | `year`/`month`/`day`/`dow`/`quarter` on a missing date | `nil` (compares `false` in predicates; stored by `:set` as a missing slot) |
 | Plain Clojure functions                               | **not** automatic; wrap with `pass-nil` |
 

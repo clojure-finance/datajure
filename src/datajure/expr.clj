@@ -167,22 +167,25 @@
                        :dt/value-length nv})))))
 
 (defn wavg
-  "Weighted average. Args: weight-col value-col. Skips nil pairs.
+  "Weighted average. Args: weight-col value-col. Skips nil pairs. Always a
+  double, like R's weighted.mean; nil when no pair remains or the weights sum
+  to zero (no defined average).
   Throws :unequal-column-lengths when w and v have different lengths."
   [w v]
   (let [wr (dtype/->reader w)
         vr (dtype/->reader v)
         _ (check-equal-lengths! "wavg" wr vr)
-        n (dtype/ecount wr)
-        pairs (keep (fn [i]
-                      (let [wi (nth wr i) vi (nth vr i)]
-                        (when (and (some? wi) (some? vi)) [wi vi])))
-                    (range n))]
-    (if (empty? pairs)
-      nil
-      (let [wvs (map (fn [[wi vi]] (* wi vi)) pairs)
-            ws (map first pairs)]
-        (/ (reduce + wvs) (reduce + ws))))))
+        n (dtype/ecount wr)]
+    (loop [i 0 swv 0.0 sw 0.0]
+      (if (< i n)
+        (let [wi (nth wr i) vi (nth vr i)]
+          (if (and (some? wi) (some? vi))
+            (recur (inc i)
+                   (+ swv (* (double wi) (double vi)))
+                   (+ sw (double wi)))
+            (recur (inc i) swv sw)))
+        (when-not (zero? sw)
+          (/ swv sw))))))
 
 (defn wsum
   "Weighted sum. Args: weight-col value-col. Skips nil pairs.
@@ -384,6 +387,20 @@
   (when (and (some? num) (some? den) (not (zero? den)))
     (/ (double num) (double den))))
 
+(defn- missing-test-op
+  "Element-wise missing test backing the #dt/e `nil?` (`missing? true`) and
+  `some?` (`missing? false`) ops. Missing means nil, or NaN, which is how a
+  float column marks missing and how arithmetic on a missing value comes out.
+  A reader gives a boolean reader; a scalar (an aggregate, a literal) gives a
+  boolean. Never nil itself, so the predicate is safe in `:where` and `if`."
+  [missing?]
+  (let [test (fn [v] (= missing? (or (nil? v)
+                                     (and (float? v) (Double/isNaN (double v))))))]
+    (fn [x]
+      (if (dtype/reader? x)
+        (dtype/make-reader :boolean (dtype/ecount x) (boolean (test (nth x idx))))
+        (test x)))))
+
 (defn- int-div-op
   "Element-wise nil-safe integer division backing the #dt/e `quot`/`rem`/`mod`
   ops, with Clojure's semantics: `quot` and `rem` truncate toward zero, `mod`
@@ -545,6 +562,9 @@
    :and (fn [& args] (reduce dfn/and args))
    :or (fn [& args] (reduce dfn/or args))
    :not dfn/not
+   ;; missing tests (R's is.na / !is.na); see missing-test-op
+   :nil? (missing-test-op true)
+   :some? (missing-test-op false)
    :mn col-mean
    :sm col-sum
    ;; R type-7 (matches R's median; differs from dfn/median for some n). qnt at
@@ -591,6 +611,7 @@
    'day-of-week :dow
    '> :>, '< :<, '>= :>=, '<= :<=, '= :=
    'and :and, 'or :or, 'not :not
+   'nil? :nil?, 'some? :some?
    'mn :mn, 'sm :sm, 'md :md, 'sd :sd, 'mx :mx, 'mi :mi, 'qnt :qnt
    ;; full-name aliases for the aggregation ops (datajure.core names), so both
    ;; (mn :x) and (mean :x) work inside #dt/e
@@ -725,7 +746,7 @@
             {:dt/error :wrong-arity :dt/op op-sym :dt/expected 1 :dt/got n-args}))
 
     (and (#{:sq :log :log1p :expm1 :asinh :abs :exp :sqrt :floor :ceil :round :signum
-            :na2zero :neg2na :nonfin2na} op-kw)
+            :na2zero :neg2na :nonfin2na :nil? :some?} op-kw)
          (not= 1 n-args))
     (throw (ex-info
             (str "`" op-sym "` takes exactly one argument (a column or expression). Got "
@@ -1417,7 +1438,8 @@
                  cmp? (comparison-ops op-kw)]
              (fn [ds]
                (let [args (map #(% ds) arg-fns)]
-                 (if (some nil? args)
+                 ;; nil?/some? answer for a nil argument instead of passing it on
+                 (if (and (some nil? args) (not (#{:nil? :some?} op-kw)))
                    (if cmp?
                      (dtype/make-reader :boolean (ds/row-count ds) false)
                      nil)
