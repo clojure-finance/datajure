@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.11] - 2026-10-25
+
+A performance and crash fix, reported from the Weinstein project. Upgrade if
+you run `dt` on large or freshly derived datasets.
+
+### Fixed
+
+- **Every `dt` call hashed its whole input dataset.** The not-a-dataset
+  check added in 2.7.5 built its "did you forget the dataset?" hint on every
+  call, and that hint tested `(contains? dt-query-keys dataset)`, which hashes
+  the dataset by reading every value of every column. On a 15.2M-row,
+  8-column panel, `(dt ds :select [:id])` took about 1.6 s instead of about
+  1 ms, and every step of a pipeline paid it again. Lazy columns derived by
+  `:set` were forced too. The hint is now built only when the argument is not
+  a dataset, and `contains?` is only tried on a keyword.
+- **`dt` threw a `NullPointerException` on an all-missing comparison
+  column.** Hashing reads raw values and ignores the missing bitmap, so a
+  lazy column such as `[:> :x :sma]` over an all-missing `:sma` (a series
+  shorter than its window) crashed the next `dt` call on that dataset. Fixed
+  by the same change. Affects every version since 2.7.5.
+
 ## [2.7.10] - 2026-10-25
 
 A correctness release, from reviewing 2.7.9. Aggregators now return `nil`
@@ -807,7 +828,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.10...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.11...HEAD
+[2.7.11]: https://github.com/clojure-finance/datajure/compare/v2.7.10...v2.7.11
 [2.7.10]: https://github.com/clojure-finance/datajure/compare/v2.7.9...v2.7.10
 [2.7.9]: https://github.com/clojure-finance/datajure/compare/v2.7.8...v2.7.9
 [2.7.8]: https://github.com/clojure-finance/datajure/compare/v2.7.7...v2.7.8
