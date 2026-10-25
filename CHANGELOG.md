@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.12] - 2026-10-25
+
+Papercuts and fixes from the Fama-French (1992) and Pastor-Stambaugh-Taylor
+(2017) replications, and grouped `:agg` with many small groups about 9×
+faster. Check the three breaking changes below: a `:by` without `:set` or
+`:agg` throws, `sm` of integers is a long, and a bare keyword in `:set` is a
+column reference.
+
 ### Changed (BREAKING)
 
 - **A `:by` without `:set` or `:agg` now throws `:by-requires-set-or-agg`.**
@@ -925,7 +933,8 @@ A post-alpha audit pass reconciling the library with data.table-style semantics,
 
 Earlier versions are not documented in this changelog. Release history is tracked in the [GitHub releases](https://github.com/clojure-finance/datajure/releases) page and in `PROJECT_SUMMARY.md`'s phase-completion table.
 
-[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.11...HEAD
+[Unreleased]: https://github.com/clojure-finance/datajure/compare/v2.7.12...HEAD
+[2.7.12]: https://github.com/clojure-finance/datajure/compare/v2.7.11...v2.7.12
 [2.7.11]: https://github.com/clojure-finance/datajure/compare/v2.7.10...v2.7.11
 [2.7.10]: https://github.com/clojure-finance/datajure/compare/v2.7.9...v2.7.10
 [2.7.9]: https://github.com/clojure-finance/datajure/compare/v2.7.8...v2.7.9
